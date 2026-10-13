@@ -47,3 +47,13 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# secrets
+.env
+.env.*
+!.env.example
+artifacts/api-server/data/
+
+# local screenshots and OCR models
+.tmp-ui/
+*.traineddata

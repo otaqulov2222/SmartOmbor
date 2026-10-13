@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Smart Ombor"
+description = "O‘zbek tilidagi ombor boshqaruvi va analitika platformasi. MoySklad Remap API bilan mahsulotlar, ombor qoldiqlari va hujjatlarni sinxronlaydi; kirim, filiallararo ko‘chirish, barcode skaneri, inventarizatsiya va sotuv tahlilini boshqaradi."
+version = "1.0.0"
+id = "artifacts/smart-ombor"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23877
+
+[services.development]
+run = "pnpm --filter @workspace/smart-ombor run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/smart-ombor", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/smart-ombor/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23877"
+BASE_PATH = "/"
