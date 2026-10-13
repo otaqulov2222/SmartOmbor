@@ -159,7 +159,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
 
   const sentPairs = shipments.reduce((sum, item) => sum + item.pairs, 0);
   const sentAmount = shipments.reduce((sum, item) => sum + item.amount, 0);
-  const waiting = shipments.filter(item => item.status !== 'accepted').length;
+  const waiting = shipments.filter(item => item.status === 'sent').length;
   const accepted = shipments.length - waiting;
 
   return <div className="cabinet">
@@ -226,7 +226,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
     </section>
     <section className="card factory-history">
       <div className="card-head"><h2>{t('zavod.history')}</h2><span className="card-meta">{fmt(shipments.length)} · {fmt(sentPairs)} {t('zavod.pairs').toLowerCase()}</span></div>
-      {shipments.length ? <div className="shipment-list">{shipments.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.lines.length)}</small></div><span className={`badge ${item.status === 'accepted' ? 'badge-healthy' : 'badge-in-transit'}`}>{item.status === 'accepted' ? t('zavod.accepted') : t('zavod.waiting')}</span><strong>{money(item.amount)}</strong></header><ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>{item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{t('zavod.emptyHistory')}</p>}
+      {shipments.length ? <div className="shipment-list">{shipments.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.lines.length)}</small></div><span className={`badge ${item.status === 'accepted' ? 'badge-healthy' : item.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{item.status === 'accepted' ? t('zavod.accepted') : item.status === 'declined' ? t('partners.declined') : t('zavod.waiting')}</span><strong>{money(item.amount)}</strong></header><ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>{item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{t('zavod.emptyHistory')}</p>}
     </section>
   </div>;
 }

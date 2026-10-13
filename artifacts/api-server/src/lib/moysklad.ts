@@ -1,3 +1,5 @@
+import { moyskladToken } from "./connection";
+
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 
 export class MoySkladError extends Error {
@@ -10,7 +12,7 @@ export class MoySkladError extends Error {
 }
 
 export function moyskladConfigured(): boolean {
-  return Boolean(process.env.MOYSKLAD_TOKEN);
+  return Boolean(moyskladToken());
 }
 
 interface ListMeta {
@@ -25,7 +27,7 @@ interface ListResponse<T> {
 }
 
 export async function moyskladBinary(url: string): Promise<{ type: string; body: Buffer }> {
-  const token = process.env.MOYSKLAD_TOKEN;
+  const token = moyskladToken();
   if (!token) throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   const absolute = url.startsWith("http") ? url : `https://api.moysklad.ru${url}`;
   const first = await fetch(absolute, {
@@ -45,7 +47,7 @@ export async function moyskladBinary(url: string): Promise<{ type: string; body:
 }
 
 export async function moysklad<T>(path: string): Promise<T> {
-  const token = process.env.MOYSKLAD_TOKEN;
+  const token = moyskladToken();
   if (!token) {
     throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   }

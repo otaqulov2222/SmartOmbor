@@ -2,18 +2,17 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import { createWorker, PSM, type Worker } from 'tesseract.js';
-import { CircleAlert, Package, ScanBarcode, Search, X } from 'lucide-react';
+import { CircleAlert, Flashlight, Package, ScanBarcode, Search, X } from 'lucide-react';
 import { Link, useSearch } from 'wouter';
 import { type BarcodeLocation, type BarcodeLookup, type Product } from '@workspace/api-client-react';
 import { useI18n, type TKey } from '@/i18n';
 
 type Detected = { rawValue?: string };
-type DetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: HTMLVideoElement) => Promise<Detected[]> };
+type DetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<Detected[]> };
 
-const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code', 'data_matrix'];
-const ZXING_HINTS = new Map<DecodeHintType, unknown>([
-  [DecodeHintType.TRY_HARDER, true],
-  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.ITF, BarcodeFormat.QR_CODE]],
+const FORMATS = ['aztec', 'codabar', 'code_39', 'code_93', 'code_128', 'data_matrix', 'ean_8', 'ean_13', 'itf', 'pdf417', 'qr_code', 'upc_a', 'upc_e', 'databar', 'databar_expanded'];
+const FAST_HINTS = new Map<DecodeHintType, unknown>([
+  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.ITF, BarcodeFormat.CODABAR, BarcodeFormat.QR_CODE]],
 ]);
 
 function beep(ok: boolean) {
@@ -21,15 +20,16 @@ function beep(ok: boolean) {
     const ctx = new AudioContext();
     const tone = ctx.createOscillator();
     const gain = ctx.createGain();
-    tone.frequency.value = ok ? 880 : 240;
-    gain.gain.value = 0.04;
+    tone.frequency.value = ok ? 1760 : 220;
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (ok ? 0.04 : 0.08));
     tone.connect(gain);
     gain.connect(ctx.destination);
     tone.start();
-    tone.stop(ctx.currentTime + 0.07);
-    window.setTimeout(() => void ctx.close(), 250);
+    tone.stop(ctx.currentTime + 0.09);
+    window.setTimeout(() => void ctx.close(), 200);
   } catch { /* sound is optional */ }
-  navigator.vibrate?.(ok ? 25 : [20, 30, 20]);
+  navigator.vibrate?.(ok ? 18 : [16, 24, 16]);
 }
 
 function PageHead({ title, subtitle }: { title: string; subtitle: string }) {
@@ -58,11 +58,56 @@ function eanOk(code: string) {
 }
 
 function cameraCode(raw: string) {
-  const clean = readCode(raw).replace(/\s/g, '');
-  if (eanOk(clean)) return clean;
-  if (/^\d{6}$|^\d{13}$/.test(clean)) return clean;
-  if (/^[A-Za-z0-9._/-]{4,40}$/.test(clean) && !/^\d+$/.test(clean)) return clean;
+  const clean = raw.replace(/[\u0000-\u001F\u007F]/g, '').trim();
+  if (clean.length < 3 || clean.length > 120) return '';
+  const runs = clean.match(/\d{8,14}/g) ?? [];
+  const gtin = runs.find(eanOk);
+  if (gtin && (clean === gtin || /[()]/.test(clean) || clean.replace(/\D/g, '') === gtin)) return gtin;
+  const compact = clean.replace(/\s+/g, '');
+  if (compact.length < 3 || compact.length > 80) return '';
+  if (/^[\w./:+\-*=#?&=%@]+$/i.test(compact)) return compact;
+  const digits = compact.replace(/\D/g, '');
+  if (digits.length >= 6 && digits.length <= 18) return digits;
   return '';
+}
+
+function drawStrip(source: HTMLVideoElement, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, y: number) {
+  const vw = source.videoWidth;
+  const vh = source.videoHeight;
+  const sw = Math.floor(vw * 0.96);
+  const sh = Math.floor(vh * 0.3);
+  const sy = Math.floor(vh * y);
+  const scale = Math.max(2, Math.min(3, 1800 / sw));
+  canvas.width = Math.max(1, Math.floor(sw * scale));
+  canvas.height = Math.max(2, Math.floor(sh * scale));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.filter = 'grayscale(1) contrast(1.85)';
+  ctx.drawImage(source, Math.floor((vw - sw) / 2), sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  ctx.filter = 'none';
+}
+
+function drawLabel(source: HTMLVideoElement, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+  const vw = source.videoWidth;
+  const vh = source.videoHeight;
+  const cw = Math.floor(vw * 0.7);
+  const ch = Math.floor(vh * 0.16);
+  const scale = Math.min(3, 1600 / cw);
+  canvas.width = Math.max(1, Math.floor(cw * scale));
+  canvas.height = Math.max(8, Math.floor(ch * scale));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.filter = 'grayscale(1) contrast(1.8)';
+  ctx.drawImage(source, Math.floor((vw - cw) / 2), Math.floor(vh * 0.36), cw, ch, 0, 0, canvas.width, canvas.height);
+  ctx.filter = 'none';
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = image.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const ink = data[i] < 150 ? 0 : 255;
+    data[i] = ink;
+    data[i + 1] = ink;
+    data[i + 2] = ink;
+  }
+  ctx.putImageData(image, 0, 0);
 }
 
 function labelWorthReading(text: string) {
@@ -132,28 +177,46 @@ export function ScannerPage() {
   const [miss, setMiss] = useState('');
   const [camera, setCamera] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchable, setTorchable] = useState(false);
+  const [live, setLive] = useState('');
   const video = useRef<HTMLVideoElement | null>(null);
+  const ocrReady = useRef<Promise<Worker | null> | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const result = useRef<HTMLDivElement | null>(null);
   const acceptRef = useRef<(value: string) => void>(() => {});
   const labelRef = useRef('');
   const labelSeen = useRef('');
+  const labelFlight = useRef('');
+  const labelSeenAt = useRef(0);
   const generation = useRef(0);
   const holdTimer = useRef(0);
+  const lastBeep = useRef({ key: '', at: 0 });
+  const learned = useRef(new Map<string, BarcodeLookup>());
+  const recentCode = useRef({ value: '', at: 0 });
+  const showHitRef = useRef<(lookup: BarcodeLookup) => void>(() => {});
+  const nudgeOcr = useRef<(() => void) | null>(null);
 
   const showHit = (lookup: BarcodeLookup) => {
     if (!lookup.products.length) return;
-    generation.current += 1;
     window.clearTimeout(holdTimer.current);
+    const key = lookup.products.map(product => product.id).join('-');
+    const now = Date.now();
+    const repeat = lastBeep.current.key === key && now - lastBeep.current.at < 420;
+    lastBeep.current = { key, at: now };
     setChecking('');
     setMiss('');
-    setCode(lookup.barcode || code);
-    setHits(list => {
-      const key = lookup.products.map(product => product.id).join('-');
-      if (list.some(item => item.products.map(product => product.id).join('-') === key)) return list;
-      beep(true);
-      return [lookup, ...list].slice(0, 12);
-    });
-    window.setTimeout(() => result.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 40);
+    setLive(lookup.products[0].name);
+    setCode(lookup.barcode || lookup.products[0].code || '');
+    if (!repeat) beep(true);
+    setHits(list => [lookup, ...list.filter(item => item.products.map(product => product.id).join('-') !== key)].slice(0, 16));
+  };
+  showHitRef.current = showHit;
+
+  const remember = (barcode: string, lookup: BarcodeLookup) => {
+    if (!/^\d{8,18}$/.test(barcode) || !lookup.products.length) return;
+    learned.current.set(barcode, lookup);
+    if (learned.current.size > 40) learned.current.delete(learned.current.keys().next().value || barcode);
   };
 
   const scheduleMiss = (value: string, gen: number) => {
@@ -163,38 +226,73 @@ export function ScannerPage() {
       setChecking('');
       setMiss(value);
       beep(false);
-    }, eanOk(value) ? 1800 : 4000);
+    }, 1100);
   };
 
-  const accept = (value: string) => {
+  const accept = (value: string, quiet = false) => {
     const clean = readCode(value);
     if (clean.length < 3) return;
+    const known = learned.current.get(clean);
+    if (known) {
+      recentCode.current = { value: clean, at: Date.now() };
+      showHit(known);
+      return;
+    }
     const gen = ++generation.current;
     window.clearTimeout(holdTimer.current);
     setCode(clean);
     setMiss('');
-    setChecking(clean);
+    if (!quiet) setChecking(clean);
     void resolveScanRequest(clean, labelRef.current).then(lookup => {
-      if (generation.current !== gen) return;
-      if (lookup.products.length) showHit(lookup);
-      else scheduleMiss(clean, gen);
+      if (lookup.products.length) {
+        remember(clean, lookup);
+        showHit(lookup);
+      } else if (generation.current === gen) {
+        nudgeOcr.current?.();
+        scheduleMiss(clean, gen);
+      }
     }).catch(() => {
       if (generation.current !== gen) return;
       setChecking('');
       setMiss(clean);
     });
   };
-  acceptRef.current = accept;
+  acceptRef.current = (value: string) => accept(value, true);
 
   const acceptLabel = (value: string) => {
     const signature = [...value.matchAll(/\d{2}-\d{2}|\d{4,6}/g)].map(match => match[0]).sort().join('|');
-    if (!signature || signature === labelSeen.current) return;
-    labelSeen.current = signature;
+    if (!signature) return;
+    if (signature === labelSeen.current) {
+      labelSeenAt.current = Date.now();
+      return;
+    }
+    if (signature === labelFlight.current) return;
+    labelFlight.current = signature;
     labelRef.current = value;
     void resolveScanRequest('', value).then(lookup => {
-      if (lookup.products.length) showHit(lookup);
-    }).catch(() => undefined);
+      if (labelFlight.current === signature) labelFlight.current = '';
+      if (!lookup.products.length) return;
+      labelSeen.current = signature;
+      labelSeenAt.current = Date.now();
+      const recent = recentCode.current;
+      if (recent.value && Date.now() - recent.at < 1500) remember(recent.value, lookup);
+      showHit(lookup);
+    }).catch(() => {
+      if (labelFlight.current === signature) labelFlight.current = '';
+    });
   };
+
+  useEffect(() => {
+    ocrReady.current = createWorker('eng').then(async worker => {
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+      return worker;
+    }).catch(() => null);
+    return () => {
+      const pending = ocrReady.current;
+      ocrReady.current = null;
+      void pending?.then(worker => worker?.terminate());
+    };
+  }, []);
 
   useEffect(() => {
     if (initial) accept(initial);
@@ -204,26 +302,25 @@ export function ScannerPage() {
   useEffect(() => {
     if (!camera) return;
     let active = true;
-    let timer = 0;
+    let nativeTimer = 0;
+    let stripTimer = 0;
     let ocrTimer = 0;
     let worker: Worker | null = null;
     const streamBox: { current: MediaStream | null } = { current: null };
     const last = { value: '', at: 0 };
-    const streak = { value: '', n: 0 };
     const hit = (value: string) => {
       const now = Date.now();
-      if (value === last.value && now - last.at < 1200) return;
+      if (value === last.value && now - last.at < 420) {
+        last.at = now;
+        return;
+      }
       last.value = value;
       last.at = now;
       acceptRef.current(value);
     };
     const consider = (raw: string) => {
       const clean = cameraCode(raw);
-      if (!clean) return;
-      if (eanOk(clean)) { hit(clean); return; }
-      streak.n = streak.value === clean ? streak.n + 1 : 1;
-      streak.value = clean;
-      if (streak.n >= 3) hit(clean);
+      if (clean) hit(clean);
     };
     const start = async () => {
       const videoConstraints: MediaTrackConstraints = { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
@@ -234,101 +331,101 @@ export function ScannerPage() {
         stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' } } });
       }
       const track = stream.getVideoTracks()[0];
-      const caps = track?.getCapabilities?.() as MediaTrackCapabilities & { focusMode?: string[]; zoom?: { min: number; max: number } };
+      trackRef.current = track ?? null;
+      const caps = track?.getCapabilities?.() as MediaTrackCapabilities & { focusMode?: string[]; exposureMode?: string[]; whiteBalanceMode?: string[]; torch?: boolean; zoom?: { min: number; max: number } };
       const advanced: MediaTrackConstraintSet[] = [];
       if (caps?.focusMode?.includes('continuous')) advanced.push({ focusMode: 'continuous' } as MediaTrackConstraintSet);
+      if (caps?.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' } as MediaTrackConstraintSet);
+      if (caps?.whiteBalanceMode?.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' } as MediaTrackConstraintSet);
       if (caps?.zoom && caps.zoom.max > 1.2) advanced.push({ zoom: Math.min(1.6, caps.zoom.max) } as MediaTrackConstraintSet);
       if (advanced.length) await track.applyConstraints({ advanced }).catch(() => undefined);
+      if (active) setTorchable(Boolean(caps?.torch));
       if (!active) { stream.getTracks().forEach(item => item.stop()); return; }
       streamBox.current = stream;
       const preview = video.current;
       if (preview) { preview.srcObject = stream; await preview.play(); }
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const Detector = (window as Window & { BarcodeDetector?: DetectorCtor }).BarcodeDetector;
+      const Detector = (window as Window & { BarcodeDetector?: DetectorCtor & { getSupportedFormats?: () => Promise<string[]> } }).BarcodeDetector;
       let detector: { detect: (source: CanvasImageSource) => Promise<Detected[]> } | null = null;
-      if (Detector) { try { detector = new Detector({ formats: FORMATS }); } catch { detector = new Detector(); } }
-      const reader = new BrowserMultiFormatReader(ZXING_HINTS);
-      let busy = false;
-      let magnify = false;
-      const tick = async () => {
+      if (Detector) {
+        let formats = FORMATS;
+        try {
+          const supported = await Detector.getSupportedFormats?.();
+          if (supported?.length) formats = FORMATS.filter(format => supported.includes(format));
+        } catch { /* use the full list */ }
+        try { detector = new Detector({ formats }); } catch { try { detector = new Detector(); } catch { detector = null; } }
+      }
+      const fastReader = new BrowserMultiFormatReader(FAST_HINTS);
+      const bands = [0.44, 0.52, 0.6, 0.68];
+      let band = 0;
+      let nativeBusy = false;
+      const tick = () => {
         if (!active) return;
         const source = video.current;
-        if (!busy && ctx && source && source.readyState >= 2 && source.videoWidth > 0) {
-          busy = true;
-          try {
-            const native = detector ? await detector.detect(source) : [];
-            const nativeCodes = native.map(item => cameraCode(item.rawValue || '')).filter(Boolean);
-            const nativeHit = nativeCodes.find(eanOk) || nativeCodes[0];
-            if (nativeHit) consider(nativeHit);
-            else {
-              const vw = source.videoWidth;
-              const vh = source.videoHeight;
-              magnify = !magnify;
-              if (magnify) {
-                const sw = Math.floor(vw * 0.62);
-                const sh = Math.floor(vh * 0.62);
-                canvas.width = sw * 2;
-                canvas.height = sh * 2;
-                ctx.drawImage(source, Math.floor((vw - sw) / 2), Math.floor((vh - sh) / 2), sw, sh, 0, 0, canvas.width, canvas.height);
-              } else {
-                const scale = Math.min(1, 1600 / Math.max(vw, vh));
-                canvas.width = Math.max(1, Math.floor(vw * scale));
-                canvas.height = Math.max(1, Math.floor(vh * scale));
-                ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-              }
-              const decoded = reader.decodeFromCanvas(canvas);
-              if (decoded) consider(decoded.getText());
-            }
-          } catch { /* this frame has no barcode */ }
-          finally { busy = false; }
+        if (!nativeBusy && detector && source && source.readyState >= 2) {
+          nativeBusy = true;
+          void detector.detect(source).then(rows => {
+            for (const item of rows) consider(item.rawValue || '');
+          }).catch(() => undefined).finally(() => { nativeBusy = false; });
         }
-        timer = window.setTimeout(tick, 50);
+        nativeTimer = window.setTimeout(tick, 50);
       };
-      timer = window.setTimeout(tick, 50);
+      const decodeStrip = () => {
+        if (!active) return;
+        const source = video.current;
+        if (ctx && source && source.readyState >= 2 && source.videoWidth > 0) {
+          window.setTimeout(() => {
+            try {
+              drawStrip(source, ctx, canvas, bands[band % bands.length]);
+              band += 1;
+              const decoded = fastReader.decodeFromCanvas(canvas);
+              if (decoded) consider(decoded.getText());
+            } catch { /* this strip has no barcode */ }
+          }, 0);
+        }
+        stripTimer = window.setTimeout(decodeStrip, 280);
+      };
+      nativeTimer = window.setTimeout(tick, 40);
+      stripTimer = window.setTimeout(decodeStrip, 120);
     };
     const readLabel = async () => {
-      try {
-        worker = await createWorker('eng');
-        await worker.setParameters({
-          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-          user_defined_dpi: '300',
-        });
-      } catch { return; }
+      worker = await ocrReady.current;
+      if (!worker) {
+        try {
+          worker = await createWorker('eng');
+          await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+        } catch { return; }
+      }
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      let turn = false;
+      let reading = false;
       const read = async () => {
-        if (!active || !worker || !ctx) return;
+        if (!active || !worker || !ctx || reading) return;
         const source = video.current;
-        if (source && source.readyState >= 2 && source.videoWidth > 0) {
-          const vw = source.videoWidth;
-          const vh = source.videoHeight;
-          const cw = Math.floor(vw * 0.78);
-          const ch = Math.floor(vh * 0.46);
-          const sx = Math.floor((vw - cw) / 2);
-          const sy = Math.floor((vh - ch) / 2);
-          if (turn) {
-            canvas.width = ch * 2;
-            canvas.height = cw * 2;
-            ctx.setTransform(0, 2, -2, 0, canvas.width, 0);
-          } else {
-            canvas.width = cw * 2;
-            canvas.height = ch * 2;
-            ctx.setTransform(2, 0, 0, 2, 0, 0);
-          }
-          ctx.drawImage(source, sx, sy, cw, ch, 0, 0, cw, ch);
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          try {
-            const found = await worker.recognize(canvas);
-            const text = found.data.text || '';
-            if (labelWorthReading(text)) acceptLabel(text);
-            else turn = !turn;
-          } catch { /* this frame has no readable text */ }
+        if (!source || source.readyState < 2 || source.videoWidth <= 0) {
+          ocrTimer = window.setTimeout(read, 80);
+          return;
         }
-        ocrTimer = window.setTimeout(read, 650);
+        reading = true;
+        drawLabel(source, ctx, canvas);
+        try {
+          await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: '0123456789- ' });
+          const found = await worker.recognize(canvas);
+          const text = (found.data.text || '').replace(/\s+/g, ' ').trim();
+          if (text && Date.now() - lastBeep.current.at > 800) setLive(text.slice(0, 72));
+          if (labelWorthReading(text)) acceptLabel(text);
+          else if (labelSeen.current && Date.now() - labelSeenAt.current > 480) labelSeen.current = '';
+        } catch { /* this frame has no readable text */ }
+        finally { reading = false; }
+        if (active) ocrTimer = window.setTimeout(read, 40);
       };
-      if (active) ocrTimer = window.setTimeout(read, 300);
+      nudgeOcr.current = () => {
+        if (!active || reading) return;
+        window.clearTimeout(ocrTimer);
+        void read();
+      };
+      if (active) ocrTimer = window.setTimeout(read, 20);
     };
     void readLabel();
     start().catch(error => {
@@ -338,12 +435,45 @@ export function ScannerPage() {
     });
     return () => {
       active = false;
-      window.clearTimeout(timer);
+      nudgeOcr.current = null;
+      window.clearTimeout(nativeTimer);
+      window.clearTimeout(stripTimer);
       window.clearTimeout(ocrTimer);
-      void worker?.terminate();
+      trackRef.current = null;
+      setTorchable(false);
+      setTorchOn(false);
       streamBox.current?.getTracks().forEach(track => track.stop());
     };
   }, [camera, t]);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!camera || !track || !torchable) return;
+    void track.applyConstraints({ advanced: [{ torch: torchOn } as MediaTrackConstraintSet] }).catch(() => setTorchOn(false));
+  }, [camera, torchOn, torchable]);
+
+  useEffect(() => {
+    let buffer = '';
+    let last = 0;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return;
+      const now = Date.now();
+      if (now - last > 45) buffer = '';
+      last = now;
+      if (event.key === 'Enter') {
+        if (buffer.length >= 3) {
+          event.preventDefault();
+          acceptRef.current(buffer);
+        }
+        buffer = '';
+        return;
+      }
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) buffer += event.key;
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const lookup = (event: FormEvent) => {
     event.preventDefault();
@@ -364,7 +494,8 @@ export function ScannerPage() {
     {camera && <div className="scan-view">
       <video ref={video} autoPlay playsInline muted data-testid="camera-preview"/>
       <div className="scan-frame"><span><i/></span></div>
-      <b className="scan-live">{t('scan.listening')}</b>
+      <b className="scan-live">{live || t('scan.listening')}</b>
+      {torchable && <button className={`icon-btn camera-torch ${torchOn ? 'is-on' : ''}`} type="button" onClick={() => setTorchOn(on => !on)} aria-label={torchOn ? t('scan.torchOff') : t('scan.torch')} data-testid="button-camera-torch"><Flashlight size={16}/></button>}
       <button className="icon-btn camera-stop" type="button" onClick={() => setCamera(false)} aria-label={t('scan.cameraStop')} data-testid="button-camera-stop"><X size={16}/></button>
       {cameraError && <small className="error-text scan-live-error" data-testid="status-camera-error">{cameraError}</small>}
     </div>}

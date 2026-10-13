@@ -419,6 +419,7 @@ export const ListDocumentsResponseItem = zod.object({
   "sourceWarehouse": zod.string().nullable(),
   "targetWarehouse": zod.string().nullable(),
   "itemCount": zod.number().int(),
+  "total": zod.number().nullable(),
   "moyskladId": zod.string().nullable()
 })
 export const ListDocumentsResponse = zod.array(ListDocumentsResponseItem)

@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { sendPreview, startTelegramDigest } from "./lib/telegram";
 
 const rawPort = process.env["PORT"];
 
@@ -9,6 +10,11 @@ if (!rawPort) {
   );
 }
 
+if (process.argv.includes("--telegram-preview")) {
+  sendPreview()
+    .then((ok) => process.exit(ok ? 0 : 1))
+    .catch(() => process.exit(1));
+} else {
 const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
@@ -22,4 +28,6 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  startTelegramDigest();
 });
+}

@@ -68,6 +68,9 @@ export default defineConfig({
     port,
     strictPort: true,
     host: '0.0.0.0',
+    watch: {
+      ignored: ['**/*.ttf'],
+    },
     allowedHosts: true,
     fs: {
       strict: true,

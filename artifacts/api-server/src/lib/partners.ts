@@ -24,7 +24,7 @@ export type Shipment = {
   number: string;
   factoryId: string;
   date: string;
-  status: "sent" | "accepted";
+  status: "sent" | "accepted" | "declined";
   note: string;
   lines: ShipmentLine[];
   createdAt: string;
@@ -287,7 +287,31 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   return shipmentView(shipment);
 }
 
-export function setShipmentStatus(id: string, status: "sent" | "accepted") {
+export function updateShipment(id: string, input: { date?: string; note?: string; lines: Partial<ShipmentLine>[] }) {
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === id);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  const account = store.accounts.find((item) => item.id === shipment.factoryId);
+  if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
+  const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.productCode);
+  if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
+  if (input.date) shipment.date = String(input.date).slice(0, 10);
+  shipment.note = String(input.note ?? shipment.note).trim();
+  shipment.lines = lines;
+  save(store);
+  return shipmentView(shipment);
+}
+
+export function deleteShipment(id: string) {
+  const store = load();
+  const before = store.shipments.length;
+  store.shipments = store.shipments.filter((item) => item.id !== id);
+  if (store.shipments.length === before) throw Object.assign(new Error("not_found"), { status: 404 });
+  save(store);
+  return { ok: true };
+}
+
+export function setShipmentStatus(id: string, status: "sent" | "accepted" | "declined") {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });

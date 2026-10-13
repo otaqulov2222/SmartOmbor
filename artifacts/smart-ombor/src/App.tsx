@@ -5,9 +5,9 @@ import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, BarChart3, Boxes,
+  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Boxes,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Factory, FileBarChart, FileText, Filter, Handshake, Languages, LayoutDashboard, LogOut, Menu,
+  Clock3, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, Repeat,
   Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   Sparkles, Tags, UserRound, Users, Warehouse, X,
 } from 'lucide-react';
@@ -31,7 +31,7 @@ import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 1, refetchOnWindowFocus: false } } });
+const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const hostName = window.location.hostname;
 const isLocalHost = hostName === 'localhost' || hostName === '127.0.0.1';
@@ -65,6 +65,7 @@ const navigation: NavItem[] = [
   { key: 'nav.analytics', href: '/analytics', icon: BarChart3, group: 'nav.group.analytics' },
   { key: 'nav.nonMoving', href: '/non-moving', icon: Clock3, group: 'nav.group.analytics' },
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
+  { key: 'nav.branches', href: '/branches', icon: Repeat, group: 'nav.group.analytics' },
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
   { key: 'nav.recommendations', href: '/recommendations', icon: Sparkles, group: 'nav.group.analytics' },
   { key: 'nav.reports', href: '/reports', icon: FileBarChart, group: 'nav.group.analytics' },
@@ -224,7 +225,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     </aside>
     <div className="main">
       <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><span className={`chip ${connected ? 'chip-on' : ''}`} data-testid="status-moysklad" title={connection.isLoading ? t('shell.checking') : connected ? t('shell.connected') : t('shell.disconnected')}><i/><span>{connection.isLoading ? t('shell.checking') : connected ? t('shell.connected') : t('shell.disconnected')}</span></span>{auto.data?.pending && <span className="chip chip-sync" title={t('refresh.every')}><RefreshCw size={13} className="spin"/><span>{t('refresh.updating')}</span></span>}<LangSwitch compact/><Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link></div></header>
-      <main className="content"><div className="page-enter">{children}</div><footer className="foot"><span>{t('brand.name')}</span><span>{t('shell.footer.source')}</span></footer></main>
+      <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
 }
@@ -276,7 +277,8 @@ function QueryError({ q, id }: { q: { error: unknown; isError: boolean; refetch:
   if (!q.isError) return null;
   const raw = q.error instanceof Error ? q.error.message : '';
   const status = /HTTP (\d{3})/.exec(raw)?.[1];
-  const message = !raw ? t('common.serverLost') : status === '404' ? t('common.notAvailable') : /<html|<!doctype/i.test(raw) ? t('common.httpError', { status: status ?? '500' }) : raw;
+  const opaque = !raw || raw === 'Failed to fetch' || /^(factories|alerts|warehouses|rebalance|load)$/i.test(raw);
+  const message = opaque ? t('common.loadFailedHint') : status === '404' ? t('common.notAvailable') : /<html|<!doctype/i.test(raw) ? t('common.httpError', { status: status ?? '500' }) : raw;
   return <ErrorState message={message} retry={() => { void q.refetch(); }} id={id}/>;
 }
 function ImageLightbox({ src, title, onClose }: { src: string; title: string; onClose: () => void }) {
@@ -401,7 +403,9 @@ function ProductsPage() {
         <div><small>{t('products.detail.price')}</small><b>{money(selected.salePrice)}</b></div>
         <div><small>{t('products.detail.cost')}</small><b>{money(selected.cost)}</b></div>
         <div><small>{t('products.detail.sales')}</small><b>{fmt(selected.sales30)} {unit(selected.unit)}</b></div>
-        <div><small>{t('products.detail.cover')}</small><b>{selected.daysCover == null ? '—' : `${fmt(selected.daysCover)} ${t('common.days')}`}</b></div>
+        <div><small>{t('products.detail.daily')}</small><b>{fmt(selected.sales30 / 30, 2)} {unit(selected.unit)}</b></div>
+        <div><small>{t('products.detail.cover')}</small><b>{selected.daysCover == null ? t('products.detail.noSales') : `${fmt(selected.daysCover)} ${t('common.days')}`}</b></div>
+        <div><small>{t('products.detail.windows')}</small><b>{fmt(selected.sales7)} / {fmt(selected.sales30)} / {fmt(selected.sales90)}</b></div>
       </div>
       <div className="codes"><b>{t('products.barcodes')}</b>{selected.barcodes.length ? selected.barcodes.map(c => <code key={c}>{c}</code>) : <span>{t('products.noBarcode')}</span>}</div>
     </div></div>, document.body)}
@@ -462,84 +466,387 @@ function AnalyticsPage() {
   const periodLabel = t(`analytics.period.${period}` as TKey);
   return <>
     <PageHead title={t('analytics.title')} subtitle={t('analytics.sub')}/>
-    <div className="toolbar"><label className="select-wrap"><SlidersHorizontal size={15}/><SelectInput value={period} onChange={setPeriod} testId="select-analytics-period">{(['7d', '30d', '90d', '365d'] as const).map(p => <option key={p} value={p}>{t(`analytics.period.${p}` as TKey)}</option>)}</SelectInput></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-analytics-warehouse"/></label><ExportButton kind="sales" defaultPeriod={period === '7d' ? 'days7' : period === '30d' ? 'thisMonth' : 'all'}/></div>
+    <div className="toolbar sales-toolbar"><label className="select-wrap"><SlidersHorizontal size={15}/><SelectInput value={period} onChange={setPeriod} testId="select-analytics-period">{(['7d', '30d', '90d', '365d'] as const).map(p => <option key={p} value={p}>{t(`analytics.period.${p}` as TKey)}</option>)}</SelectInput></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-analytics-warehouse"/></label><ExportButton kind="sales" defaultPeriod={period === '7d' ? 'days7' : period === '30d' ? 'thisMonth' : 'all'}/></div>
     <QueryError q={q} id="analytics"/>
     {q.isLoading ? <LoadingRows count={5}/> : q.data ? <>
       <div className="metrics metrics-3"><Metric label={t('analytics.total')} value={money(q.data.totalAmount)} note={periodLabel} icon={BarChart3} tone="tone-blue"/><Metric label={t('analytics.qty')} value={fmt(q.data.totalQuantity)} note={t('analytics.qty.note')} icon={Package}/><Metric label={t('analytics.avg')} value={money(q.data.averagePerDay)} note={t('analytics.avg.note')} icon={Activity} tone="tone-green"/></div>
-      <div className="two-col">
-        <Card title={t('analytics.trend')} meta={periodLabel}><div className="chart" data-testid="chart-sales-trend"><div className="chart-bars">{q.data.trend.map((p, i) => <div key={`${p.date}-${i}`} className="chart-col" data-testid={`bar-sales-${p.date}`} title={`${date(p.date)} · ${money(p.amount)}`}><i style={{ height: `${Math.max(2, (p.amount / max) * 100)}%` }}/>{(q.data!.trend.length <= 14 || i % Math.ceil(q.data!.trend.length / 12) === 0) && <small>{q.data!.trend.length <= 7 ? weekdayShort(lang, p.date) : formatShortDay(lang, p.date)}</small>}</div>)}</div></div></Card>
-        <Card title={t('analytics.top')} meta={t('analytics.top.meta', { count: q.data.topProducts.length })}>{q.data.topProducts.length ? <ul className="rank-list">{q.data.topProducts.map((p, i) => <li key={p.id} data-testid={`row-top-product-${p.id}`}><span className="rank">{String(i + 1).padStart(2, '0')}</span><ProductTitle product={p} href={`/products?search=${encodeURIComponent(p.code || p.name)}`}/><span className="rank-val">{fmt(p.sales30)}<small>{t('analytics.top.sales')}</small></span></li>)}</ul> : <EmptyState title={t('analytics.top.empty')} body={t('analytics.top.emptyBody')}/>}</Card>
-      </div>
+      <Card title={t('analytics.trend')} meta={periodLabel}>
+        <div className="sales-plot" data-testid="chart-sales-trend">
+          <div className="sales-bars">{q.data.trend.map((p, i) => <div key={`${p.date}-${i}`} className="sales-bar" data-testid={`bar-sales-${p.date}`} title={`${date(p.date)} · ${money(p.amount)}`}><i style={{ height: `${Math.max(p.amount > 0 ? 3 : 0, (p.amount / max) * 100)}%` }}/></div>)}</div>
+          <div className="sales-axis">{q.data.trend.map((p, i) => { const step = q.data!.trend.length <= 8 ? 1 : q.data!.trend.length <= 16 ? 2 : q.data!.trend.length <= 40 ? 5 : Math.ceil(q.data!.trend.length / 8); const show = i % step === 0; return <span key={`${p.date}-axis`}>{show ? (q.data!.trend.length <= 7 ? weekdayShort(lang, p.date) : formatShortDay(lang, p.date)) : ''}</span>; })}</div>
+        </div>
+      </Card>
+      <Card title={t('analytics.top')} meta={t('analytics.top.meta', { count: q.data.topProducts.length })}>{q.data.topProducts.length ? <ul className="sales-leaders">{q.data.topProducts.map((p, i) => <li key={p.id} data-testid={`row-top-product-${p.id}`}><span className="rank">{String(i + 1).padStart(2, '0')}</span><ProductTitle product={p} href={`/products?search=${encodeURIComponent(p.code || p.name)}`}/><span className="rank-val">{fmt(p.sales30)}<small>{t('analytics.top.sales')}</small></span></li>)}</ul> : <EmptyState title={t('analytics.top.empty')} body={t('analytics.top.emptyBody')}/>}</Card>
     </> : <EmptyState title={t('analytics.empty.title')} body={t('analytics.empty.body')} icon={BarChart3}/>}
   </>;
 }
 
 /* ---------- non-moving ---------- */
 function NonMovingPage() {
-  const { t, fmt } = useI18n();
-  const [days, setDays] = useState('30'); const [warehouse, setWarehouse] = useState('');
-  const params = useMemo(() => ({ days: Number(days) as 7|15|25|30|60|90, warehouseId: warehouse || undefined }), [days, warehouse]);
+  const { t, fmt, money } = useI18n();
+  const unit = useUnit();
+  const [days, setDays] = useState('30');
+  const [warehouse, setWarehouse] = useState('');
+  const [search, setSearch] = useState('');
+  const params = useMemo(() => ({ days: Number(days) as 7|30|90, warehouseId: warehouse || undefined }), [days, warehouse]);
   const q = useGetNonMovingProducts(params);
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (q.data ?? [])
+      .filter(product => !needle || `${product.name} ${product.code || ''} ${product.article || ''}`.toLowerCase().includes(needle))
+      .slice()
+      .sort((a, b) => (b.stock * (b.salePrice ?? 0)) - (a.stock * (a.salePrice ?? 0)) || b.stock - a.stock);
+  }, [q.data, search]);
+  const stock = rows.reduce((sum, product) => sum + product.stock, 0);
+  const value = rows.reduce((sum, product) => sum + product.stock * (product.salePrice ?? 0), 0);
+  const idleWindow = (product: { sales30: number; sales90: number }) => product.sales30 > 0 ? 7 : product.sales90 > 0 ? 30 : 90;
   return <>
     <PageHead title={t('idle.title')} subtitle={t('idle.sub')}/>
-    <div className="toolbar"><label className="select-wrap"><Clock3 size={15}/><SelectInput value={days} onChange={setDays} testId="select-idle-days">{['7', '15', '25', '30', '60', '90'].map(d => <option key={d} value={d}>{t('idle.since', { days: d })}</option>)}</SelectInput></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-idle-warehouse"/></label><ExportButton kind="nonMoving"/></div>
+    <div className="toolbar idle-toolbar"><label className="search"><Search size={16}/><TextInput testId="input-idle-search" placeholder={t('idle.search')} value={search} onChange={event => setSearch(event.target.value)}/></label><label className="select-wrap"><Clock3 size={15}/><SelectInput value={days} onChange={setDays} testId="select-idle-days">{['7', '30', '90'].map(d => <option key={d} value={d}>{t('idle.since', { days: d })}</option>)}</SelectInput></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-idle-warehouse"/></label><ExportButton kind="nonMoving"/></div>
     <QueryError q={q} id="non-moving"/>
-    <Card className="table-card" title={t('idle.panel')} meta={q.data ? t('idle.count', { count: fmt(q.data.length) }) : ''}>{q.isLoading ? <LoadingRows/> : q.data?.length ? <ProductTable products={q.data} testId="table-non-moving"/> : <EmptyState title={t('idle.empty.title')} body={t('idle.empty.body')} icon={Clock3}/>}</Card>
+    {q.isLoading ? <LoadingRows/> : <>
+      <div className="metrics metrics-3"><Metric label={t('idle.kpi.products')} value={fmt(rows.length)} note={t('idle.since', { days })} icon={Clock3} tone="tone-amber"/><Metric label={t('idle.kpi.stock')} value={fmt(stock)} note={t('idle.kpi.stockNote')} icon={Package}/><Metric label={t('idle.kpi.value')} value={money(value)} note={t('idle.kpi.valueNote')} icon={Banknote} tone="tone-blue"/></div>
+      {rows.length ? <Card className="table-card" title={t('idle.panel')} meta={t('idle.count', { count: fmt(rows.length) })}><Table testId="table-non-moving" numeric={[1, 2, 3, 4, 5]} columns={[t('common.product'), t('idle.col.stock'), t('idle.col.value'), t('idle.col.d7'), t('idle.col.d30'), t('idle.col.d90'), t('idle.col.window')]} rows={rows.map(product => ({ key: product.id, testId: `row-idle-${product.id}`, cells: [<ProductTitle product={product} href={`/products?search=${encodeURIComponent(product.code || product.name)}`}/>, `${fmt(product.stock)} ${unit(product.unit)}`, money(product.stock * (product.salePrice ?? 0)), fmt(product.sales7), fmt(product.sales30), fmt(product.sales90), t('idle.window', { days: idleWindow(product) })] }))}/></Card> : <EmptyState title={search ? t('idle.empty.search') : t('idle.empty.title')} body={search ? t('idle.empty.searchBody') : t('idle.empty.body')} icon={Clock3}/>}
+    </>}
   </>;
 }
 
 /* ---------- factories ---------- */
-type FactoryGroup = { name: string; count: number; stock: number; products: Array<{ id: string; name: string; code: string | null; stock: number; imageUrl: string | null }> };
+type FactoryGroup = { name: string; count: number; stock: number; value: number; products: Array<{ id: string; name: string; code: string | null; stock: number; value: number }> };
+type FactorySort = 'stock' | 'value' | 'count';
 function FactoriesPage() {
-  const { t, fmt } = useI18n();
+  const { t, fmt, money } = useI18n();
   const [search, setSearch] = useState('');
-  const q = useQuery<{ items: FactoryGroup[] }>({ queryKey: ['catalog-factories'], queryFn: async () => { const response = await fetch('/api/catalog/factories'); if (!response.ok) throw new Error('factories'); return response.json(); } });
-  const makers = (q.data?.items ?? []).filter(item => { const name = item.name || t('factories.unknown'); const hay = `${name} ${item.products.map(p => `${p.name} ${p.code || ''}`).join(' ')}`.toLowerCase(); return !search.trim() || hay.includes(search.trim().toLowerCase()); });
+  const [productSearch, setProductSearch] = useState('');
+  const [sort, setSort] = useState<FactorySort>('stock');
+  const [selected, setSelected] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(3);
+  const q = useQuery<{ items: FactoryGroup[]; ready?: boolean }>({
+    queryKey: ['catalog-factories', 'ready'],
+    queryFn: async () => {
+      const response = await fetch('/api/catalog/factories');
+      if (!response.ok) throw new Error(t('common.loadFailedHint'));
+      return response.json();
+    },
+    refetchInterval: query => query.state.data?.ready === false ? 2000 : false,
+  });
+  const unknown = t('factories.unknown');
+  const needle = search.trim().toLowerCase();
+  const catalog = useMemo(() => (q.data?.items ?? []).map(item => ({ ...item, name: item.name || unknown })), [q.data, unknown]);
+  const stock = catalog.reduce((sum, item) => sum + item.stock, 0);
+  const value = catalog.reduce((sum, item) => sum + item.value, 0);
+  const shareOf = (part: number) => stock > 0 ? Math.round((part / stock) * 1000) / 10 : 0;
+  const shareLabel = (part: number) => {
+    const share = shareOf(part);
+    return t('factories.share', { share: fmt(share, share > 0 && share < 10 ? 1 : 0) });
+  };
+  const makers = useMemo(() => catalog.flatMap(item => {
+    const nameHit = !needle || item.name.toLowerCase().includes(needle);
+    const products = nameHit ? item.products : item.products.filter(product => `${product.name} ${product.code || ''}`.toLowerCase().includes(needle));
+    if (!nameHit && products.length === 0) return [];
+    const next = nameHit ? item : { ...item, products, stock: products.reduce((sum, product) => sum + product.stock, 0), value: products.reduce((sum, product) => sum + product.value, 0), count: products.length };
+    return [next];
+  }).sort((a, b) => {
+    if ((a.name === unknown) !== (b.name === unknown)) return a.name === unknown ? 1 : -1;
+    return b[sort] - a[sort];
+  }), [catalog, needle, sort, unknown]);
+  const active = selected ? catalog.find(item => item.name === selected) ?? null : null;
+  const activeIndex = active ? makers.findIndex(item => item.name === active.name) : -1;
+  const productNeedle = productSearch.trim().toLowerCase();
+  const activeProducts = active ? active.products.filter(product => !productNeedle || `${product.name} ${product.code || ''}`.toLowerCase().includes(productNeedle)) : [];
+  const pageSize = 25;
+  const pageCount = Math.max(1, Math.ceil(activeProducts.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleProducts = activeProducts.slice((safePage - 1) * pageSize, safePage * pageSize);
+  useEffect(() => {
+    const node = gridRef.current;
+    if (!node) return;
+    const read = () => setCols(window.matchMedia('(max-width: 900px)').matches ? 1 : window.matchMedia('(max-width: 1180px)').matches ? 2 : 3);
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [makers.length]);
+  useEffect(() => {
+    if (selected && !makers.some(item => item.name === selected)) setSelected(null);
+  }, [makers, selected]);
+  const openMaker = (name: string) => {
+    const item = catalog.find(entry => entry.name === name);
+    const nameHit = !needle || !!item?.name.toLowerCase().includes(needle);
+    setProductSearch(nameHit ? '' : search.trim());
+    setPage(1);
+    setSelected(current => current === name ? null : name);
+  };
+  const stepMaker = (name: string) => { setProductSearch(''); setPage(1); setSelected(name); };
+  const rows: FactoryGroup[][] = [];
+  for (let index = 0; index < makers.length; index += cols) rows.push(makers.slice(index, index + cols));
   return <>
-    <PageHead title={t('factories.title')} subtitle={t('factories.sub')}/>
-    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-factory-search" placeholder={t('factories.searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)}/></label><ExportButton kind="factories"/></div>
-    {q.isError ? <ErrorState message={q.error instanceof Error ? q.error.message : t('common.tryAgain')} retry={() => { void q.refetch(); }} id="factories"/> : null}
-    {q.isLoading ? <LoadingRows/> : makers.length ? <div className="factory-grid">{makers.map((data, i) => { const name = data.name || t('factories.unknown'); return <details className="card factory" key={name || 'unknown'} data-testid={`factory-card-${i}`}><summary><span className="rank">{String(i + 1).padStart(2, '0')}</span><span className="factory-main"><b>{name}</b><small>{t('factories.summary', { count: fmt(data.count), stock: fmt(data.stock) })}</small></span><ChevronDown size={17}/></summary><div className="factory-products">{data.products.map(p => <div key={p.id} data-testid={`factory-product-${p.id}`}><Link href={`/products?search=${encodeURIComponent(p.code || p.name)}`}><b>{p.name}</b><small>{p.code || t('common.noCode')}</small></Link><span>{fmt(p.stock)}</span></div>)}{data.count > data.products.length && <p className="muted">{t('factories.partial', { shown: fmt(data.products.length), total: fmt(data.count) })}</p>}</div></details>; })}</div> : <EmptyState title={t('factories.empty.title')} body={t('factories.empty.body')} icon={Factory}/>}
+    <PageHead title={t('factories.title')}/>
+    <div className="toolbar">
+      <label className="search"><Search size={17}/><TextInput testId="input-factory-search" placeholder={t('factories.searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)}/></label>
+      <div className="maker-sort" role="group">{(['stock', 'value', 'count'] as const).map(key => <button type="button" key={key} className={sort === key ? 'is-on' : ''} onClick={() => setSort(key)}>{t(`factories.sort.${key}`)}</button>)}</div>
+      <ExportButton kind="factories"/>
+    </div>
+    {q.isPending ? <LoadingRows/> : q.isError ? <QueryError q={q} id="factories"/> : catalog.length ? <>
+      <section className="maker-summary" data-testid="factories-summary">
+        <article><span>{t('factories.kpi.makers')}</span><strong>{fmt(catalog.length)}</strong><small>{t('factories.kpi.makersNote')}</small></article>
+        <article><span>{t('idle.kpi.stock')}</span><strong>{fmt(stock)}</strong><small>{t('idle.kpi.stockNote')}</small></article>
+        <article><span>{t('idle.kpi.value')}</span><strong>{money(value)}</strong><small>{t('idle.kpi.valueNote')}</small></article>
+      </section>
+      {makers.length ? <div className="maker-rows" ref={gridRef} data-testid="list-factories">{rows.map(row => <div className="maker-row" key={row[0].name}>{row.map(data => {
+        const index = makers.indexOf(data);
+        return <button type="button" key={data.name} className={`maker-card ${data.name === unknown ? 'is-unknown' : ''} ${active?.name === data.name ? 'is-open' : ''}`} data-testid={`factory-card-${index}`} onClick={() => openMaker(data.name)} aria-expanded={active?.name === data.name}>
+          <span className="maker-card-top"><span className={`rank ${index < 3 && data.name !== unknown ? 'is-lead' : ''}`}>{String(index + 1).padStart(2, '0')}</span><b>{data.name}</b><ChevronRight size={16} className="maker-go"/></span>
+          <span className="maker-stats"><span><small>{t('factories.stat.products')}</small><strong>{fmt(data.count)}</strong></span><span><small>{t('factories.stat.stock')}</small><strong>{fmt(data.stock)}</strong></span></span>
+          <span className="maker-worth">{money(data.value)}</span>
+          <span className="maker-foot"><span className="maker-meter" aria-hidden="true"><i style={{ width: `${Math.min(100, shareOf(data.stock))}%` }}/></span><small>{shareLabel(data.stock)}</small></span>
+        </button>;
+      })}{active && row.some(item => item.name === active.name) && <section className="maker-open" data-testid="panel-factory">
+        <div className="maker-open-head">
+          <div><h2>{active.name}</h2><p>{t('factories.summary', { count: fmt(active.count), stock: fmt(active.stock) })} · {money(active.value)}</p></div>
+          <div className="maker-open-tools">
+            <span className="maker-share">{shareLabel(active.stock)}</span>
+            {activeIndex > 0 && <button type="button" className="maker-nav" onClick={() => stepMaker(makers[activeIndex - 1].name)}><ChevronLeft size={15}/><span>{makers[activeIndex - 1].name}</span></button>}
+            {activeIndex >= 0 && activeIndex < makers.length - 1 && <button type="button" className="maker-nav" onClick={() => stepMaker(makers[activeIndex + 1].name)}><span>{makers[activeIndex + 1].name}</span><ChevronRight size={15}/></button>}
+            <button type="button" className="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')}><X size={16}/></button>
+          </div>
+        </div>
+        <div className="maker-meter maker-meter-open" aria-hidden="true"><i style={{ width: `${Math.min(100, shareOf(active.stock))}%` }}/></div>
+        <label className="search maker-open-search"><Search size={16}/><TextInput testId="input-factory-product-search" placeholder={t('factories.productSearch')} value={productSearch} onChange={event => { setProductSearch(event.target.value); setPage(1); }}/></label>
+        {visibleProducts.length ? <>
+          <Table testId="table-factory-products" numeric={[2, 3]} columns={[t('common.product'), t('col.code'), t('idle.col.stock'), t('idle.col.value')]} rows={visibleProducts.map(product => ({ key: product.id, testId: `factory-product-${product.id}`, cells: [<Link href={`/products?search=${encodeURIComponent(product.code || product.name)}`}><b>{product.name}</b></Link>, product.code || t('common.noCode'), fmt(product.stock), money(product.value)] }))}/>
+          {activeProducts.length > pageSize && <div className="pager"><span>{t('products.range', { total: fmt(activeProducts.length), from: fmt((safePage - 1) * pageSize + 1), to: fmt(Math.min(safePage * pageSize, activeProducts.length)) })}</span><div className="pager-nav"><button className="icon-btn" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)} aria-label={t('common.prevPage')}><ChevronLeft size={17}/></button><span>{safePage}</span><button className="icon-btn" disabled={safePage >= pageCount} onClick={() => setPage(safePage + 1)} aria-label={t('common.nextPage')}><ChevronRight size={17}/></button></div></div>}
+        </> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
+      </section>}</div>)}</div> : <EmptyState title={t('factories.empty.title')} body={t('factories.empty.body')} icon={Factory}/>}
+    </> : <EmptyState title={t('factories.empty.title')} body={t('factories.empty.body')} icon={Factory}/>}
   </>;
 }
 
 /* ---------- recommendations ---------- */
+type RebalanceRow = {
+  productId: string; name: string; code: string | null; barcode: string | null;
+  fromWarehouse: string; toWarehouse: string; fromQuantity: number; toQuantity: number;
+  dailyAverage: number; suggestedQuantity: number; reason: string;
+};
+function BranchesPage() {
+  const { t, fmt } = useI18n();
+  const [search, setSearch] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const q = useQuery<{ items: RebalanceRow[]; proposal: boolean }>({ queryKey: ['rebalance'], queryFn: async () => { const response = await fetch('/api/analytics/rebalance'); if (!response.ok) throw new Error(t('common.loadFailedHint')); return response.json(); } });
+  const items = q.data?.items ?? [];
+  const sources = [...new Set(items.map(row => row.fromWarehouse))].sort((a, b) => a.localeCompare(b));
+  const targets = [...new Set(items.map(row => row.toWarehouse))].sort((a, b) => a.localeCompare(b));
+  const needle = search.trim().toLowerCase();
+  const rows = items.filter(row => (!from || row.fromWarehouse === from) && (!to || row.toWarehouse === to) && (!needle || `${row.name} ${row.code || ''} ${row.barcode || ''} ${row.fromWarehouse} ${row.toWarehouse}`.toLowerCase().includes(needle)));
+  const move = rows.reduce((sum, row) => sum + row.suggestedQuantity, 0);
+  const places = new Set(rows.flatMap(row => [row.fromWarehouse, row.toWarehouse])).size;
+  return <>
+    <PageHead title={t('branch.title')}/>
+    <div className="toolbar">
+      <label className="search"><Search size={17}/><TextInput testId="input-branch-search" placeholder={t('branch.search')} value={search} onChange={event => setSearch(event.target.value)}/></label>
+      <label className="select-wrap"><Warehouse size={16}/><SelectInput value={from} onChange={setFrom} testId="select-branch-from" ariaLabel={t('branch.col.from')}><option value="">{t('branch.col.from')}</option>{sources.map(name => <option key={name} value={name}>{name}</option>)}</SelectInput></label>
+      <label className="select-wrap"><Warehouse size={16}/><SelectInput value={to} onChange={setTo} testId="select-branch-to" ariaLabel={t('branch.col.to')}><option value="">{t('branch.col.to')}</option>{targets.map(name => <option key={name} value={name}>{name}</option>)}</SelectInput></label>
+      <ExportButton kind="branches"/>
+    </div>
+    {q.isPending ? <LoadingRows/> : q.isError ? <QueryError q={q} id="branches"/> : items.length ? <>
+      <section className="maker-summary">
+        <article><span>{t('branch.kpi.offers')}</span><strong>{fmt(rows.length)}</strong><small>{t('branch.kpi.offersNote')}</small></article>
+        <article><span>{t('branch.kpi.move')}</span><strong>{fmt(move)}</strong><small>{t('branch.kpi.moveNote')}</small></article>
+        <article><span>{t('branch.kpi.places')}</span><strong>{fmt(places)}</strong><small>{t('branch.kpi.placesNote')}</small></article>
+      </section>
+      {rows.length ? <Card className="table-card" title={t('branch.panel')} meta={t('branch.count', { count: fmt(rows.length) })}><Table testId="table-rebalance" numeric={[3, 4, 5, 6]} columns={[t('common.product'), t('branch.col.from'), t('branch.col.to'), t('branch.col.fromQty'), t('branch.col.toQty'), t('branch.col.move'), t('reco.col.perDay')]} rows={rows.map(row => ({ key: `${row.productId}-${row.fromWarehouse}-${row.toWarehouse}`, testId: `row-rebalance-${row.productId}`, cells: [<span className="cell-two"><b>{row.name}</b><Link href={`/products?search=${encodeURIComponent(row.code || row.name)}`}><small>{row.code || row.barcode || t('common.noCode')}</small></Link></span>, row.fromWarehouse, <span className="branch-to">{row.toWarehouse}</span>, fmt(row.fromQuantity), <b className="qty-low">{fmt(row.toQuantity)}</b>, <b className="move-qty">{fmt(row.suggestedQuantity)}</b>, fmt(row.dailyAverage, 2)] }))}/></Card> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
+    </> : <EmptyState title={t('branch.empty.title')} body={t('branch.empty.body')} icon={Repeat}/>}
+  </>;
+}
+
+const RECO_COLORS: Array<[RegExp, TKey]> = [
+  [/\bqora\b|\bчерн/i, 'reco.color.qora'],
+  [/\boq\b|\bбел(ый|ая|ое)?\b/i, 'reco.color.oq'],
+  [/\bjigarrang\b|\bкоричнев/i, 'reco.color.jigarrang'],
+  [/\bsariq\b|\bж[её]лт/i, 'reco.color.sariq'],
+  [/\bqizil\b|\bкрасн/i, 'reco.color.qizil'],
+  [/\bko['’‘]?k\b|\bсин(ий|яя|ее)?\b/i, 'reco.color.kok'],
+  [/\byashil\b|\bзел[её]н/i, 'reco.color.yashil'],
+  [/\bkulrang\b|\bсер(ый|ая|ое)?\b/i, 'reco.color.kulrang'],
+  [/\bbej\b|\bбеж/i, 'reco.color.bej'],
+  [/\bpushti\b|\bрозов/i, 'reco.color.pushti'],
+];
 function RecommendationsPage() {
   const { t, fmt } = useI18n(); const unit = useUnit();
   const [warehouse, setWarehouse] = useState('');
+  const [search, setSearch] = useState('');
   const params = useMemo(() => ({ warehouseId: warehouse || undefined }), [warehouse]);
   const q = useGetPurchaseRecommendations(params);
   const reason = (code: string) => { const key = `reco.reason.${code}` as TKey; const v = t(key); return v === key ? code : v; };
+  const traits = (name: string) => {
+    const size = name.match(/(\d{2})\s*[-–]\s*(\d{2})/);
+    const color = RECO_COLORS.find(([pattern]) => pattern.test(name));
+    return { size: size ? `${size[1]}–${size[2]}` : '—', color: color ? t(color[1]) : '—' };
+  };
+  const needle = search.trim().toLowerCase();
+  const rows = (q.data ?? []).filter(row => !needle || `${row.product.name} ${row.product.code || ''} ${row.product.article || ''} ${traits(row.product.name).size} ${traits(row.product.name).color}`.toLowerCase().includes(needle));
+  const units = rows.reduce((sum, row) => sum + row.suggestedQuantity, 0);
+  const fast = rows.filter(row => row.reason === 'fast' || row.reason === 'out_of_stock').length;
   return <>
-    <PageHead title={t('reco.title')} subtitle={t('reco.sub')}/>
-    <div className="toolbar"><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-recommendation-warehouse"/></label><ExportButton kind="recommendations"/></div>
-    <QueryError q={q} id="recommendations"/>
-    {q.isLoading ? <LoadingRows/> : q.data?.length ? <Card className="table-card" title={t('reco.panel')} meta={t('reco.count', { count: fmt(q.data.length) })}><Table testId="table-recommendations" numeric={[2, 3, 4]} columns={[t('common.product'), t('reco.col.current'), t('reco.col.perDay'), t('reco.col.lead'), t('reco.col.suggested'), t('reco.col.reason')]} rows={q.data.map(r => ({ key: `${r.product.id}-${r.warehouseId}`, testId: `row-recommendation-${r.product.id}`, cells: [<ProductTitle product={r.product} href={`/products?search=${encodeURIComponent(r.product.code || r.product.name)}`}/>, <span className="cell-two"><b>{t('reco.onHand', { count: fmt(r.onHand) })}</b><small>{t('reco.inTransit', { count: fmt(r.inTransit) })}</small></span>, fmt(r.dailyAverage, 2), `${fmt(r.leadTimeDays)} ${t('common.days')}`, <b className="accent-text">{fmt(r.suggestedQuantity)} {unit(r.product.unit)}</b>, reason(r.reason)] }))}/></Card> : <EmptyState title={t('reco.empty.title')} body={t('reco.empty.body')} icon={Sparkles}/>}
+    <PageHead title={t('reco.title')}/>
+    <div className="toolbar">
+      <label className="search"><Search size={17}/><TextInput testId="input-recommendation-search" placeholder={t('reco.search')} value={search} onChange={event => setSearch(event.target.value)}/></label>
+      <label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouse} onChange={setWarehouse} testId="select-recommendation-warehouse"/></label>
+      <ExportButton kind="recommendations"/>
+    </div>
+    {q.isPending ? <LoadingRows/> : q.isError ? <QueryError q={q} id="recommendations"/> : (q.data?.length ?? 0) > 0 ? <>
+      <section className="maker-summary">
+        <article><span>{t('reco.kpi.count')}</span><strong>{fmt(rows.length)}</strong><small>{t('reco.kpi.countNote')}</small></article>
+        <article><span>{t('reco.kpi.units')}</span><strong>{fmt(units)}</strong><small>{t('reco.kpi.unitsNote')}</small></article>
+        <article><span>{t('reco.kpi.fast')}</span><strong>{fmt(fast)}</strong><small>{t('reco.kpi.fastNote')}</small></article>
+      </section>
+      {rows.length ? <Card className="table-card" title={t('reco.panel')} meta={t('reco.count', { count: fmt(rows.length) })}><Table testId="table-recommendations" numeric={[3, 4, 5]} columns={[t('common.product'), t('reco.col.size'), t('reco.col.color'), t('reco.col.current'), t('reco.col.perDay'), t('reco.col.suggested'), t('reco.col.reason')]} rows={rows.map(r => { const look = traits(r.product.name); return { key: `${r.product.id}-${r.warehouseId}`, testId: `row-recommendation-${r.product.id}`, cells: [<ProductTitle product={r.product} href={`/products?search=${encodeURIComponent(r.product.code || r.product.name)}`}/>, look.size, look.color, <span className="cell-two"><b>{t('reco.onHand', { count: fmt(r.onHand) })}</b><small>{t('reco.inTransit', { count: fmt(r.inTransit) })}</small></span>, fmt(r.dailyAverage, 2), <b className="move-qty">{fmt(r.suggestedQuantity)} {unit(r.product.unit)}</b>, reason(r.reason)] }; })}/></Card> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
+    </> : <EmptyState title={t('reco.empty.title')} body={t('reco.empty.body')} icon={Sparkles}/>}
   </>;
 }
 
 /* ---------- documents ---------- */
+type DocLine = { id: string; name: string; code: string | null; article: string | null; quantity: number; price: number | null; sum: number | null };
+type DocDetail = { description: string | null; quantity: number; lines: DocLine[] };
 function DocumentsPage({ kind }: { kind: 'receipt'|'transfer' }) {
-  const { t, fmt, date } = useI18n(); const docKind = useDocKind();
+  const { t, fmt, date, money } = useI18n(); const docKind = useDocKind();
   const q = useListDocuments({ kind });
+  const cache = useQueryClient();
+  const sync = useSyncMoysklad();
   const isReceipt = kind === 'receipt';
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('all');
+  const [place, setPlace] = useState('all');
+  const [destination, setDestination] = useState('all');
+  const [selected, setSelected] = useState<string | null>(null);
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (q.data ?? []).filter(doc => {
+      if (status !== 'all' && doc.status !== status) return false;
+      if (isReceipt) {
+        if (place !== 'all' && doc.targetWarehouse !== place) return false;
+      } else {
+        if (place !== 'all' && doc.sourceWarehouse !== place) return false;
+        if (destination !== 'all' && doc.targetWarehouse !== destination) return false;
+      }
+      if (!needle) return true;
+      return [doc.number, doc.sourceWarehouse, doc.targetWarehouse].join(' ').toLowerCase().includes(needle);
+    });
+  }, [q.data, search, status, place, destination, isReceipt]);
+  const places = useMemo(() => [...new Set((q.data ?? []).map(doc => (isReceipt ? doc.targetWarehouse : doc.sourceWarehouse) || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'uz')), [q.data, isReceipt]);
+  const destinations = useMemo(() => [...new Set((q.data ?? []).map(doc => doc.targetWarehouse || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'uz')), [q.data]);
+  const posted = rows.filter(doc => doc.status === 'posted').length;
+  const total = rows.reduce((sum, doc) => sum + (doc.total || 0), 0);
+  const detail = useQuery<DocDetail>({
+    queryKey: ['document', selected],
+    enabled: Boolean(selected),
+    queryFn: async () => {
+      const response = await fetch(`/api/documents/${selected}`);
+      if (!response.ok) throw new Error(t('docs.detail.failed'));
+      return response.json();
+    },
+  });
+  const open = q.data?.find(doc => doc.id === selected);
+  const statusText = (value: string) => value === 'posted' ? t(isReceipt ? 'docs.status.accepted' : 'docs.status.moved') : t('status.draft');
+  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
   return <>
-    <PageHead title={isReceipt ? t('docs.receipts.title') : t('docs.transfers.title')} subtitle={isReceipt ? t('docs.receipts.sub') : t('docs.transfers.sub')} actions={<ExportButton kind={isReceipt ? 'receipts' : 'transfers'} defaultPeriod="today"/>}/>
+    <PageHead title={isReceipt ? t('docs.receipts.title') : t('docs.transfers.title')} subtitle={isReceipt ? t('docs.receipts.sub') : t('docs.transfers.sub')} actions={<><ExportButton kind={isReceipt ? 'receipts' : 'transfers'} defaultPeriod="today"/><Button variant="secondary" testId={`button-${kind}-refresh`} disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
+    {q.data && <div className="product-kpis">
+      <div><span>{t('docs.kpi.count')}</span><b>{fmt(rows.length)}</b></div>
+      <div><span>{statusText('posted')}</span><b>{fmt(posted)}</b></div>
+      <div><span>{t('status.draft')}</span><b>{fmt(rows.length - posted)}</b></div>
+      <div><span>{t('docs.col.sum')}</span><b>{money(total)}</b></div>
+    </div>}
+    <div className="toolbar">
+      <label className="search"><Search size={17}/><TextInput testId={`input-${kind}-search`} type="search" placeholder={t(isReceipt ? 'docs.search.receipt' : 'docs.search.transfer')} value={search} onChange={e => setSearch(e.target.value)}/></label>
+      <label className="select-wrap"><Filter size={15}/><SelectInput value={status} onChange={setStatus} testId={`select-${kind}-status`}><option value="all">{t('docs.filter.all')}</option><option value="posted">{statusText('posted')}</option><option value="draft">{t('status.draft')}</option></SelectInput></label>
+      <label className="select-wrap"><Warehouse size={16}/><SelectInput value={place} onChange={setPlace} testId={`select-${kind}-warehouse`}><option value="all">{t(isReceipt ? 'docs.filter.warehouse' : 'docs.filter.from')}</option>{places.map(name => <option key={name} value={name}>{name}</option>)}</SelectInput></label>
+      {!isReceipt && <label className="select-wrap"><ArrowLeftRight size={16}/><SelectInput value={destination} onChange={setDestination} testId="select-transfer-destination"><option value="all">{t('docs.filter.to')}</option>{destinations.map(name => <option key={name} value={name}>{name}</option>)}</SelectInput></label>}
+    </div>
     <QueryError q={q} id={kind}/>
-    <Card className="table-card" title={t('docs.panel')} meta={q.data ? t('docs.count', { count: fmt(q.data.length) }) : ''}>
-      {q.isLoading ? <LoadingRows/> : q.data?.length ? <Table testId={`table-${kind}-documents`} numeric={[5]} columns={[t('common.number'), t('common.date'), t('common.status'), t('docs.col.source'), t('docs.col.target'), t('docs.col.items')]} rows={q.data.map(d => ({ key: d.id, testId: `row-document-${d.id}`, cells: [<span className="cell-two"><b>{d.number}</b><small>{docKind(d.kind)}</small></span>, date(d.date), <Badge value={d.status}/>, d.sourceWarehouse || '—', d.targetWarehouse || '—', t('docs.items', { count: fmt(d.itemCount) })] }))}/> : <EmptyState title={t('docs.empty.title')} body={t('docs.empty.body')} icon={isReceipt ? ArrowDownLeft : ArrowLeftRight}/>}
+    <Card className="table-card" title={t('docs.panel')} meta={q.data ? t('docs.count', { count: fmt(rows.length) }) : ''}>
+      {q.isLoading ? <LoadingRows/> : rows.length ? <Table testId={`table-${kind}-documents`} numeric={[4, 5]} columns={[t('common.number'), t('common.date'), t('common.status'), isReceipt ? t('docs.col.supplier') : t('docs.col.from'), isReceipt ? t('docs.col.warehouse') : t('docs.col.to'), t('docs.col.items'), t('docs.col.sum'), '']} rows={rows.map(d => ({ key: d.id, testId: `row-document-${d.id}`, onClick: () => setSelected(d.id), cells: [<span className="cell-two"><b>{d.number}</b><small>{docKind(d.kind)}</small></span>, date(d.date), <span className={`badge badge-${d.status}`}>{statusText(d.status)}</span>, d.sourceWarehouse || '—', d.targetWarehouse || '—', t('docs.items', { count: fmt(d.itemCount) }), money(d.total), <ChevronRight size={16} aria-hidden/>] }))}/> : <EmptyState title={search || status !== 'all' || place !== 'all' || destination !== 'all' ? t('docs.empty.search') : t('docs.empty.title')} body={search || status !== 'all' || place !== 'all' || destination !== 'all' ? t('docs.empty.searchBody') : t('docs.empty.body')} icon={isReceipt ? ArrowDownLeft : ArrowLeftRight}/>}
     </Card>
+    {open && createPortal(<div className="backdrop" onClick={() => setSelected(null)}><div className="modal product-modal" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="doc-detail-title"><div className="modal-top"><div><p className="eyebrow">{docKind(open.kind)} · {statusText(open.status)}</p><h2 id="doc-detail-title">{t('docs.detail.number', { number: open.number })}</h2></div><button className="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')} data-testid="button-close-document"><X size={18}/></button></div>
+      <div className="detail-grid">
+        <div><small>{t('common.date')}</small><b>{date(open.date)}</b></div>
+        <div><small>{isReceipt ? t('docs.col.supplier') : t('docs.col.from')}</small><b>{open.sourceWarehouse || '—'}</b></div>
+        <div><small>{isReceipt ? t('docs.col.warehouse') : t('docs.col.to')}</small><b>{open.targetWarehouse || '—'}</b></div>
+        <div><small>{t('docs.col.sum')}</small><b>{money(open.total)}</b></div>
+        <div><small>{t('docs.detail.quantity')}</small><b>{detail.data ? fmt(detail.data.quantity) : '—'}</b></div>
+        <div><small>{t('docs.col.items')}</small><b>{fmt(open.itemCount)}</b></div>
+      </div>
+      {!isReceipt && <p className="muted doc-note">{open.status === 'draft' ? t('docs.transfer.draft') : t('docs.transfer.posted')}</p>}
+      {detail.data?.description && <p className="muted doc-note">{detail.data.description}</p>}
+      {detail.isLoading ? <LoadingRows count={3}/> : detail.isError ? <Notice kind="error" title={t('docs.detail.failed')} testId="status-document-lines"/> : detail.data?.lines.length ? <div className="table-wrap"><table className="table mini-table" data-testid="table-document-lines"><thead><tr><th>{t('common.product')}</th><th>{t('col.code')}</th><th className="num">{t('docs.line.qty')}</th><th className="num">{t('docs.line.price')}</th><th className="num">{t('docs.line.sum')}</th></tr></thead><tbody>{detail.data.lines.map(line => <tr key={line.id}><td><span className="cell-two"><b>{line.name}</b>{line.article && <small>{line.article}</small>}</span></td><td>{line.code || '—'}</td><td className="num">{fmt(line.quantity)}</td><td className="num">{money(line.price)}</td><td className="num">{money(line.sum)}</td></tr>)}</tbody></table></div> : <EmptyState title={t('docs.detail.empty')} body={t('docs.detail.emptyBody')} icon={Package}/>}
+    </div></div>, document.body)}
   </>;
 }
 
 /* ---------- inventory ---------- */
+type InventoryLine = { id: string; name: string; code: string | null; article: string | null; quantity: number; calculatedQuantity: number | null; correctionAmount: number | null; correctionValue: number | null };
+type InventoryDetail = { description: string | null; lineTotal: number; diffCount: number; shortageQty: number; surplusQty: number; truncated: boolean; lines: InventoryLine[] };
 function InventoryPage() {
-  const { t, fmt, date } = useI18n();
+  const { t, fmt, date, money } = useI18n();
   const q = useListDocuments({ kind: 'inventory' });
+  const cache = useQueryClient();
+  const sync = useSyncMoysklad();
+  const [search, setSearch] = useState('');
+  const [place, setPlace] = useState('all');
+  const [selected, setSelected] = useState<string | null>(null);
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (q.data ?? []).filter(doc => {
+      if (place !== 'all' && doc.sourceWarehouse !== place) return false;
+      if (!needle) return true;
+      return [doc.number, doc.sourceWarehouse].join(' ').toLowerCase().includes(needle);
+    });
+  }, [q.data, search, place]);
+  const places = useMemo(() => [...new Set((q.data ?? []).map(doc => doc.sourceWarehouse || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'uz')), [q.data]);
+  const posted = rows.filter(doc => doc.status === 'posted').length;
+  const detail = useQuery<InventoryDetail>({
+    queryKey: ['document', selected],
+    enabled: Boolean(selected),
+    queryFn: async () => {
+      const response = await fetch(`/api/documents/${selected}`);
+      if (!response.ok) throw new Error(t('docs.detail.failed'));
+      return response.json();
+    },
+  });
+  const open = q.data?.find(doc => doc.id === selected);
+  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
   return <>
-    <PageHead title={t('inv.title')} subtitle={t('inv.sub')} actions={<ExportButton kind="inventory" defaultPeriod="thisMonth"/>}/>
+    <PageHead title={t('inv.title')} subtitle={t('inv.sub')} actions={<><ExportButton kind="inventory" defaultPeriod="thisMonth"/><Button variant="secondary" testId="button-inventory-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
+    {q.data && <div className="product-kpis">
+      <div><span>{t('docs.kpi.count')}</span><b>{fmt(rows.length)}</b></div>
+      <div><span>{t('status.posted')}</span><b>{fmt(posted)}</b></div>
+      <div><span>{t('status.draft')}</span><b>{fmt(rows.length - posted)}</b></div>
+      <div><span>{t('inv.col.rows')}</span><b>{fmt(rows.reduce((sum, doc) => sum + doc.itemCount, 0))}</b></div>
+    </div>}
+    <div className="toolbar">
+      <label className="search"><Search size={17}/><TextInput testId="input-inventory-search" type="search" placeholder={t('inv.search')} value={search} onChange={e => setSearch(e.target.value)}/></label>
+      <label className="select-wrap"><Warehouse size={16}/><SelectInput value={place} onChange={setPlace} testId="select-inventory-warehouse"><option value="all">{t('docs.filter.warehouse')}</option>{places.map(name => <option key={name} value={name}>{name}</option>)}</SelectInput></label>
+    </div>
     <QueryError q={q} id="inventory"/>
-    <Card className="table-card" title={t('inv.sessions')} meta={q.data ? t('inv.sessions.count', { count: fmt(q.data.length) }) : ''}>{q.isLoading ? <LoadingRows/> : q.data?.length ? <Table testId="table-inventory-sessions" numeric={[3]} columns={[t('common.number'), t('common.date'), t('common.warehouse'), t('inv.col.rows'), t('common.status')]} rows={q.data.map(d => ({ key: d.id, testId: `row-inventory-${d.id}`, cells: [<b>{d.number}</b>, date(d.date), d.sourceWarehouse || '—', fmt(d.itemCount), <Badge value={d.status}/>] }))}/> : <EmptyState title={t('inv.empty.title')} body={t('inv.empty.body')} icon={ClipboardCheck}/>}</Card>
+    <Card className="table-card" title={t('inv.sessions')} meta={q.data ? t('inv.sessions.count', { count: fmt(rows.length) }) : ''}>
+      {q.isLoading ? <LoadingRows/> : rows.length ? <Table testId="table-inventory-sessions" numeric={[3]} columns={[t('common.number'), t('common.date'), t('common.warehouse'), t('inv.col.rows'), t('common.status'), '']} rows={rows.map(d => ({ key: d.id, testId: `row-inventory-${d.id}`, onClick: () => setSelected(d.id), cells: [<b>{d.number}</b>, date(d.date), d.sourceWarehouse || '—', fmt(d.itemCount), <span className={`badge badge-${d.status}`}>{d.status === 'posted' ? t('status.posted') : t('status.draft')}</span>, <ChevronRight size={16} aria-hidden/>] }))}/> : <EmptyState title={search || place !== 'all' ? t('docs.empty.search') : t('inv.empty.title')} body={search || place !== 'all' ? t('docs.empty.searchBody') : t('inv.empty.body')} icon={ClipboardCheck}/>}
+    </Card>
+    {open && createPortal(<div className="backdrop" onClick={() => setSelected(null)}><div className="modal product-modal" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="inv-detail-title"><div className="modal-top"><div><p className="eyebrow">{open.sourceWarehouse || t('common.warehouse')} · {open.status === 'posted' ? t('status.posted') : t('status.draft')}</p><h2 id="inv-detail-title">{t('docs.detail.number', { number: open.number })}</h2></div><button className="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')} data-testid="button-close-inventory"><X size={18}/></button></div>
+      <div className="detail-grid">
+        <div><small>{t('common.date')}</small><b>{date(open.date)}</b></div>
+        <div><small>{t('common.warehouse')}</small><b>{open.sourceWarehouse || '—'}</b></div>
+        <div><small>{t('inv.col.rows')}</small><b>{detail.data ? fmt(detail.data.lineTotal) : fmt(open.itemCount)}</b></div>
+        <div><small>{t('inv.detail.diffs')}</small><b>{detail.data ? fmt(detail.data.diffCount) : '—'}</b></div>
+        <div><small>{t('inv.detail.shortage')}</small><b className="qty-neg">{detail.data ? fmt(detail.data.shortageQty) : '—'}</b></div>
+        <div><small>{t('inv.detail.surplus')}</small><b>{detail.data ? fmt(detail.data.surplusQty) : '—'}</b></div>
+      </div>
+      <p className="muted doc-note">{open.status === 'draft' ? t('inv.note.draft') : t('inv.note.posted')}</p>
+      {detail.data?.description && <p className="muted doc-note">{detail.data.description}</p>}
+      {detail.isLoading ? <LoadingRows count={4}/> : detail.isError ? <Notice kind="error" title={t('docs.detail.failed')} testId="status-inventory-lines"/> : detail.data?.lines.length ? <>{detail.data.truncated && <p className="muted doc-note">{t('inv.detail.truncated')}</p>}<div className="table-wrap"><table className="table mini-table" data-testid="table-inventory-lines"><thead><tr><th>{t('common.product')}</th><th>{t('col.code')}</th><th className="num">{t('inv.col.book')}</th><th className="num">{t('inv.col.counted')}</th><th className="num">{t('inv.col.diff')}</th><th className="num">{t('docs.col.sum')}</th></tr></thead><tbody>{detail.data.lines.map(line => <tr key={line.id}><td><span className="cell-two"><b>{line.name}</b>{line.article && <small>{line.article}</small>}</span></td><td>{line.code || '—'}</td><td className="num">{fmt(line.calculatedQuantity)}</td><td className="num">{fmt(line.quantity)}</td><td className={`num ${(line.correctionAmount ?? 0) < 0 ? 'qty-neg' : ''}`}>{fmt(line.correctionAmount)}</td><td className="num">{money(line.correctionValue)}</td></tr>)}</tbody></table></div></> : <EmptyState title={t('inv.detail.none')} body={t('inv.detail.noneBody')} icon={ClipboardCheck}/>}
+    </div></div>, document.body)}
   </>;
 }
 
@@ -564,31 +871,69 @@ function TasksPage() {
 /* ---------- reports ---------- */
 function ReportsPage() {
   const { t } = useI18n();
-  return <><PageHead title={t('reports.title')} subtitle={t('reports.sub')}/><ReportsHub/></>;
+  return <><PageHead title={t('reports.title')}/><ReportsHub/></>;
 }
 
 /* ---------- settings ---------- */
 function SettingsPage() {
   const { t, fmt, dateTime, lang, setLang } = useI18n(); const roleLabel = useRole(); const statusLabel = useStatusLabel();
   const status = useGetMoyskladStatus(); const users = useListUsers(); const me = useGetCurrentUser(); const sync = useSyncMoysklad(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const connection = useQuery<{ source: 'saved' | 'environment' | 'none'; companyName: string | null; masked: string | null }>({ queryKey: ['moysklad-connection'], queryFn: async () => { const response = await fetch('/api/settings/connection'); if (!response.ok) throw new Error(t('common.loadFailedHint')); return response.json(); } });
   const admin = me.data?.role === 'super_admin' || me.data?.role === 'manager';
   const connected = !!status.data?.configured && !!status.data?.connected;
+  const company = connection.data?.companyName || status.data?.companyName || '';
+  const refreshAll = () => { void cache.invalidateQueries(); };
+  const connect = async () => {
+    setBusy(true); setNote('');
+    try {
+      const response = await fetch('/api/settings/connection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: token.trim() }) });
+      if (!response.ok) throw new Error(t('settings.connectFailed'));
+      setToken('');
+      setNote(t('settings.accountReady'));
+      refreshAll();
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : t('settings.connectFailed'));
+    } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    setBusy(true); setNote('');
+    try {
+      const response = await fetch('/api/settings/connection', { method: 'DELETE' });
+      if (!response.ok) throw new Error(t('settings.connectFailed'));
+      refreshAll();
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : t('settings.connectFailed'));
+    } finally { setBusy(false); }
+  };
   return <>
-    <PageHead title={t('settings.title')} subtitle={t('settings.sub')}/>
+    <PageHead title={t('settings.title')}/>
     <QueryError q={status} id="integration-settings"/>
-    <div className="two-col">
-      <Card title={t('settings.integration')} meta={t('settings.integration.meta')}>
-        <div className="integration"><span className={`seal ${connected ? 'seal-on' : ''}`}><Boxes size={24}/></span><div><Badge value={status.isLoading ? 'loading' : status.data?.configured ? (connected ? 'healthy' : 'sync_error') : 'out'}/><h3>{status.isLoading ? t('settings.integration.checking') : status.data?.configured ? (status.data.companyName || t('settings.integration.account')) : t('settings.integration.unconfigured')}</h3><p className="muted">{status.data?.error || (connected ? t('settings.integration.ok') : t('settings.integration.hint'))}</p></div></div>
-        <div className="facts"><div><span>{t('settings.lastSync')}</span><b>{dateTime(status.data?.lastSync)}</b></div><div><span>{t('settings.state')}</span><b>{status.data?.configured ? (connected ? t('settings.state.connected') : t('settings.state.disconnected')) : t('settings.state.unconfigured')}</b></div><div><span>{t('settings.autoRefresh')}</span><b>{t('settings.autoRefresh.value')}</b></div></div>
-        <div className="form-actions"><Button testId="button-sync-settings" disabled={!connected || sync.isPending || !admin} onClick={() => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } })}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('settings.syncing') : t('settings.sync')}</Button><small className="muted">{!admin ? t('settings.sync.needRole') : t('settings.sync.hint')}</small></div>
-        {sync.error && <Notice kind="error" title={t('settings.sync.failed')} testId="status-settings-sync-error">{sync.error instanceof Error ? sync.error.message : t('common.tryAgain')}</Notice>}
-        {sync.data && <Notice kind={sync.data.status === 'failed' ? 'error' : 'success'} title={statusLabel(sync.data.status)} testId="status-settings-sync-result">{sync.data.error || t('settings.sync.result', { products: fmt(sync.data.productCount), warehouses: fmt(sync.data.warehouseCount) })}</Notice>}
-      </Card>
-      <div className="stack">
-        <Card title={t('settings.language')}><p className="muted">{t('settings.language.body')}</p><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? 'O‘zbek tili' : 'Русский язык'}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
-        <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><p className="muted">{t('settings.team.helper')}</p><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>
-        <div className="notice notice-info"><ShieldCheck size={18}/><div><b>{t('settings.perm.title')}</b><p>{t('settings.perm.body')}</p></div></div>
+    <section className="card settings-account">
+      <div className="report-side-head"><span className="option-icon"><Boxes size={20}/></span><div><p className="eyebrow">{t('settings.integration')}</p><h2>{status.isLoading ? t('settings.integration.checking') : company || t('settings.integration.unconfigured')}</h2></div><Badge value={status.isLoading ? 'loading' : connected ? 'healthy' : 'out'}/></div>
+      <div className="settings-connect">
+        <label className="search settings-token"><KeyRound size={16}/><TextInput testId="input-moysklad-token" type="password" autoComplete="off" placeholder={t('settings.tokenPlaceholder')} value={token} onChange={event => setToken(event.target.value)} disabled={!admin || busy}/></label>
+        <Button testId="button-connect-moysklad" disabled={!admin || busy || token.trim().length < 20} onClick={() => { void connect(); }}>{busy ? t('settings.connecting') : t('settings.connect')}</Button>
       </div>
+      <div className="facts">
+        <div><span>{t('settings.state')}</span><b>{connected ? t('settings.state.connected') : t('settings.state.unconfigured')}</b></div>
+        <div><span>{t('settings.masked')}</span><b>{connection.data?.masked || '—'}</b></div>
+        <div><span>{t('settings.lastSync')}</span><b>{dateTime(status.data?.lastSync)}</b></div>
+        <div><span>{t('settings.autoRefresh')}</span><b>{t('settings.autoRefresh.value')}</b></div>
+      </div>
+      <div className="form-actions">
+        <Button testId="button-sync-settings" disabled={!connected || sync.isPending || !admin} onClick={() => sync.mutate(undefined, { onSuccess: refreshAll })}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('settings.syncing') : t('settings.sync')}</Button>
+        {connection.data?.source === 'saved' && <Button variant="secondary" testId="button-disconnect-moysklad" disabled={!admin || busy} onClick={() => { void disconnect(); }}>{t('settings.disconnect')}</Button>}
+      </div>
+      {note && <Notice kind={note === t('settings.accountReady') ? 'success' : 'error'} title={note} testId="status-settings-connection"/>}
+      {sync.error && <Notice kind="error" title={t('settings.sync.failed')} testId="status-settings-sync-error">{sync.error instanceof Error ? sync.error.message : t('common.tryAgain')}</Notice>}
+      {sync.data && <Notice kind={sync.data.status === 'failed' ? 'error' : 'success'} title={statusLabel(sync.data.status)} testId="status-settings-sync-result">{sync.data.error || t('settings.sync.result', { products: fmt(sync.data.productCount), warehouses: fmt(sync.data.warehouseCount) })}</Notice>}
+    </section>
+    <div className="two-col settings-grid">
+      <Card title={t('settings.language')}><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? 'O‘zbek tili' : 'Русский язык'}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
+      <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>
     </div>
   </>;
 }
@@ -596,11 +941,14 @@ function SettingsPage() {
 /* ---------- audit ---------- */
 function AuditPage() {
   const { t, fmt, dateTime } = useI18n();
+  const [search, setSearch] = useState('');
   const q = useListAuditEvents();
+  const actionLabel = (action: string) => { const key = `audit.action.${action}` as TKey; const value = t(key); return value === key ? action : value; };
+  const needle = search.trim().toLowerCase();
+  const rows = (q.data ?? []).filter(event => !needle || `${actionLabel(event.action)} ${event.actor} ${event.entityType} ${event.details || ''}`.toLowerCase().includes(needle));
   return <>
-    <PageHead title={t('audit.title')} subtitle={t('audit.sub')} actions={<ExportButton kind="audit" defaultPeriod="days7"/>}/>
-    <QueryError q={q} id="audit"/>
-    <Card className="table-card" title={t('audit.panel')} meta={q.data ? t('audit.count', { count: fmt(q.data.length) }) : ''}>{q.isLoading ? <LoadingRows/> : q.data?.length ? <Table testId="table-audit-events" columns={[t('audit.col.time'), t('common.action'), t('audit.col.object'), t('audit.col.actor'), t('audit.col.details')]} rows={q.data.map(e => ({ key: e.id, testId: `row-audit-${e.id}`, cells: [dateTime(e.createdAt), <code className="code">{e.action}</code>, <span className="cell-two"><b>{e.entityType}</b><small>{e.entityId || t('audit.noId')}</small></span>, e.actor, e.details || '—'] }))}/> : <EmptyState title={t('audit.empty.title')} body={t('audit.empty.body')} icon={Activity}/>}</Card>
+    <PageHead title={t('audit.title')} actions={<><label className="search audit-search"><Search size={17}/><TextInput testId="input-audit-search" placeholder={t('audit.search')} value={search} onChange={event => setSearch(event.target.value)}/></label><ExportButton kind="audit" defaultPeriod="days7"/></>}/>
+    {q.isPending ? <LoadingRows/> : q.isError ? <QueryError q={q} id="audit"/> : rows.length ? <Card className="table-card" title={t('audit.panel')} meta={t('audit.count', { count: fmt(rows.length) })}><Table testId="table-audit-events" columns={[t('audit.col.time'), t('common.action'), t('audit.col.object'), t('audit.col.actor'), t('audit.col.details')]} rows={rows.map(e => ({ key: e.id, testId: `row-audit-${e.id}`, cells: [dateTime(e.createdAt), actionLabel(e.action), <span className="cell-two"><b>{e.entityType}</b><small>{e.entityId || t('audit.noId')}</small></span>, e.actor, e.details || '—'] }))}/></Card> : <EmptyState title={search ? t('products.empty.search') : t('audit.empty.title')} body={search ? t('products.empty.searchBody') : t('audit.empty.body')} icon={search ? Search : Activity}/>}
   </>;
 }
 
@@ -639,6 +987,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/analytics', titleKey: 'nav.analytics', element: <AnalyticsPage/> },
   { path: '/non-moving', titleKey: 'nav.nonMoving', element: <NonMovingPage/> },
   { path: '/factories', titleKey: 'nav.factories', element: <FactoriesPage/> },
+  { path: '/branches', titleKey: 'nav.branches', element: <BranchesPage/> },
   { path: '/partners', titleKey: 'nav.partners', element: <PartnersPage/> },
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },

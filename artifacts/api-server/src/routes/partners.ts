@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { loadCatalog } from "../lib/catalog";
+import { recordAudit } from "../lib/audit";
 import {
   accountFromToken,
   createAccount,
@@ -9,8 +10,10 @@ import {
   listShipments,
   loginFactory,
   deleteAccount,
+  deleteShipment,
   resetPassword,
   setShipmentStatus,
+  updateShipment,
   updateAccount,
   suggestPassword,
 } from "../lib/partners";
@@ -105,7 +108,9 @@ router.post("/partner-factories", (req, res) => {
       res.status(400).json({ error: "password_short" });
       return;
     }
-    res.status(201).json(createAccount({ name, code, catalogName, login, password }));
+    const created = createAccount({ name, code, catalogName, login, password });
+    void recordAudit({ action: "partner.created", entityType: "partner", entityId: created.account?.id, details: name });
+    res.status(201).json(created);
   } catch (error) {
     fail(res, error);
   }
@@ -117,7 +122,9 @@ router.patch("/partner-factories/:id", (req, res) => {
     const code = String(req.body?.code ?? "").trim();
     const login = String(req.body?.login ?? "").trim();
     const password = String(req.body?.password ?? "").trim();
-    res.json(updateAccount(String(req.params.id), { name, code, login, password }));
+    const updated = updateAccount(String(req.params.id), { name, code, login, password });
+    void recordAudit({ action: "partner.updated", entityType: "partner", entityId: String(req.params.id), details: name || String(req.params.id) });
+    res.json(updated);
   } catch (error) {
     fail(res, error);
   }
@@ -125,7 +132,9 @@ router.patch("/partner-factories/:id", (req, res) => {
 
 router.delete("/partner-factories/:id", (req, res) => {
   try {
-    res.json(deleteAccount(String(req.params.id)));
+    const removed = deleteAccount(String(req.params.id));
+    void recordAudit({ action: "partner.deleted", entityType: "partner", entityId: String(req.params.id) });
+    res.json(removed);
   } catch (error) {
     fail(res, error);
   }
@@ -156,7 +165,47 @@ router.get("/partner-factories/:id", (req, res) => {
 
 router.post("/partner-factories/shipments/:id/accept", (req, res) => {
   try {
-    res.json(setShipmentStatus(String(req.params.id), "accepted"));
+    const accepted = setShipmentStatus(String(req.params.id), "accepted");
+    void recordAudit({ action: "shipment.accepted", entityType: "shipment", entityId: String(req.params.id) });
+    res.json(accepted);
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+router.post("/partner-factories/shipments/:id/decline", (req, res) => {
+  try {
+    const declined = setShipmentStatus(String(req.params.id), "declined");
+    void recordAudit({ action: "shipment.declined", entityType: "shipment", entityId: String(req.params.id) });
+    res.json(declined);
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+router.post("/partner-factories/shipments/:id/reopen", (req, res) => {
+  try {
+    res.json(setShipmentStatus(String(req.params.id), "sent"));
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+router.patch("/partner-factories/shipments/:id", (req, res) => {
+  try {
+    res.json(updateShipment(String(req.params.id), {
+      date: req.body?.date,
+      note: req.body?.note,
+      lines: Array.isArray(req.body?.lines) ? req.body.lines : [],
+    }));
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+router.delete("/partner-factories/shipments/:id", (req, res) => {
+  try {
+    res.json(deleteShipment(String(req.params.id)));
   } catch (error) {
     fail(res, error);
   }

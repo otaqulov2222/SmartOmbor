@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { idFromHref, money, moysklad, moyskladAll, MoySkladError } from "./moysklad";
 import { logger } from "./logger";
 
@@ -53,6 +55,7 @@ export interface CatalogDocument {
   sourceWarehouse: string | null;
   targetWarehouse: string | null;
   itemCount: number;
+  total: number | null;
   moyskladId: string | null;
 }
 
@@ -69,6 +72,7 @@ export interface Catalog {
   pendingTransfers: number;
   error: string | null;
   imageHrefs: Map<string, string>;
+  salesCoverage: { days7: boolean; days30: boolean; days90: boolean };
 }
 
 interface MetaRef {
@@ -87,7 +91,7 @@ interface ProductRow {
   salePrices?: Array<{ value?: number }>;
   buyPrice?: { value?: number };
   uom?: { name?: string };
-  supplier?: { name?: string };
+  supplier?: { name?: string; meta?: { href?: string } };
   meta?: { href?: string };
 }
 
@@ -136,6 +140,8 @@ interface DocRow {
   moment?: string;
   applicable?: boolean;
   sum?: number;
+  agent?: MetaRef;
+  description?: string;
   store?: MetaRef;
   sourceStore?: MetaRef;
   targetStore?: MetaRef;
@@ -144,8 +150,36 @@ interface DocRow {
 }
 
 const LOW_STOCK = 3;
+const CACHE_FILE = path.resolve(process.cwd(), "artifacts/api-server/data/catalog-cache.json");
 let cache: Catalog | null = null;
 let pending: Promise<Catalog> | null = null;
+let epoch = 0;
+
+function remember(next: Catalog) {
+  cache = next;
+  try {
+    mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+    const tmp = `${CACHE_FILE}.tmp`;
+    const body = {
+      ...next,
+      imageHrefs: [...next.imageHrefs.entries()],
+    };
+    writeFileSync(tmp, JSON.stringify(body));
+    renameSync(tmp, CACHE_FILE);
+  } catch (error) {
+    logger.warn({ err: error }, "Catalog cache was not saved");
+  }
+}
+
+function recall(): Catalog | null {
+  try {
+    const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Catalog & { imageHrefs: Array<[string, string]> };
+    if (!raw?.loadedAt || !Array.isArray(raw.products)) return null;
+    return { ...raw, imageHrefs: new Map(raw.imageHrefs ?? []) };
+  } catch {
+    return null;
+  }
+}
 
 function stockStatus(stock: number, daysCover: number | null, sales30 = 0, salesKnown = false): CatalogProduct["stockStatus"] {
   if (stock <= 0) return "out";
@@ -215,10 +249,13 @@ async function build(): Promise<Catalog> {
   const warehouseById = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse]));
 
   const products = new Map<string, CatalogProduct>();
+  const supplierIds = new Map<string, string>();
   for (const row of productPage.rows) {
     if (row.archived) continue;
     const id = row.id || idFromHref(row.meta?.href);
     if (!id) continue;
+    const supplierId = idFromHref(row.supplier?.meta?.href);
+    if (supplierId) supplierIds.set(id, supplierId);
     const sale = row.salePrices?.find((price) => price.value != null)?.value;
     products.set(
       id,
@@ -235,6 +272,14 @@ async function build(): Promise<Catalog> {
         salePrice: money(sale),
       }),
     );
+  }
+  if (supplierIds.size > 0) {
+    const directory = await supplierDirectory();
+    for (const [productId, supplierId] of supplierIds) {
+      const name = directory.get(supplierId);
+      const product = products.get(productId);
+      if (product && name) product.factory = name;
+    }
   }
 
   const imageHrefs = new Map<string, string>();
@@ -266,29 +311,31 @@ async function build(): Promise<Catalog> {
     });
   }
 
-  const salesTo = new Date();
-  const salesFrom = new Date();
-  salesFrom.setDate(salesTo.getDate() - 29);
-  const momentFrom = `${salesFrom.toISOString().slice(0, 10)} 00:00:00`;
-  const momentTo = `${salesTo.toISOString().slice(0, 10)} 23:59:59`;
-  try {
-    const profit = await moyskladAll<{ assortment?: { meta?: { href?: string } }; sellQuantity?: number }>(
-      `/report/profit/byproduct?momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
-    );
-    const sold = new Set<string>();
-    for (const row of profit.rows) {
-      const id = idFromHref(row.assortment?.meta?.href);
-      const product = products.get(id);
-      if (!product) continue;
-      product.sales30 = row.sellQuantity ?? 0;
-      sold.add(id);
-    }
-    for (const product of products.values()) {
-      if (!sold.has(product.id)) product.sales30 = 0;
+  const salesCoverage = { days7: false, days30: false, days90: false };
+  const sales7 = await salesQuantities(7).catch((error: unknown) => {
+    logger.warn({ err: error }, "MoySklad 7-day sales skipped");
+    return null;
+  });
+  const sales30 = await salesQuantities(30).catch((error: unknown) => {
+    logger.warn({ err: error }, "MoySklad 30-day sales skipped");
+    return null;
+  });
+  const sales90 = await salesQuantities(90).catch((error: unknown) => {
+    logger.warn({ err: error }, "MoySklad 90-day sales skipped");
+    return null;
+  });
+  if (sales7) salesCoverage.days7 = true;
+  if (sales30) salesCoverage.days30 = true;
+  if (sales90) salesCoverage.days90 = true;
+  for (const product of products.values()) {
+    if (sales7) product.sales7 = sales7.get(product.id) ?? 0;
+    if (sales30) product.sales30 = sales30.get(product.id) ?? 0;
+    if (sales90) product.sales90 = sales90.get(product.id) ?? 0;
+    if (sales30) {
+      const daily = product.sales30 / 30;
+      product.daysCover = daily > 0 ? Math.round(product.stock / daily) : null;
       product.stockStatus = stockStatus(product.stock, product.daysCover, product.sales30, true);
     }
-  } catch (error) {
-    logger.warn({ err: error }, "MoySklad profit report skipped");
   }
 
   const byStore = await moyskladAll<ByStoreRow>("/report/stock/bystore");
@@ -325,7 +372,7 @@ async function build(): Promise<Catalog> {
     moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/demand?limit=100&filter=${filter}`),
     moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/supply?limit=100&filter=${filter}`),
     moysklad<{ meta: { size: number } }>("/entity/move?limit=1&filter=applicable=false"),
-    moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc"),
+    moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc&expand=agent"),
     moysklad<{ rows: DocRow[] }>("/entity/move?limit=100&order=moment,desc"),
     moysklad<{ rows: DocRow[] }>("/entity/inventory?limit=100&order=moment,desc"),
   ]);
@@ -349,6 +396,7 @@ async function build(): Promise<Catalog> {
     pendingTransfers: moves.meta.size,
     error: null,
     imageHrefs,
+    salesCoverage,
   };
 
   logger.info(
@@ -374,28 +422,121 @@ function toDocument(
     number: row.name || "—",
     date: row.moment ? row.moment.replace(" ", "T") : new Date().toISOString(),
     status: row.applicable === false ? "draft" : "posted",
-    sourceWarehouse: storeName(warehouses, kind === "transfer" ? row.sourceStore : row.store),
-    targetWarehouse: kind === "transfer" ? storeName(warehouses, row.targetStore) : null,
+    sourceWarehouse: kind === "receipt" ? row.agent?.name || null : storeName(warehouses, kind === "transfer" ? row.sourceStore : row.store),
+    targetWarehouse: kind === "receipt" ? storeName(warehouses, row.store) : kind === "transfer" ? storeName(warehouses, row.targetStore) : null,
     itemCount: row.positions?.meta?.size ?? 0,
+    total: money(row.sum),
     moyskladId: row.id || idFromHref(row.meta?.href) || null,
   };
 }
 
-export async function loadCatalog(force = false): Promise<Catalog> {
+async function salesQuantities(days: number): Promise<Map<string, number>> {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(to.getDate() - (days - 1));
+  const momentFrom = `${from.toISOString().slice(0, 10)} 00:00:00`;
+  const momentTo = `${to.toISOString().slice(0, 10)} 23:59:59`;
+  const profit = await moyskladAll<{ assortment?: { meta?: { href?: string } }; sellQuantity?: number }>(
+    `/report/profit/byproduct?momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
+  );
+  const quantities = new Map<string, number>();
+  for (const row of profit.rows) {
+    const id = idFromHref(row.assortment?.meta?.href);
+    if (id) quantities.set(id, row.sellQuantity ?? 0);
+  }
+  return quantities;
+}
+
+export function idleDays(product: CatalogProduct, coverage: Catalog["salesCoverage"]): number | null {
+  if (product.stock <= 0) return null;
+  if (!coverage.days30) return null;
+  if (coverage.days7 && product.sales7 > 0) return 0;
+  if (product.sales30 > 0) return coverage.days7 ? 7 : 0;
+  if (coverage.days90) return product.sales90 > 0 ? 30 : 90;
+  return 30;
+}
+
+function startBuild(): Promise<Catalog> {
   if (pending) return pending;
-  if (!force && cache) return cache;
+  const stamp = epoch;
   pending = build()
     .then((next) => {
-      cache = next;
-      pending = null;
+      if (stamp === epoch) remember(next);
+      if (stamp === epoch) pending = null;
       return next;
     })
     .catch((error: unknown) => {
-      pending = null;
-      if (cache && !force) return cache;
+      if (stamp === epoch) pending = null;
       throw error instanceof Error ? error : new MoySkladError("MoySklad sync failed", 502);
     });
   return pending;
+}
+
+export function resetCatalog() {
+  epoch += 1;
+  cache = null;
+  pending = null;
+  try { unlinkSync(CACHE_FILE); } catch { /* no snapshot yet */ }
+}
+
+export async function loadCatalog(force = false): Promise<Catalog> {
+  if (!cache) cache = recall();
+  if (!force && cache) return cache;
+  return pending ?? startBuild();
+}
+
+let supplierFill: Promise<Catalog> | null = null;
+
+export function ensureSuppliers(catalog: Catalog): Promise<Catalog> {
+  if (supplierFill) return supplierFill;
+  supplierFill = (async () => {
+    const named = catalog.products.filter((product) => product.factory?.trim()).length;
+    if (catalog.products.length === 0 || named / catalog.products.length >= 0.2) return catalog;
+    return fillSuppliers(catalog);
+  })().finally(() => {
+    supplierFill = null;
+  });
+  return supplierFill;
+}
+
+async function supplierDirectory(): Promise<Map<string, string>> {
+  const page = await moyskladAll<{ id?: string; name?: string; meta?: { href?: string } }>("/entity/counterparty");
+  const names = new Map<string, string>();
+  for (const row of page.rows) {
+    const id = row.id || idFromHref(row.meta?.href);
+    const name = row.name?.trim();
+    if (id && name) names.set(id, name);
+  }
+  return names;
+}
+
+async function fillSuppliers(catalog: Catalog): Promise<Catalog> {
+  const [directory, page] = await Promise.all([
+    supplierDirectory(),
+    moyskladAll<{ id?: string; meta?: { href?: string }; supplier?: { meta?: { href?: string } } }>("/entity/product"),
+  ]);
+  const names = new Map<string, string>();
+  for (const row of page.rows) {
+    const id = row.id || idFromHref(row.meta?.href);
+    const name = directory.get(idFromHref(row.supplier?.meta?.href));
+    if (id && name) names.set(id, name);
+  }
+  if (names.size === 0) return catalog;
+  for (const product of catalog.products) {
+    const name = names.get(product.id);
+    if (name) product.factory = name;
+  }
+  for (const row of catalog.stockRows) {
+    const name = names.get(row.product.id);
+    if (name) row.product.factory = name;
+  }
+  remember(catalog);
+  return catalog;
+}
+
+export function peekCatalog(): Catalog | null {
+  if (!cache) cache = recall();
+  return cache;
 }
 
 export function catalogLoadedAt(): string | null {
@@ -514,11 +655,26 @@ export function findProductsByLabel(catalog: Catalog, raw: string): { products: 
   return { products: best, label };
 }
 
+function eanCheck(code: string) {
+  if (!/^\d{8}$|^\d{12,14}$/.test(code)) return false;
+  const digits = [...code].map(Number);
+  const check = digits.pop() ?? -1;
+  let sum = 0;
+  for (let i = 0; i < digits.length; i += 1) sum += digits[digits.length - 1 - i] * (i % 2 === 0 ? 3 : 1);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
 export function resolveScan(catalog: Catalog, code: string, text: string): { barcode: string; products: CatalogProduct[] } {
   const clean = code.trim();
   if (clean) {
     const products = findProductsByBarcode(catalog, clean);
     if (products.length) return { barcode: clean, products };
+    const runs = [...new Set(clean.match(/\d{8,14}/g) ?? [])];
+    const ordered = [...runs.filter(eanCheck), ...runs.filter((value) => !eanCheck(value))];
+    for (const run of ordered) {
+      const extra = findProductsByBarcode(catalog, run);
+      if (extra.length) return { barcode: run, products: extra };
+    }
   }
   const label = findProductsByLabel(catalog, `${text} ${clean}`);
   return { barcode: label.label || clean, products: label.products };

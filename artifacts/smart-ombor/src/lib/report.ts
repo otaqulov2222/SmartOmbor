@@ -3,7 +3,7 @@ import type { Cell, Sheet } from '@/lib/xlsx';
 
 export type ExportKind =
   | 'dashboard' | 'products' | 'stock' | 'warehouses' | 'receipts' | 'transfers'
-  | 'inventory' | 'documents' | 'sales' | 'nonMoving' | 'factories' | 'recommendations'
+  | 'inventory' | 'documents' | 'sales' | 'nonMoving' | 'factories' | 'branches' | 'recommendations'
   | 'audit' | 'tasks';
 
 export type Period = 'today' | 'days7' | 'thisMonth' | 'all';
@@ -20,7 +20,7 @@ type Product = {
 type Warehouse = { id: string; name: string; code: string | null; address: string | null };
 type Document = {
   id: string; kind: string; number: string; date: string; status: string;
-  sourceWarehouse: string | null; targetWarehouse: string | null; itemCount: number;
+  sourceWarehouse: string | null; targetWarehouse: string | null; itemCount: number; total?: number | null;
 };
 type StockFlat = {
   productId: string; warehouseId: string; warehouseName: string; warehouseCode: string | null;
@@ -119,20 +119,21 @@ function sheet(name: string, headers: string[], rows: Cell[][]): Sheet {
 }
 
 export const KIND_META: Record<ExportKind, { title: TKey; detail: TKey; period: boolean }> = {
-  dashboard: { title: 'report.daily', detail: 'report.daily.detail', period: true },
-  products: { title: 'report.products', detail: 'report.products.detail', period: false },
-  stock: { title: 'report.stock', detail: 'report.stock.detail', period: false },
-  warehouses: { title: 'report.warehouses', detail: 'report.warehouses.detail', period: false },
-  receipts: { title: 'report.receipts', detail: 'docs.receipts.sub', period: true },
-  transfers: { title: 'report.transfers', detail: 'docs.transfers.sub', period: true },
-  inventory: { title: 'report.inventory', detail: 'inv.sub', period: true },
-  documents: { title: 'report.documents', detail: 'report.documents.detail', period: true },
-  sales: { title: 'report.sales', detail: 'analytics.sub', period: true },
-  nonMoving: { title: 'report.nonMoving', detail: 'idle.sub', period: false },
-  factories: { title: 'report.factories', detail: 'factories.sub', period: false },
-  recommendations: { title: 'report.recommendations', detail: 'reco.sub', period: false },
-  audit: { title: 'report.audit', detail: 'audit.sub', period: true },
-  tasks: { title: 'report.tasks', detail: 'tasks.sub', period: true },
+  dashboard: { title: 'report.daily', detail: 'reports.line.dashboard', period: true },
+  products: { title: 'report.products', detail: 'reports.line.products', period: false },
+  stock: { title: 'report.stock', detail: 'reports.line.stock', period: false },
+  warehouses: { title: 'report.warehouses', detail: 'reports.line.warehouses', period: false },
+  receipts: { title: 'report.receipts', detail: 'reports.line.receipts', period: true },
+  transfers: { title: 'report.transfers', detail: 'reports.line.transfers', period: true },
+  inventory: { title: 'report.inventory', detail: 'reports.line.inventory', period: true },
+  documents: { title: 'report.documents', detail: 'reports.line.documents', period: true },
+  sales: { title: 'report.sales', detail: 'reports.line.sales', period: true },
+  nonMoving: { title: 'report.nonMoving', detail: 'reports.line.nonMoving', period: false },
+  factories: { title: 'report.factories', detail: 'reports.line.factories', period: false },
+  branches: { title: 'report.branches', detail: 'reports.line.branches', period: false },
+  recommendations: { title: 'report.recommendations', detail: 'reports.line.recommendations', period: false },
+  audit: { title: 'report.audit', detail: 'reports.line.audit', period: true },
+  tasks: { title: 'report.tasks', detail: 'reports.line.tasks', period: true },
 };
 
 function productRow(lang: Lang, p: Product): Cell[] {
@@ -149,11 +150,13 @@ function productHeaders(lang: Lang) {
     t(lang, 'col.daysCover'), t(lang, 'col.sales30'), t(lang, 'common.status'), t(lang, 'col.lastSale'), t(lang, 'col.lastReceipt'), t(lang, 'col.barcodes'),
   ];
 }
-function docHeaders(lang: Lang) {
-  return [t(lang, 'common.number'), t(lang, 'col.kind'), t(lang, 'common.date'), t(lang, 'common.status'), t(lang, 'docs.col.source'), t(lang, 'docs.col.target'), t(lang, 'docs.col.items')];
+function docHeaders(lang: Lang, kind?: string) {
+  const from = kind === 'receipt' ? 'docs.col.supplier' : 'docs.col.from';
+  const to = kind === 'receipt' ? 'docs.col.warehouse' : 'docs.col.to';
+  return [t(lang, 'common.number'), t(lang, 'col.kind'), t(lang, 'common.date'), t(lang, 'common.status'), t(lang, from), t(lang, to), t(lang, 'docs.col.items'), t(lang, 'docs.col.sum')];
 }
 function docRow(lang: Lang, d: Document): Cell[] {
-  return [d.number, kindLabel(lang, d.kind), formatDate(d.date), status(lang, d.status), d.sourceWarehouse || '', d.targetWarehouse || '', d.itemCount];
+  return [d.number, kindLabel(lang, d.kind), formatDate(d.date), status(lang, d.status), d.sourceWarehouse || '', d.targetWarehouse || '', d.itemCount, d.total ?? ''];
 }
 
 export async function buildReport(kind: ExportKind, period: Period, lang: Lang): Promise<BuiltReport> {
@@ -204,7 +207,7 @@ export async function buildReport(kind: ExportKind, period: Period, lang: Lang):
   } else if (kind === 'receipts' || kind === 'transfers' || kind === 'inventory' || kind === 'documents') {
     const map = { receipts: 'receipt', transfers: 'transfer', inventory: 'inventory', documents: undefined } as const;
     const rows = docsOf(map[kind]);
-    sheets.push(sheet(title, docHeaders(lang), rows.map(d => docRow(lang, d))));
+    sheets.push(sheet(title, docHeaders(lang, map[kind]), rows.map(d => docRow(lang, d))));
   } else if (kind === 'sales') {
     const apiPeriod = period === 'today' || period === 'days7' ? '7d' : period === 'thisMonth' ? '30d' : '90d';
     const sales = await getJson<Sales>(`/api/analytics/sales?period=${apiPeriod}`);
@@ -219,8 +222,18 @@ export async function buildReport(kind: ExportKind, period: Period, lang: Lang):
         sales.topProducts.map(p => [p.name, p.code || p.article || '', p.sales30, p.salePrice])));
     }
   } else if (kind === 'nonMoving') {
-    const items = await getJson<Product[]>('/api/analytics/non-moving?days=30') || catalog.products.filter(p => p.stock > 0 && (p.daysCover ?? 0) >= 30);
-    sheets.push(sheet(t(lang, 'report.nonMoving'), productHeaders(lang), items.map(p => productRow(lang, p))));
+    type Idle = Product & { sales7?: number; sales90?: number };
+    const loaded = await getJson<Idle[]>('/api/analytics/non-moving?days=30');
+    const items = loaded ?? catalog.products.filter(product => product.stock > 0 && (product.daysCover ?? 0) >= 30);
+    const sorted = items.slice().sort((a, b) => (b.stock * (b.salePrice ?? 0)) - (a.stock * (a.salePrice ?? 0)) || b.stock - a.stock);
+    const windowDays = (product: Idle) => product.sales30 > 0 ? 7 : (product.sales90 ?? 0) > 0 ? 30 : 90;
+    sheets.push(sheet(t(lang, 'report.nonMoving'), [
+      t(lang, 'common.product'), t(lang, 'col.code'), t(lang, 'idle.col.stock'), t(lang, 'idle.col.value'),
+      t(lang, 'idle.col.d7'), t(lang, 'idle.col.d30'), t(lang, 'idle.col.d90'), t(lang, 'idle.col.window'),
+    ], sorted.map(product => [
+      product.name, product.code || product.article || '', product.stock, Math.round(product.stock * (product.salePrice ?? 0)),
+      product.sales7 ?? 0, product.sales30, product.sales90 ?? 0, t(lang, 'idle.window', { days: windowDays(product) }),
+    ])));
   } else if (kind === 'factories') {
     const grouped = new Map<string, { count: number; stock: number }>();
     for (const p of catalog.products) {
@@ -230,6 +243,14 @@ export async function buildReport(kind: ExportKind, period: Period, lang: Lang):
     }
     sheets.push(sheet(t(lang, 'report.factories'), [t(lang, 'col.factory'), t(lang, 'col.productsCount'), t(lang, 'col.units')],
       [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, d]) => [name, d.count, d.stock])));
+  } else if (kind === 'branches') {
+    type Move = { name: string; code: string | null; fromWarehouse: string; toWarehouse: string; fromQuantity: number; toQuantity: number; suggestedQuantity: number; dailyAverage: number };
+    const body = await getJson<{ items: Move[] }>('/api/analytics/rebalance');
+    const items = body?.items ?? [];
+    sheets.push(sheet(t(lang, 'report.branches'), [
+      t(lang, 'common.product'), t(lang, 'col.code'), t(lang, 'branch.col.from'), t(lang, 'branch.col.to'),
+      t(lang, 'branch.col.fromQty'), t(lang, 'branch.col.toQty'), t(lang, 'branch.col.move'), t(lang, 'reco.col.perDay'),
+    ], items.map(row => [row.name, row.code || '', row.fromWarehouse, row.toWarehouse, row.fromQuantity, row.toQuantity, row.suggestedQuantity, row.dailyAverage])));
   } else if (kind === 'recommendations') {
     const items = await getJson<Reco[]>('/api/analytics/recommendations') || [];
     sheets.push(sheet(t(lang, 'report.recommendations'), [

@@ -158,6 +158,7 @@ overrides:
 allowBuilds:
   '@clerk/shared': true
   '@swc/core': true
+  core-js: false
   esbuild: true
   msw: true
   tesseract.js: set this to true or false

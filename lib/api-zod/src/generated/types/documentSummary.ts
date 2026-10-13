@@ -19,5 +19,7 @@ export interface DocumentSummary {
   targetWarehouse: string | null;
   itemCount: number;
   /** @nullable */
+  total: number | null;
+  /** @nullable */
   moyskladId: string | null;
 }
