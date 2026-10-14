@@ -701,7 +701,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .topbar .chip { padding: .35rem; width: 1.5rem; height: 1.5rem; justify-content: center; }
   .content { padding: 1rem .9rem .9rem; }
   .page-head h1 { font-size: 1.35rem; }
-  .page-actions { width: 100%; } .page-actions .btn { flex: 1; }
+  .page-actions { width: 100%; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .page-actions .dash-day { flex: 1 1 100%; }
+  .page-actions .dash-day .input { width: 100%; }
   .audit-search { flex: 1; width: auto; max-width: none; }
   .factory-hero { grid-template-columns: auto minmax(0, 1fr); }
   .factory-actions { grid-column: 1 / -1; }
@@ -712,7 +714,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .partner-bar .btn { flex: none; }
   .toolbar .search { max-width: none; flex-basis: 100%; }
   .toolbar .select-wrap { flex: 1; } .toolbar .select-wrap .input { min-width: 0; width: 100%; }
-  .toolbar > .btn { flex: 1; }
+  .toolbar { flex-direction: row; align-items: center; }
+  .toolbar > .btn { flex: none; }
   .settings-connect { flex-direction: column; align-items: stretch; }
   .settings-connect .btn { width: 100%; }
   .form-grid, .detail-grid, .metrics-3, .metrics.metrics-3, .board, .maker-row, .features, .auth, .kpis, .metrics, .dash-col, .stack, .partner-kpis, .product-kpis, .product-sheet { grid-template-columns: minmax(0, 1fr); }
@@ -915,9 +918,15 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 
 @media (max-width: 900px) {
   .btn { white-space: normal; }
-  .toolbar, .page-head, .card-head, .waybill-head-tools, .waybill-actions, .waybill-tools, .waybill-decide, .form-actions, .scan-session, .scan-row-actions, .factory-actions, .partner-bar { align-items: stretch; }
-  .toolbar, .page-actions, .form-actions, .waybill-actions, .waybill-tools, .waybill-decide, .waybill-head-tools, .factory-actions { flex-direction: column; }
-  .toolbar > .btn, .toolbar .select-wrap, .toolbar .search, .page-actions .btn, .form-actions .btn, .waybill-actions .btn, .waybill-tools .btn, .waybill-decide .btn, .factory-actions .btn, .partner-bar .btn, .waybill-link .btn, .waybill-link .input { width: 100%; flex: none; }
+  .page-head, .card-head, .waybill-actions, .waybill-decide, .form-actions, .scan-session, .scan-row-actions { align-items: stretch; }
+  .form-actions, .waybill-actions, .waybill-decide { flex-direction: column; }
+  .toolbar .select-wrap, .toolbar .search, .form-actions .btn, .waybill-actions .btn, .waybill-decide .btn, .waybill-link .btn, .waybill-link .input { width: 100%; flex: none; }
+  .page-actions .btn, .toolbar > .btn, .partner-bar > .btn, .factory-actions .btn, .waybill-tools .btn, .waybill-head-tools .btn {
+    width: 2.75rem; height: 2.75rem; min-width: 2.75rem; padding: 0; flex: none;
+    font-size: 0; line-height: 0; gap: 0; border-radius: .85rem;
+  }
+  .page-actions .btn svg, .toolbar > .btn svg, .partner-bar > .btn svg, .factory-actions .btn svg, .waybill-tools .btn svg, .waybill-head-tools .btn svg { width: 1.2rem; height: 1.2rem; }
+  .partner-bar, .factory-actions, .waybill-tools, .waybill-head-tools { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
   article.card.scan-row > .scan-row-actions .btn { width: auto; flex: 1; }
   .waybill-decide, .waybill-head-tools, .partner-bar { margin-left: 0; width: 100%; }
   .waybill-filter, .waybill-filter .input, .partner-search { width: 100%; max-width: none; }
