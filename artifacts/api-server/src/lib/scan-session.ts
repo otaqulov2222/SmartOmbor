@@ -4,10 +4,6 @@ type ScanHit = { barcode: string; ambiguous?: boolean; products: ScanProduct[]; 
 let items: ScanHit[] = [];
 let revision = 0;
 
-function keyOf(hit: ScanHit) {
-  return hit.products.map((product) => product.id).sort().join("-");
-}
-
 function readable(body: unknown): ScanHit | null {
   if (!body || typeof body !== "object") return null;
   const hit = body as ScanHit;
@@ -17,17 +13,27 @@ function readable(body: unknown): ScanHit | null {
 }
 
 export function readScanSession() {
-  return { revision, items };
+  const seen = new Set<string>();
+  const unique = items.filter((item) => {
+    if (item.products.length !== 1) return false;
+    const id = item.products[0].id;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return { revision, items: unique };
 }
 
 export function addScanHit(body: unknown) {
   const hit = readable(body);
-  if (!hit) return { ...readScanSession(), added: false };
-  const key = keyOf(hit);
-  const added = !items.some((item) => keyOf(item) === key);
-  items = [hit, ...items.filter((item) => keyOf(item) !== key)].slice(0, 200);
-  revision += 1;
-  return { revision, items, added };
+  if (!hit || hit.products.length !== 1) return { ...readScanSession(), added: false };
+  const id = hit.products[0].id;
+  const added = !items.some((item) => item.products.length === 1 && item.products[0].id === id);
+  if (added) {
+    items = [hit, ...items.filter((item) => item.products.length !== 1 || item.products[0].id !== id)].slice(0, 200);
+    revision += 1;
+  }
+  return { ...readScanSession(), added };
 }
 
 export function removeScanHit(productId: string) {

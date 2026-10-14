@@ -724,3 +724,36 @@ export function resolveScan(catalog: Catalog, code: string, text: string): { bar
   const label = findProductsByLabel(catalog, `${text} ${clean}`);
   return { barcode: label.label || clean, products: label.products };
 }
+
+let scanIndexCatalog: Catalog | null = null;
+let scanIndexBody: { loadedAt: string; products: unknown[] } | null = null;
+
+export function scanIndex(catalog: Catalog) {
+  if (scanIndexCatalog === catalog && scanIndexBody) return scanIndexBody;
+  const places = new Map<string, Array<{ productId: string; warehouseName: string; quantity: number; inTransit: number }>>();
+  const ranked = [...catalog.stockRows].sort((a, b) => b.quantity - a.quantity);
+  for (const row of ranked) {
+    const list = places.get(row.product.id) ?? [];
+    if (list.length >= 3 || (row.quantity <= 0 && row.inTransit <= 0)) continue;
+    list.push({ productId: row.product.id, warehouseName: row.warehouse.name, quantity: row.quantity, inTransit: row.inTransit });
+    places.set(row.product.id, list);
+  }
+  const body = {
+    loadedAt: catalog.loadedAt,
+    products: catalog.products.map((product) => ({
+      id: product.id,
+      name: product.name,
+      code: product.code,
+      article: product.article,
+      barcodes: product.barcodes,
+      imageUrl: product.imageUrl,
+      stock: product.stock,
+      salePrice: product.salePrice,
+      stockStatus: product.stockStatus,
+      locations: places.get(product.id) ?? [],
+    })),
+  };
+  scanIndexCatalog = catalog;
+  scanIndexBody = body;
+  return body;
+}

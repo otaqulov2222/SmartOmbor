@@ -1,0 +1,21 @@
+{
+  "explorer.compactFolders": true,
+  "files.exclude": {
+    "**/.agents": true,
+    "**/.conversation": true,
+    "**/.cursor": true,
+    "**/.tmp-ui": true,
+    "**/attached_assets": true,
+    "**/node_modules": true,
+    "**/*.traineddata": true
+  },
+  "search.exclude": {
+    "**/.agents": true,
+    "**/.conversation": true,
+    "**/.cursor": true,
+    "**/.tmp-ui": true,
+    "**/attached_assets": true,
+    "**/node_modules": true,
+    "**/*.traineddata": true
+  }
+}

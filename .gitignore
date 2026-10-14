@@ -57,3 +57,7 @@ artifacts/api-server/data/
 # local screenshots and OCR models
 .tmp-ui/
 *.traineddata
+.cursor/
+attached_assets/
+.agents/
+.conversation/

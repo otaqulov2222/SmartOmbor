@@ -7,6 +7,7 @@ import { CircleAlert, Flashlight, Package, Pencil, ScanBarcode, Search, Trash2, 
 import { Link, useSearch } from 'wouter';
 import { type BarcodeLocation, type BarcodeLookup, type Product } from '@workspace/api-client-react';
 import { useI18n, type TKey } from '@/i18n';
+import { loadScanIndex, matchScan, scanIndexReady } from '@/scan-match';
 
 type Detected = { rawValue?: string };
 type DetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<Detected[]> };
@@ -315,6 +316,7 @@ export function ScannerPage() {
   const [torchable, setTorchable] = useState(false);
   const [live, setLive] = useState('');
   const [sheet, setSheet] = useState<null | { mode: 'create' | 'edit'; productId?: string; barcode?: string }>(null);
+  const [choice, setChoice] = useState<BarcodeLookup | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
   const ocrReady = useRef<Promise<Worker | null> | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
@@ -337,16 +339,29 @@ export function ScannerPage() {
 
   const applySession = (body: { revision: number; items: BarcodeLookup[] }) => {
     if (!body || body.revision <= revisionRef.current || !Array.isArray(body.items)) return;
+    const seen = new Set<string>();
+    const items = body.items.filter(item => {
+      if (item.products.length !== 1) return false;
+      const id = item.products[0].id;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
     revisionRef.current = body.revision;
-    hitsRef.current = body.items;
-    setHits(body.items);
+    hitsRef.current = items;
+    setHits(items);
   };
   const showHit = (lookup: BarcodeLookup, source: 'manual' | 'camera' = 'manual') => {
-    if (!lookup.products.length) return;
-    const key = lookup.products.map(product => product.id).join('-');
-    const already = hitsRef.current.some(item => item.products.map(product => product.id).join('-') === key);
+    if (lookup.products.length !== 1) {
+      setChoice(lookup.products.length > 1 ? lookup : null);
+      setChecking('');
+      return;
+    }
+    setChoice(null);
+    const key = lookup.products[0].id;
+    const already = hitsRef.current.some(item => item.products.length === 1 && item.products[0].id === key);
     if (already && source === 'camera') return;
-    const next = [lookup, ...hitsRef.current.filter(item => item.products.map(product => product.id).join('-') !== key)].slice(0, 200);
+    const next = [lookup, ...hitsRef.current.filter(item => item.products[0]?.id !== key)].slice(0, 200);
     hitsRef.current = next;
     setHits(next);
     setChecking('');
@@ -386,6 +401,22 @@ export function ScannerPage() {
       showHit(known, source);
       return;
     }
+    if (scanIndexReady()) {
+      const local = matchScan(clean, source === 'camera' ? labelRef.current : '');
+      if (local?.products.length) {
+        if (local.products.length === 1) remember(clean, local);
+        recentCode.current = { value: clean, at: Date.now() };
+        showHit(local, source);
+        return;
+      }
+      if (source === 'manual') {
+        setChecking('');
+        setMiss(clean);
+        beep(false);
+        field.current?.focus();
+      }
+      return;
+    }
     const gen = source === 'manual' ? ++generation.current : 0;
     if (source === 'manual') {
       setMiss('');
@@ -422,6 +453,14 @@ export function ScannerPage() {
     if (labelFlight.current.has(signature)) return;
     labelFlight.current.add(signature);
     labelRef.current = value;
+    if (scanIndexReady()) {
+      labelFlight.current.delete(signature);
+      const local = matchScan('', value);
+      if (!local?.products.length) return;
+      labelSeen.current.set(signature, Date.now());
+      showHit(local, 'camera');
+      return;
+    }
     void resolveScanRequest('', value).then(lookup => {
       labelFlight.current.delete(signature);
       if (!lookup.products.length) return;
@@ -445,6 +484,8 @@ export function ScannerPage() {
       void pending?.then(worker => worker?.terminate());
     };
   }, []);
+
+  useEffect(() => { void loadScanIndex(); }, []);
 
   useEffect(() => {
     if (initial) accept(initial, 'manual');
@@ -536,7 +577,7 @@ export function ScannerPage() {
         if (!scanBusy && ctx && source && source.readyState >= 2 && source.videoWidth > 0) {
           scanBusy = true;
           const guide = guideCrop(source);
-          const scale = Math.min(2, Math.max(1, 1280 / Math.max(guide.w, guide.h)));
+          const scale = Math.min(1.5, Math.max(1, 900 / Math.max(guide.w, guide.h)));
           paintRegion(source, ctx, canvas, guide, scale);
           if (copyCtx) {
             copy.width = canvas.width;
@@ -685,6 +726,7 @@ export function ScannerPage() {
     </div>}
     <div className="scan-feed" ref={result}>
       {(hits.length > 0 || miss) && <div className="scan-session"><span>{t('scan.sessionCount', { count: fmt(hits.reduce((sum, item) => sum + item.products.length, 0) + (miss ? 1 : 0)) })}</span><button className="btn btn-secondary" type="button" onClick={() => { hitsRef.current = []; setHits([]); setMiss(''); void fetch('/api/scan-session', { method: 'DELETE' }).then(async response => { if (response.ok) applySession(await response.json()); }).catch(() => undefined); }} data-testid="button-clear-scans">{t('scan.clearAll')}</button></div>}
+      {choice && choice.products.length > 1 && <LookupView lookup={choice} onEdit={product => setSheet({ mode: 'edit', productId: product.id })} onRemove={() => setChoice(null)}/>}
       {checking && <div className="scan-pending" data-testid="status-barcode-loading"><b className="scan-code">{checking}</b><span>{t('scan.checking')}</span></div>}
       {miss && <Miss key={miss} code={miss} onDone={() => setMiss('')} onSave={() => setSheet({ mode: 'create', barcode: miss })}/>}
       {hits.map(lookup => <LookupView key={lookup.products.map(product => product.id).join('-')} lookup={lookup} onEdit={product => setSheet({ mode: 'edit', productId: product.id })} onRemove={id => { const next = hitsRef.current.flatMap(item => { const products = item.products.filter(product => product.id !== id); return products.length ? [{ ...item, products, ambiguous: products.length > 1 }] : []; }); hitsRef.current = next; setHits(next); void fetch(`/api/scan-session/${id}`, { method: 'DELETE' }).then(async response => { if (response.ok) applySession(await response.json()); }).catch(() => undefined); }}/>)}

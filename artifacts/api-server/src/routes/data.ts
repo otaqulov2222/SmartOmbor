@@ -24,7 +24,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
@@ -589,6 +589,14 @@ router.get("/products/:id/image", async (req, res, next) => {
     res.setHeader("Content-Type", image.type);
     res.setHeader("Cache-Control", "private, max-age=3600");
     res.send(image.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/scan-index", async (_req, res, next) => {
+  try {
+    res.json(scanIndex(await loadCatalog()));
   } catch (error) {
     next(error);
   }
