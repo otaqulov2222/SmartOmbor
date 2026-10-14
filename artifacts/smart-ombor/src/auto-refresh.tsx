@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { clearCatalogDump } from '@/lib/report';
 
-export const AUTO_REFRESH_MS = 3 * 60 * 1000;
+export const AUTO_REFRESH_MS = 10 * 60 * 1000;
 export const AUTO_REFRESH_KEY = ['auto-refresh'] as const;
 
 export type AutoRefreshState = { pending: boolean; last: string | null; nextAt: number };

@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { dataFile } from "./data-dir";
 import { idleDays, loadCatalog, peekCatalog } from "./catalog";
 import { textPdf } from "./report-pdf";

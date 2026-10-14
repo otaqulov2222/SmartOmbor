@@ -839,7 +839,7 @@ router.get("/analytics/rebalance", async (_req, res, next) => {
 });
 
 const SALES_CACHE_FILE = dataFile("sales-cache.json");
-const SALES_FRESH_MS = 3 * 60 * 1000;
+const SALES_FRESH_MS = 10 * 60 * 1000;
 
 type SalesBody = ReturnType<typeof GetSalesAnalyticsResponse.parse>;
 type SalesEntry = { savedAt: number; body: SalesBody };

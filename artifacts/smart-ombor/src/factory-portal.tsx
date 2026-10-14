@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Boxes, LogOut, Plus, Send, Trash2, X } from 'lucide-react';
+import { LogOut, Plus, Send, Trash2, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
@@ -81,7 +81,7 @@ export function FactoryPortal() {
 
   return <main className="factory-app">
     <header className="factory-top">
-      <div className="brand"><span className="brand-symbol"><Boxes size={18}/></span><span className="brand-name">{t('brand.first')} <b>{t('brand.second')}</b></span></div>
+      <div className="brand" data-testid="brand-smart-ombor"><img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo.png`} alt={t('brand.name')} width={922} height={250}/></div>
       <div className="factory-top-actions">
         <LangMini lang={lang} setLang={setLang}/>
         {account && <button type="button" className="btn btn-ghost btn-sm" onClick={signOut}><LogOut size={15}/>{t('zavod.signOut')}</button>}

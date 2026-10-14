@@ -25,7 +25,7 @@ import type {
 } from '@workspace/api-client-react';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TKey } from '@/i18n';
-import { AutoRefresh, AUTO_REFRESH_KEY, type AutoRefreshState } from '@/auto-refresh';
+import { AutoRefresh, AUTO_REFRESH_KEY, AUTO_REFRESH_MS, type AutoRefreshState } from '@/auto-refresh';
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
@@ -44,7 +44,7 @@ function stripBase(path: string) { return basePath && path.startsWith(basePath) 
 
 const clerkAppearance = {
   theme: shadcn, cssLayerName: 'clerk',
-  options: { logoPlacement: 'inside' as const, logoLinkUrl: basePath || '/', logoImageUrl: `${window.location.origin}${basePath}/logo.svg` },
+  options: { logoPlacement: 'inside' as const, logoLinkUrl: basePath || '/', logoImageUrl: `${window.location.origin}${basePath}/logo.png` },
   variables: { colorPrimary: '#2f54eb', colorForeground: '#0f1b2d', colorMutedForeground: '#64748b', colorDanger: '#dc2626', colorBackground: '#ffffff', colorInput: '#ffffff', colorInputForeground: '#0f1b2d', colorNeutral: '#e2e8f0', fontFamily: 'Inter, sans-serif', borderRadius: '10px' },
   elements: {
     rootBox: 'w-full flex justify-center', cardBox: 'bg-white rounded-2xl w-[440px] max-w-full overflow-hidden shadow-none border border-[#e4e8ee]',
@@ -116,7 +116,10 @@ function ClerkQueryClientCacheInvalidator() {
 /* ---------- brand & language ---------- */
 function BrandMark({ light = false }: { light?: boolean }) {
   const { t } = useI18n();
-  return <div className={`brand ${light ? 'brand-light' : ''}`} data-testid="brand-smart-ombor"><span className="brand-symbol"><Boxes size={18} strokeWidth={2}/></span><span className="brand-name">{t('brand.first')} <b>{t('brand.second')}</b></span></div>;
+  return <div className={`brand ${light ? 'brand-light' : ''}`} data-testid="brand-smart-ombor">
+    <img className="brand-lockup" src={`${basePath}/${light ? 'logo-dark.png' : 'logo.png'}`} alt={t('brand.name')} width={925} height={254}/>
+    <img className="brand-mark" src={`${basePath}/logo-mark.png`} alt="" width={243} height={250}/>
+  </div>;
 }
 function LangSwitch({ compact = false }: { compact?: boolean }) {
   const { lang, setLang, t } = useI18n();
@@ -324,10 +327,10 @@ function DashboardPage() {
   const { t, lang, fmt, money, time, date } = useI18n(); const docKind = useDocKind();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [day, setDay] = useState(today);
-  const q = useGetDashboard({ query: { refetchInterval: 180_000 } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
-  const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: 180_000 });
-  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 2, refetchInterval: query => query.state.status === 'error' ? 15_000 : 180_000 });
-  const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today, refetchInterval: 180_000 } });
+  const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
+  const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: AUTO_REFRESH_MS });
+  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 2, refetchInterval: query => query.state.status === 'error' ? 15_000 : AUTO_REFRESH_MS });
+  const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today, refetchInterval: AUTO_REFRESH_MS } });
   const connected = !!status.data?.configured && !!status.data?.connected;
   const d = q.data;
   const shownDay = date(`${day}T12:00:00+05:00`);
