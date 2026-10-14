@@ -449,7 +449,7 @@ a.kpi:hover { background: var(--surface-2); }
 .camera-empty .state-icon { background: rgb(255 255 255 / .1); color: #c7d2fe; width: 3.4rem; height: 3.4rem; }
 .camera-empty p { color: #94a3b8; max-width: 320px; font-size: .9rem; }
 .scan-frame { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
-.scan-frame span { position: relative; width: min(96%, 680px); aspect-ratio: 1.7; border: 2px solid rgb(255 255 255 / .9); border-radius: .8rem; box-shadow: 0 0 0 999px rgb(15 23 42 / .18); }
+.scan-frame span { position: relative; width: min(92%, 640px); aspect-ratio: 2.4; border: 1px solid rgb(255 255 255 / .75); border-radius: .45rem; }
 .scan-frame i { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: #93c5fd; animation: scan 1.6s ease-in-out infinite; }
 @keyframes scan { 0%, 100% { transform: translateY(-50px); } 50% { transform: translateY(50px); } }
 .camera-stop { position: absolute; top: .65rem; right: .65rem; background: rgb(15 23 42 / .72); color: #fff; border-color: transparent; }
@@ -724,8 +724,10 @@ a.kpi:hover { background: var(--surface-2); }
   .scan-tools { grid-template-columns: minmax(0, 1fr); }
   .scan-actions { grid-template-columns: minmax(0, 1fr); width: 100%; }
   .scan-actions .btn { width: 100%; min-width: 0; min-height: 3rem; font-size: .82rem; }
-  .scan-view { width: 100%; }
+  .scan-tools { position: sticky; top: 3.15rem; z-index: 6; background: var(--bg); }
+  .scan-view { width: 100%; max-height: 34vh; aspect-ratio: 16 / 10; }
   .scan-row { grid-template-columns: 56px minmax(0, 1fr); }
+  .scan-row-actions .btn { width: auto; flex: 1; }
   .scan-row-side { justify-items: start; text-align: left; grid-column: 2; }
   .auth-side { padding: 1.6rem; }
   .landing { padding-inline: 1rem; gap: 2.5rem; }

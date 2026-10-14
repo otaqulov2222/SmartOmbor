@@ -17,21 +17,34 @@ const FAST_HINTS = new Map<DecodeHintType, unknown>([
   [DecodeHintType.TRY_HARDER, true],
 ]);
 
+let scanAudio: AudioContext | null = null;
+
+function unlockScanAudio() {
+  const Ctx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctx) return;
+  if (!scanAudio) scanAudio = new Ctx();
+  if (scanAudio.state === 'suspended') void scanAudio.resume();
+}
+
 function beep(ok: boolean) {
   try {
-    const ctx = new AudioContext();
+    unlockScanAudio();
+    const ctx = scanAudio;
+    if (!ctx) return;
+    const now = ctx.currentTime;
     const tone = ctx.createOscillator();
     const gain = ctx.createGain();
-    tone.frequency.value = ok ? 1760 : 220;
-    gain.gain.setValueAtTime(0.1, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (ok ? 0.04 : 0.08));
+    tone.type = 'square';
+    tone.frequency.value = ok ? 2400 : 480;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(ok ? 0.2 : 0.14, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + (ok ? 0.07 : 0.14));
     tone.connect(gain);
     gain.connect(ctx.destination);
-    tone.start();
-    tone.stop(ctx.currentTime + 0.09);
-    window.setTimeout(() => void ctx.close(), 200);
+    tone.start(now);
+    tone.stop(now + 0.16);
   } catch { /* sound is optional */ }
-  navigator.vibrate?.(ok ? 18 : [16, 24, 16]);
+  navigator.vibrate?.(ok ? 28 : [18, 36, 18]);
 }
 
 function PageHead({ title, subtitle }: { title: string; subtitle: string }) {
@@ -246,12 +259,12 @@ export function ScannerPage() {
   const ocrReady = useRef<Promise<Worker | null> | null>(null);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const result = useRef<HTMLDivElement | null>(null);
-  const acceptRef = useRef<(value: string) => void>(() => {});
+  const field = useRef<HTMLInputElement | null>(null);
+  const acceptRef = useRef<(value: string, source?: 'manual' | 'camera') => void>(() => {});
   const labelRef = useRef('');
   const labelSeen = useRef(new Map<string, number>());
   const labelFlight = useRef(new Set<string>());
   const generation = useRef(0);
-  const holdTimer = useRef(0);
   const lastBeep = useRef({ key: '', at: 0 });
   const burst = useRef<string[]>([]);
   const learned = useRef(new Map<string, BarcodeLookup>());
@@ -259,21 +272,20 @@ export function ScannerPage() {
   const showHitRef = useRef<(lookup: BarcodeLookup) => void>(() => {});
   const nudgeOcr = useRef<(() => void) | null>(null);
 
-  const showHit = (lookup: BarcodeLookup) => {
+  const showHit = (lookup: BarcodeLookup, source: 'manual' | 'camera' = 'manual') => {
     if (!lookup.products.length) return;
-    window.clearTimeout(holdTimer.current);
     const key = lookup.products.map(product => product.id).join('-');
     const now = Date.now();
-    const repeat = lastBeep.current.key === key && now - lastBeep.current.at < 420;
+    const repeat = source === 'camera' && lastBeep.current.key === key && now - lastBeep.current.at < 1200;
     lastBeep.current = { key, at: now };
     setChecking('');
     setMiss('');
     const names = [lookup.products[0].name, ...burst.current.filter(item => item !== lookup.products[0].name)].slice(0, 3);
     burst.current = names;
     setLive(names.join(' · '));
-    setCode(lookup.barcode || lookup.products[0].code || '');
     if (!repeat) beep(true);
     setHits(list => [lookup, ...list.filter(item => item.products.map(product => product.id).join('-') !== key)].slice(0, 200));
+    if (source === 'manual') field.current?.focus();
   };
   showHitRef.current = showHit;
 
@@ -283,51 +295,50 @@ export function ScannerPage() {
     if (learned.current.size > 40) learned.current.delete(learned.current.keys().next().value || barcode);
   };
 
-  const scheduleMiss = (value: string, gen: number) => {
-    window.clearTimeout(holdTimer.current);
-    holdTimer.current = window.setTimeout(() => {
-      if (generation.current !== gen) return;
-      setChecking('');
-      setMiss(value);
-      beep(false);
-    }, 1800);
-  };
-
-  const accept = (value: string, quiet = false) => {
+  const accept = (value: string, source: 'manual' | 'camera' = 'manual') => {
     const clean = readCode(value);
     if (clean.length < 3) return;
+    if (source === 'manual') {
+      setCode('');
+      if (field.current) field.current.value = '';
+      field.current?.focus();
+    }
     const known = learned.current.get(clean);
     if (known) {
       recentCode.current = { value: clean, at: Date.now() };
-      showHit(known);
+      showHit(known, source);
       return;
     }
-    const gen = ++generation.current;
-    window.clearTimeout(holdTimer.current);
-    setCode(clean);
-    setMiss('');
-    if (!quiet) setChecking(clean);
-    void resolveScanRequest(clean, labelRef.current).then(lookup => {
+    const gen = source === 'manual' ? ++generation.current : 0;
+    if (source === 'manual') {
+      setMiss('');
+      setChecking(clean);
+    }
+    void resolveScanRequest(clean, source === 'camera' ? labelRef.current : '').then(lookup => {
+      if (source === 'manual' && generation.current !== gen) return;
       if (lookup.products.length) {
         remember(clean, lookup);
-        showHit(lookup);
-      } else if (generation.current === gen && Date.now() - lastBeep.current.at > 2000) {
-        nudgeOcr.current?.();
-        scheduleMiss(clean, gen);
+        showHit(lookup, source);
+      } else if (source === 'manual' && generation.current === gen) {
+        setChecking('');
+        setMiss(clean);
+        beep(false);
+        field.current?.focus();
       }
     }).catch(() => {
-      if (generation.current !== gen) return;
+      if (source !== 'manual' || generation.current !== gen) return;
       setChecking('');
       setMiss(clean);
+      beep(false);
     });
   };
-  acceptRef.current = (value: string) => accept(value, true);
+  acceptRef.current = accept;
 
   const acceptLabel = (value: string) => {
     const signature = [...value.matchAll(/\d{2}-\d{2}|\d{4,6}/g)].map(match => match[0]).sort().join('|');
     if (!signature) return;
     const now = Date.now();
-    if ((labelSeen.current.get(signature) ?? 0) > now - 280) {
+    if ((labelSeen.current.get(signature) ?? 0) > now - 1400) {
       labelSeen.current.set(signature, now);
       return;
     }
@@ -340,7 +351,7 @@ export function ScannerPage() {
       labelSeen.current.set(signature, Date.now());
       const recent = recentCode.current;
       if (recent.value && Date.now() - recent.at < 1500) remember(recent.value, lookup);
-      showHit(lookup);
+      showHit(lookup, 'camera');
     }).catch(() => {
       labelFlight.current.delete(signature);
     });
@@ -359,8 +370,7 @@ export function ScannerPage() {
   }, []);
 
   useEffect(() => {
-    if (initial) accept(initial);
-    return () => window.clearTimeout(holdTimer.current);
+    if (initial) accept(initial, 'manual');
   }, [initial]);
 
   useEffect(() => {
@@ -373,13 +383,13 @@ export function ScannerPage() {
     const seenCodes = new Map<string, number>();
     const hit = (value: string) => {
       const now = Date.now();
-      if ((seenCodes.get(value) ?? 0) > now - 240) {
+      if (now - (seenCodes.get(value) ?? 0) < 1100) {
         seenCodes.set(value, now);
         return;
       }
       seenCodes.set(value, now);
       recentCode.current = { value, at: now };
-      acceptRef.current(value);
+      acceptRef.current(value, 'camera');
     };
     const consider = (raw: string) => {
       const clean = cameraCode(raw);
@@ -492,7 +502,7 @@ export function ScannerPage() {
           const found = await worker.recognize(canvas);
           const text = (found.data.text || '').replace(/\s+/g, ' ').trim();
           for (const piece of labelPieces(text)) acceptLabel(piece);
-          for (const code of text.match(/\d{8,14}/g) ?? []) acceptRef.current(code);
+          for (const code of text.match(/\d{8,14}/g) ?? []) acceptRef.current(code, 'camera');
           if (!labelWorthReading(text)) {
             const now = Date.now();
             for (const [key, at] of labelSeen.current) if (now - at > 280) labelSeen.current.delete(key);
@@ -544,7 +554,7 @@ export function ScannerPage() {
       if (event.key === 'Enter') {
         if (buffer.length >= 3) {
           event.preventDefault();
-          acceptRef.current(buffer);
+          acceptRef.current(buffer, 'manual');
         }
         buffer = '';
         return;
@@ -555,20 +565,24 @@ export function ScannerPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const lookup = (event: FormEvent) => {
+  const lookup = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    accept(code);
+    unlockScanAudio();
+    const value = field.current?.value ?? code;
+    if (field.current) field.current.value = '';
+    setCode('');
+    accept(value, 'manual');
   };
 
   return <>
     <PageHead title={t('scan.title')} subtitle={t('scan.sub')}/>
-    <form className="card scan-tools" onSubmit={lookup}>
+    <form className="card scan-tools" onSubmit={lookup} onPointerDown={unlockScanAudio}>
       <label className="field" data-testid="field-manual-barcode"><span>{t('scan.manual')}</span>
-        <input className="input scan-input" data-testid="input-manual-barcode" autoComplete="off" autoFocus enterKeyHint="search" placeholder={t('scan.manualPlaceholder')} value={code} onChange={event => setCode(event.target.value)}/>
+        <input ref={field} className="input scan-input" data-testid="input-manual-barcode" autoComplete="off" autoFocus enterKeyHint="search" placeholder={t('scan.manualPlaceholder')} value={code} onChange={event => setCode(event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; event.preventDefault(); unlockScanAudio(); const value = event.currentTarget.value; event.currentTarget.value = ''; setCode(''); accept(value, 'manual'); }}/>
       </label>
       <div className="scan-actions">
         <button className="btn btn-secondary" type="submit" data-testid="button-lookup-barcode" disabled={code.trim().length < 3}><Search size={16}/><span>{t('scan.check')}</span></button>
-        <button className={`btn btn-primary ${camera ? 'is-on' : ''}`} type="button" data-testid="button-camera-start" onClick={() => { setCameraError(''); setMiss(''); setCamera(open => { if (!open && !eanOk(code)) setCode(''); return !open; }); }}><ScanBarcode size={16}/><span>{camera ? t('scan.cameraStop') : t('scan.cameraStart')}</span></button>
+        <button className={`btn btn-primary ${camera ? 'is-on' : ''}`} type="button" data-testid="button-camera-start" onClick={() => { unlockScanAudio(); setCameraError(''); setMiss(''); setCamera(open => { if (!open && !eanOk(code)) setCode(''); return !open; }); }}><ScanBarcode size={16}/><span>{camera ? t('scan.cameraStop') : t('scan.cameraStart')}</span></button>
       </div>
     </form>
     {camera && <div className="scan-view">
