@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { dataFile } from "./data-dir";
 
-const FILE = path.resolve(process.cwd(), "artifacts/api-server/data/connection.json");
+const FILE = dataFile("connection.json");
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 
 interface SavedConnection {

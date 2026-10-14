@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Boxes,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, Repeat,
+  Clock3, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, PanelLeft, PanelLeftClose, Repeat,
   Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   Sparkles, Tags, UserRound, Users, Warehouse, X,
 } from 'lucide-react';
@@ -24,7 +24,7 @@ import type {
   AppUserRole, Product, Task, TaskInputPriority,
 } from '@workspace/api-client-react';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
-import { I18nProvider, useI18n, weekdayShort, longToday, formatShortDay, type Lang, type TKey } from '@/i18n';
+import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TKey } from '@/i18n';
 import { AutoRefresh, AUTO_REFRESH_KEY, type AutoRefreshState } from '@/auto-refresh';
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
@@ -35,9 +35,10 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const hostName = window.location.hostname;
 const isLocalHost = hostName === 'localhost' || hostName === '127.0.0.1';
-const clerkPubKey = isLocalHost
-  ? import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || undefined
-  : publishableKeyFromHost(hostName, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+const clerkFromEnv = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || undefined;
+const clerkPubKey = isLocalHost || !clerkFromEnv
+  ? clerkFromEnv
+  : publishableKeyFromHost(hostName, clerkFromEnv);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 function stripBase(path: string) { return basePath && path.startsWith(basePath) ? path.slice(basePath.length) || '/' : path; }
 
@@ -196,6 +197,8 @@ function LocalShell({ children, title }: { children: ReactNode; title: string })
 function WorkspaceChrome({ children, title, userName, onSignOut }: { children: ReactNode; title: string; userName: string; onSignOut: () => void }) {
   const { t, time, fmt } = useI18n(); const roleLabel = useRole();
   const [path] = useLocation(); const [open, setOpen] = useState(false);
+  const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
+  useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
   const current = navigation.find(x => x.href === path);
   const currentUser = useGetCurrentUser();
   const connection = useGetMoyskladStatus();
@@ -213,14 +216,14 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => { document.body.classList.toggle('nav-open', open); return () => document.body.classList.remove('nav-open'); }, [open]);
-  return <div className="app">
+  return <div className={`app ${rail ? 'is-rail' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-      <div className="sidebar-top"><BrandMark light/><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
-      <nav className="nav" aria-label={t('nav.group.workspace')}>{navGroups.map(group => <div key={group} className="nav-group"><p>{t(group)}</p>{navigation.filter(n => n.group === group).map(item => { const Icon = item.icon; const active = path === item.href; const pending = item.href === '/partners' ? alerts.data?.pending ?? 0 : 0; return <Link key={item.href} href={item.href} className={`nav-item ${active ? 'is-active' : ''}`} aria-current={active ? 'page' : undefined} data-testid={`nav-${item.href.slice(1)}`}><Icon size={18} strokeWidth={1.9}/><span>{t(item.key)}</span>{pending > 0 && <em className="nav-badge" title={t('partners.pending', { count: pending })}>{fmt(pending)}</em>}</Link>; })}</div>)}</nav>
+      <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <PanelLeft size={18}/> : <PanelLeftClose size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
+      <nav className="nav" aria-label={t('nav.group.workspace')}>{navGroups.map(group => <div key={group} className="nav-group"><p>{t(group)}</p>{navigation.filter(n => n.group === group).map(item => { const Icon = item.icon; const active = path === item.href; const pending = item.href === '/partners' ? alerts.data?.pending ?? 0 : 0; return <Link key={item.href} href={item.href} className={`nav-item ${active ? 'is-active' : ''}`} title={t(item.key)} aria-current={active ? 'page' : undefined} data-testid={`nav-${item.href.slice(1)}`}><Icon size={18} strokeWidth={1.9}/><span>{t(item.key)}</span>{pending > 0 && <em className="nav-badge" title={t('partners.pending', { count: pending })}>{fmt(pending)}</em>}</Link>; })}</div>)}</nav>
       <div className="sidebar-bottom">
-        <Link href="/settings" className="conn" title={connection.data?.lastSync ? t('shell.lastSync', { time: time(connection.data.lastSync) }) : undefined} data-testid="link-sidebar-connection"><span className={`dot ${connected ? 'dot-on' : ''}`}/><span className="conn-name">{connection.isLoading ? t('shell.checking') : connected ? (connection.data?.companyName || 'MoySklad') : t('shell.disconnected')}</span>{connection.data?.lastSync && <small>{time(connection.data.lastSync)}</small>}</Link>
-        <div className="user"><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b><small>{currentUser.data ? roleLabel(currentUser.data.role) : ''}</small></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
+        <Link href="/settings" className="conn" title={connection.isLoading ? t('shell.checking') : connected ? (connection.data?.companyName || 'MoySklad') : t('shell.disconnected')} data-testid="link-sidebar-connection"><span className={`dot ${connected ? 'dot-on' : ''}`}/><span className="conn-name">{connection.isLoading ? t('shell.checking') : connected ? (connection.data?.companyName || 'MoySklad') : t('shell.disconnected')}</span>{connection.data?.lastSync && <small>{time(connection.data.lastSync)}</small>}</Link>
+        <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b><small>{currentUser.data ? roleLabel(currentUser.data.role) : ''}</small></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
       </div>
     </aside>
     <div className="main">
@@ -316,26 +319,32 @@ function WarehousesSelect({ value, onChange, testId }: { value: string; onChange
 
 /* ---------- dashboard ---------- */
 type WarehouseTotal = { id: string; name: string; units: number; products: number; inTransit: number; value: number };
+type DayView = { date: string; sales: number; incoming: number; trend: Array<{ date: string; amount: number }>; documents: Array<{ id: string; kind: string; number: string; date: string; status: string; sourceWarehouse: string | null; targetWarehouse: string | null }> };
 function DashboardPage() {
   const { t, lang, fmt, money, time, date } = useI18n(); const docKind = useDocKind();
-  const q = useGetDashboard(); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
-  const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); } });
-  const docs = useListDocuments({});
-  const sales = useGetSalesAnalytics({ period: '7d' });
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const [day, setDay] = useState(today);
+  const q = useGetDashboard({ query: { refetchInterval: 180_000 } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
+  const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: 180_000 });
+  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 2, refetchInterval: query => query.state.status === 'error' ? 15_000 : 180_000 });
+  const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today, refetchInterval: 180_000 } });
   const connected = !!status.data?.configured && !!status.data?.connected;
   const d = q.data;
+  const shownDay = date(`${day}T12:00:00+05:00`);
+  const isToday = day === today;
   const maxUnits = Math.max(1, ...(warehouses.data ?? []).map(w => w.units));
-  const maxSale = Math.max(1, ...(sales.data?.trend ?? []).map(x => x.amount));
-  const recentDocs = [...(docs.data ?? [])].sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 6);
+  const trend = chosen.data?.trend?.some(point => point.amount > 0) ? chosen.data.trend : (isToday ? (sales.data?.trend ?? []).map(point => ({ date: point.date, amount: point.amount })) : (chosen.data?.trend ?? []));
+  const maxSale = Math.max(1, ...trend.map(x => x.amount));
+  const recentDocs = chosen.data?.documents ?? [];
   const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
   const attention = d ? [
     { href: '/products', icon: CircleAlert, tone: 'tone-amber', label: t('dash.attention.low'), note: t('dash.attention.low.note'), value: d.lowStockCount },
     { href: '/non-moving', icon: Clock3, tone: 'tone-slate', label: t('dash.attention.idle'), note: t('dash.attention.idle.note'), value: d.nonMovingCount },
     { href: '/transfers', icon: ArrowLeftRight, tone: 'tone-blue', label: t('dash.attention.transfers'), note: t('dash.attention.transfers.note'), value: d.pendingTransfers },
-    { href: '/receipts', icon: ArrowDownLeft, tone: 'tone-green', label: t('dash.attention.incoming'), note: t('dash.attention.incoming.note'), value: d.incomingToday },
+    { href: '/receipts', icon: ArrowDownLeft, tone: 'tone-green', label: isToday ? t('dash.attention.incoming') : t('dash.attention.incomingOn', { date: shownDay }), note: isToday ? t('dash.attention.incoming.note') : t('dash.attention.incomingOn.note'), value: chosen.data?.incoming ?? (isToday ? d.incomingToday : 0) },
   ] : [];
   return <div className="dash">
-    <header className="page-head"><div><p className="eyebrow">{longToday(lang)}</p><h1>{t('dash.title')}</h1><p className="with-dot">{connected ? <><span className="live-dot"/>{t('dash.sub.connected', { company: status.data?.companyName || 'MoySklad', time: time(d?.lastSync || status.data?.lastSync) })}</> : status.isLoading ? t('dash.sub.checking') : t('dash.sub.offline')}</p></div><div className="page-actions"><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
+    <header className="page-head"><div><h1>{t('dash.title')}</h1><p className="with-dot">{connected ? <><span className="live-dot"/>{t('dash.sub.connected', { company: status.data?.companyName || 'MoySklad', time: time(d?.lastSync || status.data?.lastSync) })}</> : status.isLoading ? t('dash.sub.checking') : t('dash.sub.offline')}</p></div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
     <QueryError q={q} id="dashboard"/>
     {status.isError && <Notice kind="error" title={t('dash.notice.statusFailed')} testId="status-integration-error"/>}
     {!status.isLoading && !connected && !status.isError && <Notice kind={status.data?.configured ? 'error' : 'info'} title={status.data?.configured ? t('dash.notice.disconnected') : t('dash.notice.unconfigured')} testId="status-integration-unconfigured">{status.data?.error || t('dash.notice.unconfiguredBody')} <Link href="/settings" className="notice-link" data-testid="link-settings-integration">{t('nav.settings')} <ArrowRight size={14}/></Link></Notice>}
@@ -345,23 +354,23 @@ function DashboardPage() {
         <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Package size={18}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
         <Link href="/stock" className="kpi" data-testid="metric-units"><span className="kpi-icon tone-green"><Boxes size={18}/></span><span className="kpi-label">{t('dash.kpi.units')}</span><strong>{fmt(d.stockUnits)}</strong><small>{t('dash.kpi.units.note', { count: warehouses.data?.length ?? '—' })}</small></Link>
         <div className="kpi" data-testid="metric-value"><span className="kpi-icon tone-amber"><Tags size={18}/></span><span className="kpi-label">{t('dash.kpi.value')}</span><strong>{money(d.stockValue)}</strong><small>{t('dash.kpi.value.note')}</small></div>
-        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><BarChart3 size={18}/></span><span className="kpi-label">{t('dash.kpi.sales')}</span><strong>{money(d.salesToday)}</strong><small>{t('dash.kpi.sales.note')}</small></Link>
+        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><BarChart3 size={18}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{chosen.isLoading && chosen.data?.date !== day ? '…' : money(chosen.data?.sales ?? (isToday ? d.salesToday : 0))}</strong><small>{isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
       </section>
       <div className="dash-grid">
         <div className="dash-col">
           <Card title={t('dash.warehouses')} meta={warehouses.data ? t('dash.warehouses.meta', { count: warehouses.data.length }) : ''}>
             {warehouses.isLoading ? <LoadingRows count={4}/> : warehouses.isError ? <p className="muted">{t('dash.warehouses.failed')}</p> : <ul className="wh-list">{warehouses.data?.map(w => <li key={w.id}><Link href={`/stock?warehouseId=${w.id}`} className="wh-row" data-testid={`warehouse-${w.id}`}><span className="wh-name"><Warehouse size={15}/><b>{w.name}</b></span><span className="wh-bar"><i style={{ width: `${Math.max(2, (w.units / maxUnits) * 100)}%` }}/></span><span className="wh-num">{fmt(w.units)}<small>{t('dash.warehouses.types', { count: fmt(w.products) })}{w.inTransit > 0 ? ` · ${t('dash.warehouses.inTransit', { count: fmt(w.inTransit) })}` : ''}</small></span></Link></li>)}</ul>}
           </Card>
-          <Card title={t('dash.docs')} meta="MoySklad" action={<Link href="/receipts" className="link" data-testid="link-all-documents">{t('dash.docs.all')} <ArrowRight size={13}/></Link>}>
-            {docs.isLoading ? <LoadingRows count={3}/> : recentDocs.length ? <ul className="doc-list">{recentDocs.map(doc => <li key={doc.id} className="doc-row" data-testid={`doc-${doc.id}`}><span className={`doc-icon doc-${doc.kind}`}>{doc.kind === 'receipt' ? <ArrowDownLeft size={15}/> : doc.kind === 'transfer' ? <ArrowLeftRight size={15}/> : <ClipboardCheck size={15}/>}</span><span className="doc-copy"><b>{docKind(doc.kind)} № {doc.number}</b><small>{[doc.sourceWarehouse, doc.targetWarehouse].filter(Boolean).join(' → ') || '—'}</small></span><span className="doc-meta"><Badge value={doc.status}/><small>{date(doc.date)}</small></span></li>)}</ul> : <p className="muted">{t('dash.docs.empty')}</p>}
+          <Card title={t('dash.docs')} action={<Link href="/receipts" className="link" data-testid="link-all-documents">{t('dash.docs.all')} <ArrowRight size={13}/></Link>}>
+            {chosen.isLoading && !chosen.data ? <LoadingRows count={3}/> : chosen.isError ? <p className="muted">{t('common.loadFailedHint')}</p> : recentDocs.length ? <ul className="doc-list">{recentDocs.map(doc => <li key={doc.id} className="doc-row" data-testid={`doc-${doc.id}`}><span className={`doc-icon doc-${doc.kind}`}>{doc.kind === 'receipt' ? <ArrowDownLeft size={15}/> : doc.kind === 'transfer' ? <ArrowLeftRight size={15}/> : <Banknote size={15}/>}</span><span className="doc-copy"><b>{docKind(doc.kind)} № {doc.number}</b><small>{[doc.sourceWarehouse, doc.targetWarehouse].filter(Boolean).join(' → ') || '—'}</small></span><span className="doc-meta"><Badge value={doc.status}/><small>{date(doc.date)}</small></span></li>)}</ul> : <p className="muted">{t('dash.docs.empty')}</p>}
           </Card>
         </div>
         <div className="dash-col">
           <Card title={t('dash.attention')} meta={t('common.today')}>
             <ul className="attn-list">{attention.map(a => { const Icon = a.icon; return <li key={a.href}><Link href={a.href} className="attn-row" data-testid={`link-${a.href.slice(1)}`}><span className={`attn-icon ${a.tone}`}><Icon size={17}/></span><span className="attn-copy"><b>{a.label}</b><small>{a.note}</small></span><strong className={a.value > 0 ? '' : 'is-zero'}>{fmt(a.value)}</strong><ChevronRight size={16} className="attn-chev"/></Link></li>; })}</ul>
           </Card>
-          <Card title={t('dash.sales7')} meta={sales.data ? money(sales.data.totalAmount) : ''}>
-            {sales.isLoading ? <LoadingRows count={2}/> : sales.data && sales.data.trend.length ? <><div className="spark" role="img" aria-label={t('dash.sales7.chart')}>{sales.data.trend.map(x => <div key={x.date} className="spark-col" title={`${date(x.date)} · ${money(x.amount)}`}><i style={{ height: `${Math.max(3, (x.amount / maxSale) * 100)}%` }}/><span>{weekdayShort(lang, x.date)}</span></div>)}</div><div className="spark-foot"><span>{t('dash.sales7.avg')}</span><b>{money(sales.data.averagePerDay)}</b></div></> : <p className="muted">{t('dash.sales7.empty')}</p>}
+          <Card title={isToday ? t('dash.sales7') : t('dash.sales7.on', { date: shownDay })} meta={trend.length ? money(trend.reduce((sum, point) => sum + point.amount, 0)) : ''}>
+            {(chosen.isLoading || sales.isLoading) && !trend.length ? <LoadingRows count={2}/> : trend.length ? <><div className="spark" role="img" aria-label={t('dash.sales7.chart')}>{trend.map(x => <div key={x.date} className="spark-col" title={`${date(x.date)} · ${money(x.amount)}`}><i style={{ height: `${Math.max(3, (x.amount / maxSale) * 100)}%` }}/><span>{weekdayShort(lang, x.date)}</span></div>)}</div><div className="spark-foot"><span>{t('dash.sales7.avg')}</span><b>{money(trend.reduce((sum, point) => sum + point.amount, 0) / trend.length)}</b></div></> : <p className="muted">{t('dash.sales7.empty')}</p>}
           </Card>
         </div>
       </div>
@@ -379,7 +388,58 @@ function ProductsPage() {
   const q = useListProducts(params); const cache = useQueryClient();
   const dash = useGetDashboard(); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad();
   const [selected, setSelected] = useState<Product | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
+  const [saving, setSaving] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [folderId, setFolderId] = useState('');
+  const [supplierQuery, setSupplierQuery] = useState('');
+  const [supplierHits, setSupplierHits] = useState<Array<{ id: string; name: string }>>([]);
+  const [supplierId, setSupplierId] = useState('');
+  const [supplierName, setSupplierName] = useState('');
+  useEffect(() => {
+    if (!adding) return;
+    void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
+  }, [adding]);
+  useEffect(() => {
+    const text = supplierQuery.trim();
+    if (text.length < 2) { setSupplierHits([]); return; }
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/products/suppliers?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => setSupplierHits(Array.isArray(data.items) ? data.items : [])).catch(() => setSupplierHits([]));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [supplierQuery]);
   const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const saveProduct = async () => {
+    const name = draft.name.trim();
+    if (name.length < 2) return;
+    const amount = (value: string) => value.trim() ? Number(value.replace(/\s/g, '').replace(',', '.')) : null;
+    const priceExclusive = amount(draft.priceExclusive);
+    const pricePremium = amount(draft.pricePremium);
+    const priceStandard = amount(draft.priceStandard);
+    if ([priceExclusive, pricePremium, priceStandard].some(price => price != null && (!Number.isFinite(price) || price < 0))) {
+      setAddError(t('products.addFailed'));
+      return;
+    }
+    setSaving(true);
+    setAddError('');
+    try {
+      const response = await fetch('/api/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, code: draft.code.trim(), article: draft.article.trim(), priceExclusive, pricePremium, priceStandard, barcode: draft.barcode.trim(), folderId, supplierId }) });
+      if (!response.ok) throw new Error(t('products.addFailed'));
+      setAdding(false);
+      setDraft({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
+      setFolderId('');
+      setSupplierId('');
+      setSupplierName('');
+      setSupplierQuery('');
+      setSearch(name);
+      setPage(1);
+      void cache.invalidateQueries();
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : t('products.addFailed'));
+    } finally { setSaving(false); }
+  };
   return <>
     <PageHead title={t('products.title')} subtitle={status.data?.lastSync ? t('products.synced', { time: time(status.data.lastSync) }) : t('products.sub')}/>
     {dash.data && <div className="product-kpis">
@@ -388,11 +448,12 @@ function ProductsPage() {
       <div><span>{t('status.non_moving')}</span><b>{fmt(dash.data.nonMovingCount)}</b></div>
       <div><span>{t('dash.kpi.value')}</span><b>{money(dash.data.stockValue)}</b></div>
     </div>}
-    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button variant="secondary" testId="button-products-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
+    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button testId="button-add-product" onClick={() => { setAddError(''); setAdding(true); }}><Plus size={15}/>{t('products.add')}</Button><Button variant="secondary" testId="button-products-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
     <QueryError q={q} id="products"/>
     <Card className="table-card" title={t('products.catalog')} meta={q.data ? t('products.results', { count: fmt(q.data.total) }) : ''}>
       {q.isLoading ? <LoadingRows/> : q.data?.items.length ? <><ProductTable products={q.data.items} onOpen={setSelected}/><div className="pager"><span>{t('products.range', { total: fmt(q.data.total), from: fmt(Math.min((page - 1) * q.data.pageSize + 1, q.data.total)), to: fmt(Math.min(page * q.data.pageSize, q.data.total)) })}</span><div className="pager-nav"><button className="icon-btn" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label={t('common.prevPage')} data-testid="button-products-prev"><ChevronLeft size={17}/></button><span>{page}</span><button className="icon-btn" disabled={page * q.data.pageSize >= q.data.total} onClick={() => setPage(page + 1)} aria-label={t('common.nextPage')} data-testid="button-products-next"><ChevronRight size={17}/></button></div></div></> : <EmptyState title={search ? t('products.empty.search') : t('products.empty.title')} body={search ? t('products.empty.searchBody') : t('products.empty.body')}/>}
     </Card>
+    {adding && createPortal(<div className="backdrop" onClick={() => { if (!saving) setAdding(false); }}><form className="modal" onClick={e => e.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title"><div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={() => setAdding(false)} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div><label className="field">{t('products.field.name')}<TextInput testId="input-product-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} autoFocus required/></label><label className="field">{t('products.field.code')}<TextInput testId="input-product-code" value={draft.code} onChange={event => setDraft(current => ({ ...current, code: event.target.value }))}/></label><label className="field">{t('products.field.article')}<TextInput testId="input-product-article" value={draft.article} onChange={event => setDraft(current => ({ ...current, article: event.target.value }))}/></label><label className="field">{t('products.field.priceExclusive')}<TextInput testId="input-product-price-exclusive" inputMode="decimal" value={draft.priceExclusive} onChange={event => setDraft(current => ({ ...current, priceExclusive: event.target.value }))}/></label><label className="field">{t('products.field.pricePremium')}<TextInput testId="input-product-price-premium" inputMode="decimal" value={draft.pricePremium} onChange={event => setDraft(current => ({ ...current, pricePremium: event.target.value }))}/></label><label className="field">{t('products.field.priceStandard')}<TextInput testId="input-product-price-standard" inputMode="decimal" value={draft.priceStandard} onChange={event => setDraft(current => ({ ...current, priceStandard: event.target.value }))}/></label><label className="field">{t('products.field.folder')}<select className="input" value={folderId} onChange={event => setFolderId(event.target.value)}><option value="">{t('products.folderEmpty')}</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label><label className="field">{t('products.field.supplier')}<input className="input" value={supplierName || supplierQuery} placeholder={t('products.supplierSearch')} onChange={event => { setSupplierId(''); setSupplierName(''); setSupplierQuery(event.target.value); }} />{supplierHits.map(item => <button key={item.id} type="button" className="btn btn-secondary btn-sm" onClick={() => { setSupplierId(item.id); setSupplierName(item.name); setSupplierHits([]); }}>{item.name}</button>)}</label><label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" value={draft.barcode} onChange={event => setDraft(current => ({ ...current, barcode: event.target.value }))}/></label>{addError && <p className="error-text" data-testid="status-product-add-error">{addError}</p>}<div className="form-actions"><Button testId="button-save-product" type="submit" disabled={saving || draft.name.trim().length < 2}>{saving ? t('products.saving') : t('products.saved')}</Button><Button variant="secondary" testId="button-cancel-product" disabled={saving} onClick={() => setAdding(false)}>{t('common.cancel')}</Button></div></form></div>, document.body)}
     {selected && createPortal(<div className="backdrop" onClick={() => setSelected(null)}><div className="modal product-modal" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="product-detail-title"><div className="modal-top"><div><p className="eyebrow">{t('products.detail')}</p><h2 id="product-detail-title">{selected.name}</h2></div><button className="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')} data-testid="button-close-product"><X size={18}/></button></div>
       <div className="product-sheet">{selected.imageUrl ? <img src={selected.imageUrl} alt=""/> : <span className="product-sheet-empty"><Package size={28}/></span>}<div><Badge value={selected.stockStatus}/><p className="muted">{[selected.code, selected.article].filter(Boolean).join(' · ') || t('common.noCode')}</p></div></div>
       <div className="detail-grid">
@@ -932,7 +993,7 @@ function SettingsPage() {
       {sync.data && <Notice kind={sync.data.status === 'failed' ? 'error' : 'success'} title={statusLabel(sync.data.status)} testId="status-settings-sync-result">{sync.data.error || t('settings.sync.result', { products: fmt(sync.data.productCount), warehouses: fmt(sync.data.warehouseCount) })}</Notice>}
     </section>
     <div className="two-col settings-grid">
-      <Card title={t('settings.language')}><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? 'O‘zbek tili' : 'Русский язык'}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
+      <Card title={t('settings.language')}><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? t('lang.uz') : t('lang.ru')}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
       <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>
     </div>
   </>;

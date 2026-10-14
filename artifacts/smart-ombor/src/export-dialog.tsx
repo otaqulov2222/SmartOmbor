@@ -108,7 +108,7 @@ export function ReportsHub() {
         <div className="report-side-head"><span className="option-icon"><Icon size={20}/></span><div><p className="eyebrow">{t('reports.preview')}</p><h2>{t(KIND_META[kind].title)}</h2></div></div>
         <p className="report-side-copy">{t(KIND_META[kind].detail)}</p>
         <div className="facts">
-          <div><span>{t('export.format')}</span><b>Excel · PDF</b></div>
+          <div><span>{t('export.format')}</span><b>{t('export.excel')} · {t('export.pdf')}</b></div>
           <div><span>{t('export.period')}</span><b>{KIND_META[kind].period ? t('reports.periods') : t('export.snapshot')}</b></div>
         </div>
         <div className="form-actions"><button type="button" className="btn btn-primary" onClick={() => setOpen(true)} data-testid="button-export-report"><Download size={16}/>{t('common.export')}</button></div>

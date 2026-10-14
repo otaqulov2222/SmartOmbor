@@ -46,6 +46,22 @@ export async function moyskladBinary(url: string): Promise<{ type: string; body:
   };
 }
 
+export async function moyskladSend<T>(path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
+  const token = moyskladToken();
+  if (!token) throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json;charset=utf-8",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new MoySkladError("rejected", response.status);
+  return (await response.json()) as T;
+}
+
 export async function moysklad<T>(path: string): Promise<T> {
   const token = moyskladToken();
   if (!token) {

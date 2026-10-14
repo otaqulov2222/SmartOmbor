@@ -1,6 +1,7 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { dataFile } from "./data-dir";
 
 export type ColorLine = { name: string; quantity: number };
 
@@ -17,6 +18,8 @@ export type ShipmentLine = {
   price: number;
   colors: ColorLine[];
   note: string;
+  productId: string | null;
+  productName: string | null;
 };
 
 export type Shipment = {
@@ -28,6 +31,8 @@ export type Shipment = {
   note: string;
   lines: ShipmentLine[];
   createdAt: string;
+  moyskladId: string | null;
+  moyskladNumber: string | null;
 };
 
 export type PartnerAccount = {
@@ -41,6 +46,8 @@ export type PartnerAccount = {
   passwordPlain: string | null;
   active: boolean;
   createdAt: string;
+  counterpartyId: string | null;
+  counterpartyName: string | null;
 };
 
 type Session = { token: string; factoryId: string; expiresAt: string };
@@ -51,7 +58,7 @@ type Store = {
   sessions: Session[];
 };
 
-const filePath = path.resolve(process.cwd(), "artifacts/api-server/data/partners.json");
+const filePath = dataFile("partners.json");
 
 function emptyStore(): Store {
   return { accounts: [], shipments: [], sessions: [] };
@@ -99,6 +106,8 @@ export function publicAccount(account: PartnerAccount) {
     login: account.login,
     active: account.active,
     createdAt: account.createdAt,
+    counterpartyId: account.counterpartyId || null,
+    counterpartyName: account.counterpartyName || null,
   };
 }
 
@@ -132,13 +141,15 @@ export function createAccount(input: { name: string; code: string; catalogName: 
     passwordPlain: input.password,
     active: true,
     createdAt: new Date().toISOString(),
+    counterpartyId: null,
+    counterpartyName: null,
   };
   store.accounts.push(account);
   save(store);
   return { account: publicAccount(account), password: input.password };
 }
 
-export function updateAccount(id: string, input: { name: string; code: string; login: string; password?: string }) {
+export function updateAccount(id: string, input: { name: string; code: string; login: string; password?: string; counterpartyId?: string | null; counterpartyName?: string | null }) {
   const store = load();
   const account = store.accounts.find((item) => item.id === id);
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -156,6 +167,10 @@ export function updateAccount(id: string, input: { name: string; code: string; l
   account.catalogName = name;
   account.code = code;
   account.login = login;
+  if ("counterpartyId" in input) {
+    account.counterpartyId = input.counterpartyId?.trim() || null;
+    account.counterpartyName = input.counterpartyName?.trim() || null;
+  }
   const password = input.password?.trim() || "";
   if (password) {
     if (password.length < 6) throw Object.assign(new Error("password_short"), { status: 400 });
@@ -262,6 +277,8 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     price: Math.max(0, Number(raw.price) || 0),
     colors,
     note: String(raw.note ?? "").trim(),
+    productId: null,
+    productName: null,
   };
 }
 
@@ -281,6 +298,8 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
     note: String(input.note ?? "").trim(),
     lines,
     createdAt: new Date().toISOString(),
+    moyskladId: null,
+    moyskladNumber: null,
   };
   store.shipments.push(shipment);
   save(store);
@@ -293,8 +312,19 @@ export function updateShipment(id: string, input: { date?: string; note?: string
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
   const account = store.accounts.find((item) => item.id === shipment.factoryId);
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
-  const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.productCode);
+  const lines = (input.lines ?? []).map((line) => {
+    const next = cleanLine(line, account.code);
+    const previous = shipment.lines.find((item) => item.id === line.id);
+    if (!previous?.productId) return next;
+    const same = previous.productCode === next.productCode && previous.model === next.model && previous.size === next.size;
+    if (!same) return next;
+    next.id = previous.id;
+    next.productId = previous.productId;
+    next.productName = previous.productName;
+    return next;
+  }).filter((line) => line.productCode);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
+  if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   if (input.date) shipment.date = String(input.date).slice(0, 10);
   shipment.note = String(input.note ?? shipment.note).trim();
   shipment.lines = lines;
@@ -304,6 +334,9 @@ export function updateShipment(id: string, input: { date?: string; note?: string
 
 export function deleteShipment(id: string) {
   const store = load();
+  const shipment = store.shipments.find((item) => item.id === id);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   const before = store.shipments.length;
   store.shipments = store.shipments.filter((item) => item.id !== id);
   if (store.shipments.length === before) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -311,10 +344,35 @@ export function deleteShipment(id: string) {
   return { ok: true };
 }
 
+export function linkShipmentLine(shipmentId: string, lineId: string, product: { id: string; name: string } | null) {
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === shipmentId);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
+  const line = shipment.lines.find((item) => item.id === lineId);
+  if (!line) throw Object.assign(new Error("not_found"), { status: 404 });
+  line.productId = product?.id ?? null;
+  line.productName = product?.name ?? null;
+  save(store);
+  return shipmentView(shipment);
+}
+
+export function markShipmentPosted(shipmentId: string, posted: { id: string; number: string }) {
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === shipmentId);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  shipment.moyskladId = posted.id;
+  shipment.moyskladNumber = posted.number;
+  shipment.status = "accepted";
+  save(store);
+  return shipmentView(shipment);
+}
+
 export function setShipmentStatus(id: string, status: "sent" | "accepted" | "declined") {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (shipment.moyskladId && status !== "accepted") throw Object.assign(new Error("posted"), { status: 409 });
   shipment.status = status;
   save(store);
   return shipmentView(shipment);

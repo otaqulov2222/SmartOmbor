@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -50,6 +52,18 @@ if (process.env.CLERK_SECRET_KEY) {
 }
 
 app.use("/api", router);
+
+const webRoot = path.resolve(process.cwd(), "artifacts/smart-ombor/dist/public");
+if (existsSync(webRoot)) {
+  app.use(express.static(webRoot, { index: false, maxAge: "1h" }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api")) return next();
+    res.sendFile(path.join(webRoot, "index.html"), (error) => {
+      if (error) next(error);
+    });
+  });
+}
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = err instanceof Error ? err.message : "Unexpected error";

@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: smart-ombor
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install --frozen-lockfile && PORT=8080 BASE_PATH=/ pnpm --filter @workspace/smart-ombor build && pnpm --filter @workspace/api-server build
+    startCommand: node --enable-source-maps artifacts/api-server/dist/index.mjs
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BASE_PATH
+        value: /
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=460
+      - key: MOYSKLAD_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false

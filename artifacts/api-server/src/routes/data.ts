@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { dataFile } from "../lib/data-dir";
 import { Router, type IRouter, type Request } from "express";
 import {
   GetCurrentUserResponse,
@@ -23,10 +24,10 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
-import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, money, MoySkladError } from "../lib/moysklad";
+import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
 const router: IRouter = Router();
 
@@ -158,6 +159,97 @@ router.get("/dashboard", async (_req, res, next) => {
   }
 });
 
+function shiftDay(iso: string, delta: number) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day));
+  next.setUTCDate(next.getUTCDate() + delta);
+  return next.toISOString().slice(0, 10);
+}
+
+function tashkentToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tashkent", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+type DayDocument = {
+  id: string;
+  kind: "receipt" | "transfer" | "sale";
+  number: string;
+  date: string;
+  status: "posted" | "draft";
+  sourceWarehouse: string | null;
+  targetWarehouse: string | null;
+};
+
+type DaySnapshot = {
+  date: string;
+  sales: number;
+  incoming: number;
+  trend: Array<{ date: string; amount: number }>;
+  documents: DayDocument[];
+};
+
+const dayCache = new Map<string, { savedAt: number; body: DaySnapshot }>();
+
+router.get("/dashboard/day", async (req, res, next) => {
+  try {
+    const date = String(req.query.date ?? "");
+    const today = tashkentToday();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) {
+      res.status(400).json({ error: "date" });
+      return;
+    }
+    const cached = dayCache.get(date);
+    const freshFor = date === today ? 2 * 60_000 : 10 * 60_000;
+    if (cached && Date.now() - cached.savedAt < freshFor) {
+      res.json(cached.body);
+      return;
+    }
+    const from = shiftDay(date, -6);
+    const dayFilter = encodeURIComponent(`moment>=${date} 00:00:00;moment<=${date} 23:59:59`);
+    const weekFilter = encodeURIComponent(`moment>=${from} 00:00:00;moment<=${date} 23:59:59`);
+    type Row = { id?: string; name?: string; moment?: string; sum?: number; applicable?: boolean; agent?: { name?: string }; store?: { name?: string }; sourceStore?: { name?: string }; targetStore?: { name?: string } };
+    const [demands, supplies, dayDemands, daySupplies, dayMoves] = await Promise.all([
+      moyskladAll<{ moment?: string; sum?: number }>(`/entity/demand?filter=${weekFilter}`).catch(() => null),
+      moysklad<{ meta: { size: number } }>(`/entity/supply?limit=1&filter=${dayFilter}`),
+      moysklad<{ rows: Row[] }>(`/entity/demand?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
+      moysklad<{ rows: Row[] }>(`/entity/supply?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
+      moysklad<{ rows: Row[] }>(`/entity/move?limit=8&order=moment,desc&filter=${dayFilter}&expand=sourceStore,targetStore`),
+    ]);
+    const amounts = new Map<string, number>();
+    for (let index = 0; index < 7; index += 1) amounts.set(shiftDay(from, index), 0);
+    for (const row of demands?.rows ?? []) {
+      const key = (row.moment ?? "").slice(0, 10);
+      if (!amounts.has(key)) continue;
+      amounts.set(key, (amounts.get(key) ?? 0) + (money(row.sum) ?? 0));
+    }
+    const asDoc = (row: Row, kind: DayDocument["kind"], source: string | null, target: string | null): DayDocument => ({
+      id: row.id || `${kind}-${row.name}-${row.moment}`,
+      kind,
+      number: row.name || "—",
+      date: row.moment ? row.moment.replace(" ", "T") : `${date}T00:00:00`,
+      status: row.applicable === false ? "draft" : "posted",
+      sourceWarehouse: source,
+      targetWarehouse: target,
+    });
+    const documents = [
+      ...daySupplies.rows.map((row) => asDoc(row, "receipt", row.agent?.name || null, row.store?.name || null)),
+      ...dayDemands.rows.map((row) => asDoc(row, "sale", row.agent?.name || null, row.store?.name || null)),
+      ...dayMoves.rows.map((row) => asDoc(row, "transfer", row.sourceStore?.name || null, row.targetStore?.name || null)),
+    ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const body: DaySnapshot = {
+      date,
+      sales: amounts.get(date) ?? 0,
+      incoming: supplies.meta.size,
+      trend: [...amounts.entries()].map(([key, amount]) => ({ date: key, amount })),
+      documents,
+    };
+    dayCache.set(date, { savedAt: Date.now(), body });
+    res.json(body);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/dashboard/warehouses", async (_req, res, next) => {
   try {
     const catalog = await loadCatalog();
@@ -195,6 +287,258 @@ function matchesSearch(product: CatalogProduct, search: string): boolean {
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(needle));
 }
+
+function ean13(code: string) {
+  if (!/^\d{13}$/.test(code)) return false;
+  const digits = [...code].map(Number);
+  const check = digits.pop() ?? -1;
+  let sum = 0;
+  for (let i = 0; i < digits.length; i += 1) sum += digits[digits.length - 1 - i] * (i % 2 === 0 ? 3 : 1);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+function som(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const price = Number(value);
+  if (!Number.isFinite(price) || price < 0) return Number.NaN;
+  return price;
+}
+
+router.post("/products", async (req, res, next) => {
+  try {
+    const name = String(req.body?.name ?? "").trim();
+    const code = String(req.body?.code ?? "").trim();
+    const article = String(req.body?.article ?? "").trim();
+    const barcode = String(req.body?.barcode ?? "").trim();
+    const prices = {
+      Exclusive: som(req.body?.priceExclusive ?? req.body?.price),
+      Premium: som(req.body?.pricePremium),
+      Standard: som(req.body?.priceStandard),
+    };
+    if (name.length < 2 || Object.values(prices).some((price) => Number.isNaN(price))) {
+      res.status(400).json({ error: "rejected" });
+      return;
+    }
+    const payload: Record<string, unknown> = { name };
+    if (code) payload.code = code;
+    if (article) payload.article = article;
+    if (barcode) payload.barcodes = [ean13(barcode) ? { ean13: barcode } : { code128: barcode }];
+    const folderId = String(req.body?.folderId ?? "").trim();
+    const supplierId = String(req.body?.supplierId ?? "").trim();
+    let folderName: string | null = null;
+    let supplierName: string | null = null;
+    if (folderId) {
+      try {
+        const folder = await moysklad<{ name?: string; meta: { href: string; type: string; mediaType: string } }>(`/entity/productfolder/${encodeURIComponent(folderId)}`);
+        payload.productFolder = { meta: folder.meta };
+        folderName = folder.name || null;
+      } catch {
+        res.status(400).json({ error: "rejected" });
+        return;
+      }
+    }
+    if (supplierId) {
+      try {
+        const supplier = await moysklad<{ name?: string; meta: { href: string; type: string; mediaType: string } }>(`/entity/counterparty/${encodeURIComponent(supplierId)}`);
+        payload.supplier = { meta: supplier.meta };
+        supplierName = supplier.name || null;
+      } catch {
+        res.status(400).json({ error: "rejected" });
+        return;
+      }
+    }
+    const quoted = (Object.entries(prices) as Array<[string, number | null]>).filter((entry): entry is [string, number] => entry[1] != null);
+    if (quoted.length > 0) {
+      const [priceTypes, currencies] = await Promise.all([
+        moysklad<Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>>("/context/companysettings/pricetype"),
+        moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
+      ]);
+      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+      const salePrices = quoted.flatMap(([typeName, price]) => {
+        const priceType = priceTypes.find((row) => row.name === typeName)?.meta;
+        return currency && priceType ? [{ value: Math.round(price * 100), currency: { meta: currency }, priceType: { meta: priceType } }] : [];
+      });
+      if (!currency || salePrices.length !== quoted.length) {
+        res.status(400).json({ error: "rejected" });
+        return;
+      }
+      payload.salePrices = salePrices;
+    }
+    const created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
+    addCatalogProduct({
+      id: created.id,
+      name: created.name,
+      code: created.code || code || null,
+      article: created.article || article || null,
+      barcodes: barcode ? [barcode] : [],
+      factory: supplierName,
+      category: folderName,
+      unit: "шт",
+      packType: null,
+      packSize: 1,
+      imageUrl: null,
+      stock: 0,
+      available: 0,
+      cost: null,
+      salePrice: prices.Exclusive ?? prices.Premium ?? prices.Standard,
+      lastSale: null,
+      lastReceipt: null,
+      sales7: 0,
+      sales30: 0,
+      sales60: 0,
+      sales90: 0,
+      daysCover: null,
+      stockStatus: "out",
+      inTransit: 0,
+    });
+    void recordAudit({ action: "product.created", entityType: "product", entityId: created.id, details: created.name });
+    res.status(201).json({ id: created.id, name: created.name });
+  } catch (error) {
+    if (error instanceof MoySkladError) {
+      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected" });
+      return;
+    }
+    next(error);
+  }
+});
+
+async function uzsSalePrices(quoted: Array<[string, number]>) {
+  if (quoted.length === 0) return [];
+  const [priceTypes, currencies] = await Promise.all([
+    moysklad<Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>>("/context/companysettings/pricetype"),
+    moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
+  ]);
+  const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+  const salePrices = quoted.flatMap(([typeName, price]) => {
+    const priceType = priceTypes.find((row) => row.name === typeName)?.meta;
+    return currency && priceType ? [{ value: Math.round(price * 100), currency: { meta: currency }, priceType: { meta: priceType } }] : [];
+  });
+  if (!currency || salePrices.length !== quoted.length) return null;
+  return salePrices;
+}
+
+router.get("/products/folders", async (_req, res, next) => {
+  try {
+    const page = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
+    res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: row.pathName || row.name })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/suppliers", async (req, res, next) => {
+  try {
+    const search = String(req.query.search ?? "").trim();
+    if (search.length < 2) {
+      res.json({ items: [] });
+      return;
+    }
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(search)}`);
+    res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: row.name })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/:id/editor", async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const row = await moysklad<{
+      id?: string;
+      name?: string;
+      code?: string;
+      article?: string;
+      barcodes?: Array<Record<string, string>>;
+      salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
+    }>(`/entity/product/${encodeURIComponent(id)}?expand=salePrices.priceType`);
+    const prices = { Exclusive: null as number | null, Premium: null as number | null, Standard: null as number | null };
+    for (const price of row.salePrices ?? []) {
+      const typeName = price.priceType?.name;
+      if ((typeName === "Exclusive" || typeName === "Premium" || typeName === "Standard") && price.value != null) {
+        prices[typeName] = Math.round(price.value) / 100;
+      }
+    }
+    const barcodes = (row.barcodes ?? []).flatMap((item) => Object.values(item)).filter((value) => value.length > 0);
+    res.json({ id: row.id || id, name: row.name || "", code: row.code || "", article: row.article || "", barcode: barcodes[0] || "", prices });
+  } catch (error) {
+    if (error instanceof MoySkladError) {
+      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected" });
+      return;
+    }
+    next(error);
+  }
+});
+
+router.put("/products/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const name = String(req.body?.name ?? "").trim();
+    const code = String(req.body?.code ?? "").trim();
+    const article = String(req.body?.article ?? "").trim();
+    const barcode = String(req.body?.barcode ?? "").trim();
+    const prices = {
+      Exclusive: som(req.body?.priceExclusive),
+      Premium: som(req.body?.pricePremium),
+      Standard: som(req.body?.priceStandard),
+    };
+    if (name.length < 2 || Object.values(prices).some((price) => Number.isNaN(price))) {
+      res.status(400).json({ error: "rejected" });
+      return;
+    }
+    const current = await moysklad<{
+      barcodes?: Array<Record<string, string>>;
+      salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
+    }>(`/entity/product/${encodeURIComponent(id)}?expand=salePrices.priceType`);
+    const kept = { Exclusive: null as number | null, Premium: null as number | null, Standard: null as number | null };
+    for (const price of current.salePrices ?? []) {
+      const typeName = price.priceType?.name;
+      if ((typeName === "Exclusive" || typeName === "Premium" || typeName === "Standard") && price.value != null) {
+        kept[typeName] = Math.round(price.value) / 100;
+      }
+    }
+    const merged = {
+      Exclusive: prices.Exclusive ?? kept.Exclusive,
+      Premium: prices.Premium ?? kept.Premium,
+      Standard: prices.Standard ?? kept.Standard,
+    };
+    const quoted = (Object.entries(merged) as Array<[string, number | null]>).filter((entry): entry is [string, number] => entry[1] != null);
+    const payload: Record<string, unknown> = { name };
+    if (code) payload.code = code;
+    if (article) payload.article = article;
+    const existingCodes = (current.barcodes ?? []).flatMap((item) => Object.values(item)).filter((value) => value.length > 0);
+    if (barcode && barcode !== existingCodes[0]) {
+      payload.barcodes = [barcode, ...existingCodes.filter((value) => value !== barcode)].map((value) => (ean13(value) ? { ean13: value } : { code128: value }));
+    }
+    const userPriced = Object.values(prices).some((price) => price != null);
+    if (userPriced) {
+      const salePrices = await uzsSalePrices(quoted);
+      if (!salePrices) {
+        res.status(400).json({ error: "rejected" });
+        return;
+      }
+      payload.salePrices = salePrices;
+    }
+    const saved = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>(`/entity/product/${encodeURIComponent(id)}`, payload, "PUT");
+    const nextBarcodes = Array.isArray(payload.barcodes)
+      ? (payload.barcodes as Array<Record<string, string>>).flatMap((item) => Object.values(item))
+      : undefined;
+    updateCatalogProduct(id, {
+      name: saved.name,
+      code: saved.code || code || null,
+      article: saved.article || article || null,
+      ...(nextBarcodes ? { barcodes: nextBarcodes } : {}),
+      ...(userPriced ? { salePrice: merged.Exclusive ?? merged.Premium ?? merged.Standard } : {}),
+    });
+    void recordAudit({ action: "product.updated", entityType: "product", entityId: id, details: saved.name });
+    res.json({ id, name: saved.name });
+  } catch (error) {
+    if (error instanceof MoySkladError) {
+      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected" });
+      return;
+    }
+    next(error);
+  }
+});
 
 router.get("/products", async (req, res, next) => {
   try {
@@ -494,7 +838,7 @@ router.get("/analytics/rebalance", async (_req, res, next) => {
   }
 });
 
-const SALES_CACHE_FILE = path.resolve(process.cwd(), "artifacts/api-server/data/sales-cache.json");
+const SALES_CACHE_FILE = dataFile("sales-cache.json");
 const SALES_FRESH_MS = 3 * 60 * 1000;
 
 type SalesBody = ReturnType<typeof GetSalesAnalyticsResponse.parse>;

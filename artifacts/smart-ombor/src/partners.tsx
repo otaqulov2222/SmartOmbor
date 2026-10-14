@@ -3,15 +3,16 @@ import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Banknote, Boxes, Check, ChevronRight, Copy, Download, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
 import { Link, useLocation, useSearch } from 'wouter';
-import { useListProducts } from '@workspace/api-client-react';
+import { useListProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
 import { downloadXlsx, type Sheet } from '@/lib/xlsx';
 
-type Account = { id: string; name: string; code: string; catalogName: string; login: string; password?: string | null; active: boolean; createdAt: string };
+type Account = { id: string; name: string; code: string; catalogName: string; login: string; password?: string | null; active: boolean; createdAt: string; counterpartyId?: string | null; counterpartyName?: string | null };
 type ColorLine = { name: string; quantity: number };
 type Line = {
   id: string; factoryCode: string; sectionCode: string; productCode: string; model: string; size: string;
   pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[]; note: string;
+  productId?: string | null; productName?: string | null;
 };
 function todayKey() {
   const now = new Date();
@@ -21,6 +22,7 @@ function todayKey() {
 type Shipment = {
   id: string; number: string; date: string; status: 'sent' | 'accepted' | 'declined'; note: string; createdAt: string;
   lines: Line[]; pairs: number; boxes: number; amount: number;
+  moyskladId?: string | null; moyskladNumber?: string | null;
 };
 type Row = { name: string; productCount: number; stock: number; account: Account | null; shipmentCount: number; pendingCount?: number; lastShipment: string | null };
 
@@ -65,7 +67,46 @@ function asNumber(value: string) {
 }
 
 function lineUnits(line: Line) {
-  return line.pairs > 0 ? line.pairs : line.quantity;
+  if (line.pairs > 0) return line.pairs;
+  if (line.quantity > 0) return line.quantity;
+  return line.colors.reduce((sum, color) => sum + color.quantity, 0);
+}
+
+function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
+  const { t, fmt } = useI18n();
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<Array<{ id: string; name: string; code: string | null; stock: number }>>([]);
+  const [busy, setBusy] = useState(false);
+  const matches = useQuery({
+    queryKey: ['shipment-matches', shipmentId],
+    queryFn: async () => {
+      const response = await fetch(`/api/partner-factories/shipments/${shipmentId}/matches`);
+      if (!response.ok) throw new Error('matches');
+      return response.json() as Promise<{ lines: Array<{ id: string; products: Array<{ id: string; name: string; code: string | null; stock: number }> }> }>;
+    },
+  });
+  useEffect(() => {
+    const text = query.trim();
+    if (text.length < 2) { setHits([]); return; }
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/products?search=${encodeURIComponent(text)}&page=1&pageSize=6`).then(response => response.json()).then(data => {
+        const items = Array.isArray(data.items) ? data.items as Array<{ id: string; name: string; code: string | null; stock: number }> : [];
+        setHits(items.map(item => ({ id: item.id, name: item.name, code: item.code, stock: item.stock })));
+      }).catch(() => setHits([]));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  const link = async (productId: string | null) => {
+    setBusy(true);
+    await fetch(`/api/partner-factories/shipments/${shipmentId}/lines/${line.id}/link`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ productId }) });
+    await onChanged();
+    setBusy(false);
+  };
+  if (locked) return line.productName ? <p className="waybill-link"><b>{line.productName}</b></p> : null;
+  if (line.productId) return <div className="waybill-link"><b>{t('partners.linked')}</b><span>{line.productName}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
+  const options = matches.data?.lines.find(item => item.id === line.id)?.products ?? [];
+  const list = hits.length ? hits : options;
+  return <div className="waybill-link"><input className="input" value={query} placeholder={t('partners.link')} onChange={event => setQuery(event.target.value)} />{list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void link(item.id)}>{item.name}{item.code ? ` · ${item.code}` : ''} · {fmt(item.stock)}</button>)}{!list.length && <small>{t('partners.noMatch')}</small>}</div>;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -244,6 +285,21 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [day, setDay] = useState(todayKey);
   const [editing, setEditing] = useState<Shipment | null>(null);
   const [removing, setRemoving] = useState<Shipment | null>(null);
+  const [posting, setPosting] = useState<Shipment | null>(null);
+  const [storeId, setStoreId] = useState('');
+  const [postError, setPostError] = useState('');
+  const [agentId, setAgentId] = useState(row.account?.counterpartyId || '');
+  const [agentLabel, setAgentLabel] = useState(row.account?.counterpartyName || '');
+  const [agentQuery, setAgentQuery] = useState('');
+  const [agentHits, setAgentHits] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    const text = agentQuery.trim();
+    if (text.length < 2) { setAgentHits([]); return; }
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/counterparties?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => setAgentHits(Array.isArray(data.items) ? data.items : [])).catch(() => setAgentHits([]));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [agentQuery]);
   useEffect(() => {
     setName(row.name);
     setCode(row.account?.code || '');
@@ -259,6 +315,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     },
   });
   const products = useListProducts({ factory: row.name, page: 1, pageSize: 12 });
+  const warehouses = useListWarehouses();
   const shipments = detail.data?.shipments ?? [];
 
   const saveAccess = async () => {
@@ -267,7 +324,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const response = await fetch(row.account ? `/api/partner-factories/${row.account.id}` : '/api/partner-factories', {
         method: row.account ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, catalogName: name, code, login, password: password || undefined }),
+        body: JSON.stringify({ name, catalogName: name, code, login, password: password || undefined, counterpartyId: agentId, counterpartyName: agentLabel }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -303,6 +360,23 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     await cache.invalidateQueries({ queryKey: ['partner-detail', row.account?.id] });
     await cache.invalidateQueries({ queryKey: ['partner-factories'] });
     await cache.invalidateQueries({ queryKey: ['partner-alerts'] });
+  };
+
+  const postSupply = async () => {
+    if (!posting) return;
+    const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
+    if (!chosen) { setPostError(t('partners.storeMissing')); return; }
+    setBusy(true); setPostError('');
+    try {
+      const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : t('partners.supplyFailed'));
+        return;
+      }
+      setPosting(null);
+      await refreshShipments();
+    } finally { setBusy(false); }
   };
 
   const setStatus = async (id: string, status: 'accepted' | 'declined') => {
@@ -362,17 +436,21 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
           <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
           <strong className="waybill-sum">{money(shipment.amount)}</strong>
         </header>
-        <div className="mini-wrap"><table className="mini-table"><thead><tr><th>{t('zavod.section')}</th><th>{t('zavod.product')}</th><th>{t('zavod.model')}</th><th>{t('zavod.size')}</th><th>{t('zavod.pairs')}</th><th>{t('zavod.boxes')}</th><th>{t('zavod.quantity')}</th><th>{t('zavod.price')}</th><th>{t('zavod.colors')}</th><th>{t('zavod.sum')}</th></tr></thead><tbody>{shipment.lines.map(line => { const units = line.pairs > 0 ? line.pairs : line.quantity; const colors = line.colors.filter(color => color.name && color.quantity > 0); return <tr key={line.id}><td>{line.sectionCode || '—'}</td><td><b>{line.productCode || '—'}</b></td><td>{line.model || '—'}</td><td>{line.size || '—'}</td><td className="num">{fmt(line.pairs)}</td><td className="num">{fmt(line.boxes)}</td><td className="num">{fmt(line.quantity)}</td><td className="num">{line.price ? money(line.price) : '—'}</td><td>{colors.length ? <span className="color-pills">{colors.map(color => <i key={color.name}>{color.name} {fmt(color.quantity)}</i>)}</span> : '—'}</td><td className="num">{money(units * line.price)}</td></tr>; })}</tbody></table></div>
+        <div className="mini-wrap"><table className="mini-table"><thead><tr><th>{t('zavod.section')}</th><th>{t('zavod.product')}</th><th>{t('zavod.model')}</th><th>{t('zavod.size')}</th><th>{t('zavod.pairs')}</th><th>{t('zavod.boxes')}</th><th>{t('zavod.quantity')}</th><th>{t('zavod.price')}</th><th>{t('zavod.colors')}</th><th>{t('zavod.sum')}</th></tr></thead><tbody>{shipment.lines.map(line => { const units = line.pairs > 0 ? line.pairs : line.quantity; const colors = line.colors.filter(color => color.name && color.quantity > 0); return <tr key={line.id}><td data-label={t('zavod.section')}>{line.sectionCode || '—'}</td><td data-label={t('zavod.product')}><b>{line.productCode || '—'}</b></td><td data-label={t('zavod.model')}>{line.model || '—'}</td><td data-label={t('zavod.size')}>{line.size || '—'}</td><td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td><td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td><td className="num" data-label={t('zavod.quantity')}>{fmt(line.quantity)}</td><td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td><td data-label={t('zavod.colors')}>{colors.length ? <span className="color-pills">{colors.map(color => <i key={color.name}>{color.name} {fmt(color.quantity)}</i>)}</span> : '—'}</td><td className="num" data-label={t('zavod.sum')}>{money(units * line.price)}</td></tr>; })}</tbody></table></div>
         {shipment.note && <p className="waybill-note">{shipment.note}</p>}
+        <div className="waybill-links">{shipment.lines.map(line => <LineLink key={line.id} shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/>)}</div>
+        {shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
+        {!shipment.moyskladId && shipment.lines.some(line => lineUnits(line) > 0 && !line.productId) && <p className="waybill-note">{t('partners.supplyNeed')}</p>}
         <div className="waybill-actions">
           <div className="waybill-tools">
             <WaybillExport shipments={[shipment]} filename={`${row.account?.code || row.name}-${shipment.number}`} title={`${t('zavod.title')} ${shipment.number}`} factory={row.name} code={row.account?.code || ''}/>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(shipment)}><Pencil size={14}/>{t('partners.edit')}</button>
-            <button type="button" className="btn btn-ghost btn-sm factory-delete" onClick={() => setRemoving(shipment)}><Trash2 size={14}/>{t('partners.delete')}</button>
+            {!shipment.moyskladId && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(shipment)}><Pencil size={14}/>{t('partners.edit')}</button>}
+            {!shipment.moyskladId && <button type="button" className="btn btn-ghost btn-sm factory-delete" onClick={() => setRemoving(shipment)}><Trash2 size={14}/>{t('partners.delete')}</button>}
           </div>
           <div className="waybill-decide">
-            {shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
-            {shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
+            {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
+            {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
+            {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" disabled={shipment.lines.some(line => lineUnits(line) > 0 && !line.productId)} onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
           </div>
         </div>
       </article>)}</div> : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
@@ -382,6 +460,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <ul className="partner-products">{products.data.items.map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
       <Link href="/factories" className="link">{t('nav.factories')}</Link>
     </section>}
+    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.filter(line => lineUnits(line) > 0).length), units: fmt(posting.lines.reduce((sum, line) => sum + lineUnits(line), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).map(line => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = new Set(mixed).size > 1; return <li key={line.id}><b>{line.productName}</b><small>{t('partners.supplyUnits', { units: fmt(lineUnits(line)) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{fmt(lineUnits(line))}</span></li>; })}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">
       <div className="modal-top"><div><p className="eyebrow">{row.name}</p><h2 id="partner-settings-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={() => setSettings(false)} aria-label={t('common.close')}><X size={18}/></button></div>
       <div className="form-grid">
@@ -389,6 +468,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         <label className="field"><span>{t('partners.code')}</span><input className="input" value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="BOP80" data-testid="input-partner-code"/></label>
         <label className="field"><span>{t('partners.login')}</span><input className="input" value={login} onChange={e => setLogin(e.target.value.toLowerCase())} data-testid="input-partner-login"/></label>
         <label className="field"><span>{t('partners.password')}</span><input className="input" value={password} onChange={e => setPassword(e.target.value)} placeholder={row.account ? t('partners.passwordKeep') : t('partners.generate')} data-testid="input-partner-password"/></label>
+        {row.account && <label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agentLabel || agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgentId(''); setAgentLabel(''); setAgentQuery(event.target.value); }} />{agentHits.map(item => <button key={item.id} type="button" className="btn btn-secondary btn-sm" onClick={() => { setAgentId(item.id); setAgentLabel(item.name); setAgentHits([]); }}>{item.name}</button>)}{agentId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAgentId(''); setAgentLabel(''); }}>{t('partners.counterpartyClear')}</button>}</label>}
       </div>
       {row.account && <div className="facts"><div><span>{t('partners.password')}</span><b className="secret">{passwordShown || t('partners.passwordMissing')}</b></div></div>}
       {error && <p className="error-text">{error}</p>}
@@ -436,6 +516,7 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
           note,
           lines: filled.map(line => ({
             sectionCode: line.sectionCode,
+            id: line.key,
             productCode: line.productCode.trim(),
             model: line.model,
             size: line.size,

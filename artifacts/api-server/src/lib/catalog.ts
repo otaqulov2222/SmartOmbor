@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { dataFile } from "./data-dir";
 import { idFromHref, money, moysklad, moyskladAll, MoySkladError } from "./moysklad";
 import { logger } from "./logger";
 
@@ -150,7 +151,7 @@ interface DocRow {
 }
 
 const LOW_STOCK = 3;
-const CACHE_FILE = path.resolve(process.cwd(), "artifacts/api-server/data/catalog-cache.json");
+const CACHE_FILE = dataFile("catalog-cache.json");
 let cache: Catalog | null = null;
 let pending: Promise<Catalog> | null = null;
 let epoch = 0;
@@ -534,6 +535,58 @@ async function fillSuppliers(catalog: Catalog): Promise<Catalog> {
   return catalog;
 }
 
+export function updateCatalogProduct(id: string, patch: Partial<CatalogProduct>) {
+  const current = cache ?? recall();
+  const product = current?.products.find((item) => item.id === id);
+  if (!current || !product) return;
+  Object.assign(product, patch);
+  indexedCatalog = null;
+  nameCatalog = null;
+  remember(current);
+}
+
+export function applyReceiptStock(entries: Array<{ productId: string; warehouseId: string; quantity: number }>) {
+  const current = cache ?? recall();
+  if (!current) return;
+  for (const entry of entries) {
+    if (entry.quantity <= 0) continue;
+    const product = current.products.find((item) => item.id === entry.productId);
+    if (!product) continue;
+    product.stock += entry.quantity;
+    product.available += entry.quantity;
+    if (product.stock > 0 && product.stockStatus === "out") product.stockStatus = "healthy";
+    const warehouse = current.warehouses.find((item) => item.id === entry.warehouseId);
+    const row = current.stockRows.find((item) => item.product.id === entry.productId && item.warehouse.id === entry.warehouseId);
+    if (row) {
+      row.quantity += entry.quantity;
+      row.product.stock = product.stock;
+      row.product.available = product.available;
+      row.product.stockStatus = product.stockStatus;
+    } else if (warehouse) {
+      current.stockRows.push({
+        product,
+        warehouse,
+        quantity: entry.quantity,
+        inTransit: 0,
+        value: product.cost == null ? null : product.cost * entry.quantity,
+      });
+    }
+  }
+  indexedCatalog = null;
+  nameCatalog = null;
+  remember(current);
+}
+
+export function addCatalogProduct(product: CatalogProduct) {
+  const current = cache ?? recall();
+  if (!current || current.products.some((item) => item.id === product.id)) return;
+  current.products.unshift(product);
+  current.productCount = current.products.length;
+  indexedCatalog = null;
+  nameCatalog = null;
+  remember(current);
+}
+
 export function peekCatalog(): Catalog | null {
   if (!cache) cache = recall();
   return cache;
@@ -602,7 +655,7 @@ function labelTokens(value: string): string[] {
   for (const match of normalized.matchAll(/\d{2}-\d{2}/g)) tokens.add(match[0]);
   const withoutSizes = normalized.replace(/\d{2}-\d{2}/g, " ");
   for (const match of withoutSizes.matchAll(/\d+/g)) {
-    if (match[0].length >= 4 && match[0].length <= 6) tokens.add(match[0]);
+    if (match[0].length >= 3 && match[0].length <= 6) tokens.add(match[0]);
   }
   return [...tokens];
 }
@@ -630,29 +683,19 @@ function nameIndexFor(catalog: Catalog) {
 export function findProductsByLabel(catalog: Catalog, raw: string): { products: CatalogProduct[]; label: string } {
   const index = nameIndexFor(catalog);
   const tokens = labelTokens(raw);
-  let bestToken = "";
-  let best: CatalogProduct[] | undefined;
+  if (tokens.length < 2) return { products: [], label: "" };
+  let ids: Set<string> | null = null;
+  const byId = new Map<string, CatalogProduct>();
   for (const token of tokens) {
-    const list = index.get(token);
-    if (!list?.length || list.length > 3) continue;
-    const strong = /^\d{5,6}$/.test(token);
-    if (!strong && list.length !== 1) continue;
-    if (!best || list.length < best.length || (list.length === best.length && token.length > bestToken.length)) {
-      best = list;
-      bestToken = token;
-    }
+    const list = index.get(token) ?? [];
+    for (const product of list) byId.set(product.id, product);
+    const next = new Set(list.map((product) => product.id));
+    ids = ids === null ? next : new Set([...ids].filter((id) => next.has(id)));
+    if (ids.size === 0) return { products: [], label: "" };
   }
-  if (!best || !bestToken) return { products: [], label: "" };
-  if (best.length === 1 && !/^\d{5,6}$/.test(bestToken)) {
-    const supported = tokens.some((token) => token !== bestToken && (index.get(token) ?? []).some((product) => product.id === best![0].id));
-    if (!supported) return { products: [], label: "" };
-  }
-  if (best.length > 1 && !/^\d{5,6}$/.test(bestToken)) return { products: [], label: "" };
-  const name = best.length === 1 ? best[0].name.toLowerCase() : "";
-  const label = best.length === 1
-    ? labelTokens(best[0].name).sort((a, b) => name.indexOf(a) - name.indexOf(b)).join(" ")
-    : bestToken;
-  return { products: best, label };
+  if (!ids || ids.size === 0 || ids.size > 6) return { products: [], label: "" };
+  const products = [...ids].map((id) => byId.get(id)).filter((product): product is CatalogProduct => !!product);
+  return { products, label: tokens.join(" ") };
 }
 
 function eanCheck(code: string) {
