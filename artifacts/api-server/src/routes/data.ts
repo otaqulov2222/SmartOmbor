@@ -25,7 +25,7 @@ import {
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
 import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
-import { addScanHit, clearScanSession, readScanSession, removeScanHit } from "../lib/scan-session";
+import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
@@ -602,7 +602,24 @@ router.get("/scan-index", async (_req, res, next) => {
   }
 });
 
+router.get("/scan-session/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const unsubscribe = subscribeScanSession((body) => {
+    res.write(`data: ${JSON.stringify(body)}\n\n`);
+  });
+  const ping = setInterval(() => res.write(": ping\n\n"), 15000);
+  req.on("close", () => {
+    clearInterval(ping);
+    unsubscribe();
+  });
+});
+
 router.get("/scan-session", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.json(readScanSession());
 });
 

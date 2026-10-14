@@ -506,14 +506,28 @@ export function ScannerPage() {
     let stop = false;
     const pull = async () => {
       try {
-        const response = await fetch('/api/scan-session');
+        const response = await fetch('/api/scan-session', { cache: 'no-store' });
         if (!response.ok || stop) return;
         applySession(await response.json());
       } catch { /* the other screen retries */ }
     };
+    const source = new EventSource('/api/scan-session/stream');
+    source.onmessage = (event) => {
+      if (stop) return;
+      try { applySession(JSON.parse(event.data) as { revision: number; items: BarcodeLookup[] }); } catch { /* ignore a broken event */ }
+    };
+    const wake = () => { if (document.visibilityState !== 'hidden') void pull(); };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('focus', wake);
     void pull();
-    const id = window.setInterval(() => void pull(), 600);
-    return () => { stop = true; window.clearInterval(id); };
+    const id = window.setInterval(wake, 1000);
+    return () => {
+      stop = true;
+      source.close();
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('focus', wake);
+      window.clearInterval(id);
+    };
   }, []);
 
   useEffect(() => {
@@ -596,15 +610,12 @@ export function ScannerPage() {
           paintRegion(source, ctx, canvas, guide, scale);
           frame += 1;
           const found = readBars(canvas, false);
-          if (!found && copyCtx) {
+          if (!found && copyCtx && frame % 4 === 0) {
             const bandH = Math.max(64, Math.floor(guide.h * 0.62));
             const band = { x: guide.x, y: guide.y + guide.h - bandH, w: guide.w, h: bandH };
-            const bandScale = band.w > 1100 ? 1100 / band.w : 1;
+            const bandScale = band.w > 900 ? 900 / band.w : 1;
             paintRegion(source, copyCtx, copy, band, bandScale);
-            if (!readBars(copy, true) && frame % 3 === 0) {
-              thresholdBars(copyCtx, copy);
-              readBars(copy, true);
-            }
+            readBars(copy, true);
           }
           if (detector && !detectorBusy) {
             detectorBusy = true;

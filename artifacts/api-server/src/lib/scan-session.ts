@@ -3,6 +3,18 @@ type ScanHit = { barcode: string; ambiguous?: boolean; products: ScanProduct[]; 
 
 let items: ScanHit[] = [];
 let revision = 0;
+const listeners = new Set<(body: { revision: number; items: ScanHit[] }) => void>();
+
+function publish() {
+  const body = readScanSession();
+  for (const listener of listeners) listener(body);
+}
+
+export function subscribeScanSession(listener: (body: { revision: number; items: ScanHit[] }) => void) {
+  listeners.add(listener);
+  listener(readScanSession());
+  return () => listeners.delete(listener);
+}
 
 function readable(body: unknown): ScanHit | null {
   if (!body || typeof body !== "object") return null;
@@ -32,6 +44,7 @@ export function addScanHit(body: unknown) {
   if (added) {
     items = [hit, ...items.filter((item) => item.products.length !== 1 || item.products[0].id !== id)].slice(0, 200);
     revision += 1;
+    publish();
   }
   return { ...readScanSession(), added };
 }
@@ -42,13 +55,19 @@ export function removeScanHit(productId: string) {
     if (!products.length) return [];
     return [{ ...item, products, ambiguous: products.length > 1 }];
   });
-  if (next.length !== items.length) revision += 1;
-  items = next;
+  if (next.length !== items.length) {
+    revision += 1;
+    items = next;
+    publish();
+  } else items = next;
   return readScanSession();
 }
 
 export function clearScanSession() {
-  if (items.length) revision += 1;
-  items = [];
+  if (items.length) {
+    revision += 1;
+    items = [];
+    publish();
+  }
   return readScanSession();
 }
