@@ -225,6 +225,11 @@ code { font-family: var(--app-font-mono); font-size: .85em; }
 .metrics-3 { grid-template-columns: repeat(3, 1fr); }
 .metric { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1rem 1.1rem; display: grid; grid-template-columns: auto 1fr; grid-template-areas: "icon label" "icon value" "icon note"; column-gap: .85rem; box-shadow: var(--shadow-sm); }
 .metric-icon, .kpi-icon { grid-area: icon; width: 2.5rem; height: 2.5rem; border-radius: .7rem; display: grid; place-items: center; background: var(--slate-soft); color: var(--slate-ink); align-self: start; margin-top: .1rem; }
+.kpi .kpi-icon { width: 2.7rem; height: 2.7rem; border-radius: .9rem; margin-top: 0; background: #eef2f6 !important; color: #3e4a5c !important; box-shadow: inset 0 0 0 1px rgb(15 23 42 / .05); }
+.kpi .kpi-icon.tone-green { background: #e7f6ee !important; color: #157a3a !important; }
+.kpi .kpi-icon.tone-amber { background: #fff4e6 !important; color: #b86a08 !important; }
+.kpi .kpi-icon.tone-blue { background: #eaf0ff !important; color: #2f54eb !important; }
+.kpi .kpi-icon svg { width: 1.2rem; height: 1.2rem; }
 .metric-label, .kpi-label { grid-area: label; font-size: .8rem; font-weight: 600; color: var(--muted); }
 .metric strong, .kpi strong { grid-area: value; font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.25; color: var(--ink); word-break: break-word; }
 .metric small, .kpi small { grid-area: note; font-size: .76rem; color: var(--muted-2); }

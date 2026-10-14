@@ -5,11 +5,11 @@ import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Boxes,
+  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, Boxes, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
   Clock3, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, PanelLeft, PanelLeftClose, Repeat,
-  Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
-  Sparkles, UserRound, Users, Warehouse, X,
+  Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
+  Sparkles, UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
 import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useSearch } from 'wouter';
 import {
@@ -355,10 +355,10 @@ function DashboardPage() {
     {sync.isError && <Notice kind="error" title={t('dash.sync.failed')} testId="status-sync-error">{sync.error instanceof Error ? sync.error.message : t('common.tryAgain')}</Notice>}
     {q.isLoading ? <LoadingRows count={3}/> : d ? <>
       <section className="kpis" aria-label={t('dash.title')}>
-        <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Package size={18}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
-        <Link href="/stock" className="kpi" data-testid="metric-units"><span className="kpi-icon tone-green"><Boxes size={18}/></span><span className="kpi-label">{t('dash.kpi.units')}</span><strong>{fmt(d.stockUnits)}</strong><small>{t('dash.kpi.units.note', { count: warehouses.data?.length ?? '—' })}</small></Link>
-        <div className="kpi" data-testid="metric-value"><span className="kpi-icon tone-amber"><Banknote size={18}/></span><span className="kpi-label">{t('dash.kpi.value')}</span><strong>{money(d.stockValue)}</strong><small>{t('dash.kpi.value.note')}</small></div>
-        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><BarChart3 size={18}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{chosen.isLoading && chosen.data?.date !== day ? '…' : money(chosen.data?.sales ?? (isToday ? d.salesToday : 0))}</strong><small>{isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
+        <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Box size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
+        <Link href="/stock" className="kpi" data-testid="metric-units"><span className="kpi-icon tone-green"><Layers size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.units')}</span><strong>{fmt(d.stockUnits)}</strong><small>{t('dash.kpi.units.note', { count: warehouses.data?.length ?? '—' })}</small></Link>
+        <div className="kpi" data-testid="metric-value"><span className="kpi-icon tone-amber"><Wallet size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.value')}</span><strong>{money(d.stockValue)}</strong><small>{t('dash.kpi.value.note')}</small></div>
+        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{chosen.isLoading && chosen.data?.date !== day ? '…' : money(chosen.data?.sales ?? (isToday ? d.salesToday : 0))}</strong><small>{isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
       </section>
       <div className="dash-grid">
         <div className="dash-col">
