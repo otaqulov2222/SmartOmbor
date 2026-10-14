@@ -700,10 +700,12 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .scan-btn { width: 2.1rem; padding: 0; }
   .topbar .chip { padding: .35rem; width: 1.5rem; height: 1.5rem; justify-content: center; }
   .content { padding: 1rem .9rem .9rem; }
+  .page-head { align-items: center; flex-wrap: wrap; }
   .page-head h1 { font-size: 1.35rem; }
-  .page-actions { width: 100%; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
-  .page-actions .dash-day { flex: 1 1 100%; }
-  .page-actions .dash-day .input { width: 100%; }
+  .page-actions { width: auto; flex: 1 1 auto; margin-left: auto; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
+  .page-head:has(.dash-day) > div:first-child, .page-head:has(.dash-day) .page-actions { flex: 1 1 100%; width: 100%; margin-left: 0; }
+  .page-actions .dash-day { flex: 1 1 auto; min-width: 0; }
+  .page-actions .dash-day .input { width: 100%; height: 2.5rem; }
   .audit-search { flex: 1; width: auto; max-width: none; }
   .factory-hero { grid-template-columns: auto minmax(0, 1fr); }
   .factory-actions { grid-column: 1 / -1; }
@@ -713,7 +715,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .partner-search { width: auto; flex: 1; }
   .partner-bar .btn { flex: none; }
   .toolbar .search { max-width: none; flex-basis: 100%; }
-  .toolbar .select-wrap { flex: 1; } .toolbar .select-wrap .input { min-width: 0; width: 100%; }
+  .toolbar .select-wrap { flex: 1 1 7.5rem; min-width: 0; width: auto; }
+  .toolbar .select-wrap .input { min-width: 0; width: 100%; }
   .toolbar { flex-direction: row; align-items: center; }
   .toolbar > .btn { flex: none; }
   .settings-connect { flex-direction: column; align-items: stretch; }
@@ -920,10 +923,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .btn { white-space: normal; }
   .page-head, .card-head, .waybill-actions, .waybill-decide, .form-actions, .scan-session, .scan-row-actions { align-items: stretch; }
   .form-actions, .waybill-actions, .waybill-decide { flex-direction: column; }
-  .toolbar .select-wrap, .toolbar .search, .form-actions .btn, .waybill-actions .btn, .waybill-decide .btn, .waybill-link .btn, .waybill-link .input { width: 100%; flex: none; }
+  .toolbar .search, .form-actions .btn, .waybill-actions .btn, .waybill-decide .btn, .waybill-link .btn, .waybill-link .input { width: 100%; flex: none; }
   .page-actions .btn, .toolbar > .btn, .partner-bar > .btn, .factory-actions .btn, .waybill-tools .btn, .waybill-head-tools .btn {
-    width: 2.75rem; height: 2.75rem; min-width: 2.75rem; padding: 0; flex: none;
-    font-size: 0; line-height: 0; gap: 0; border-radius: .85rem;
+    width: 2.5rem; height: 2.5rem; min-width: 2.5rem; padding: 0; flex: none;
+    font-size: 0; line-height: 0; gap: 0; border-radius: .8rem;
   }
   .page-actions .btn svg, .toolbar > .btn svg, .partner-bar > .btn svg, .factory-actions .btn svg, .waybill-tools .btn svg, .waybill-head-tools .btn svg { width: 1.2rem; height: 1.2rem; }
   .partner-bar, .factory-actions, .waybill-tools, .waybill-head-tools { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; }

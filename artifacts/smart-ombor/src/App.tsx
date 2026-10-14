@@ -325,7 +325,7 @@ function WarehousesSelect({ value, onChange, testId }: { value: string; onChange
 type WarehouseTotal = { id: string; name: string; units: number; products: number; inTransit: number; value: number };
 type DayView = { date: string; sales: number; incoming: number; trend: Array<{ date: string; amount: number }>; documents: Array<{ id: string; kind: string; number: string; date: string; status: string; sourceWarehouse: string | null; targetWarehouse: string | null }> };
 function DashboardPage() {
-  const { t, lang, fmt, money, time, date } = useI18n(); const docKind = useDocKind();
+  const { t, lang, fmt, money, date } = useI18n(); const docKind = useDocKind();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [day, setDay] = useState(today);
   const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
@@ -348,7 +348,7 @@ function DashboardPage() {
     { href: '/receipts', icon: ArrowDownLeft, tone: 'tone-green', label: isToday ? t('dash.attention.incoming') : t('dash.attention.incomingOn', { date: shownDay }), note: isToday ? t('dash.attention.incoming.note') : t('dash.attention.incomingOn.note'), value: chosen.data?.incoming ?? (isToday ? d.incomingToday : 0) },
   ] : [];
   return <div className="dash">
-    <header className="page-head"><div><h1>{t('dash.title')}</h1><p className="with-dot">{connected ? <><span className="live-dot"/>{t('dash.sub.connected', { company: status.data?.companyName || 'MoySklad', time: time(d?.lastSync || status.data?.lastSync) })}</> : status.isLoading ? t('dash.sub.checking') : t('dash.sub.offline')}</p></div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
+    <header className="page-head"><div><h1>{t('dash.title')}</h1></div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
     <QueryError q={q} id="dashboard"/>
     {status.isError && <Notice kind="error" title={t('dash.notice.statusFailed')} testId="status-integration-error"/>}
     {!status.isLoading && !connected && !status.isError && <Notice kind={status.data?.configured ? 'error' : 'info'} title={status.data?.configured ? t('dash.notice.disconnected') : t('dash.notice.unconfigured')} testId="status-integration-unconfigured">{status.data?.error || t('dash.notice.unconfiguredBody')} <Link href="/settings" className="notice-link" data-testid="link-settings-integration">{t('nav.settings')} <ArrowRight size={14}/></Link></Notice>}
@@ -384,13 +384,13 @@ function DashboardPage() {
 
 /* ---------- products ---------- */
 function ProductsPage() {
-  const { t, fmt, money, time } = useI18n(); const unit = useUnit();
+  const { t, fmt, money } = useI18n(); const unit = useUnit();
   const urlSearch = new URLSearchParams(useSearch()).get('search') || '';
   const [search, setSearch] = useState(urlSearch); const [stockStatus, setStatus] = useState('all'); const [page, setPage] = useState(1);
   useEffect(() => { setSearch(urlSearch); setPage(1); }, [urlSearch]);
   const params = useMemo(() => ({ search: search || undefined, stockStatus: stockStatus as 'all'|'low'|'available'|'out', page, pageSize: 25 }), [search, stockStatus, page]);
   const q = useListProducts(params); const cache = useQueryClient();
-  const dash = useGetDashboard(); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad();
+  const dash = useGetDashboard(); const sync = useSyncMoysklad();
   const [selected, setSelected] = useState<Product | null>(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
@@ -445,7 +445,7 @@ function ProductsPage() {
     } finally { setSaving(false); }
   };
   return <>
-    <PageHead title={t('products.title')} subtitle={status.data?.lastSync ? t('products.synced', { time: time(status.data.lastSync) }) : t('products.sub')}/>
+    <PageHead title={t('products.title')}/>
     {dash.data && <div className="product-kpis">
       <div><span>{t('dash.kpi.products')}</span><b>{fmt(dash.data.productCount)}</b></div>
       <div><span>{t('products.filter.low')}</span><b>{fmt(dash.data.lowStockCount)}</b></div>
@@ -487,7 +487,7 @@ function stockRowStatus(quantity: number, productStatus: string) {
 }
 
 function StockPage() {
-  const { t, fmt, money, time } = useI18n(); const unit = useUnit();
+  const { t, fmt, money } = useI18n(); const unit = useUnit();
   const searchParams = useSearch();
   const [, setLocation] = useLocation();
   const warehouseId = new URLSearchParams(searchParams).get('warehouseId') || '';
@@ -498,7 +498,6 @@ function StockPage() {
   const params = useMemo(() => ({ warehouseId: warehouseId || undefined, search: search || undefined, page, pageSize: 50 }), [warehouseId, search, page]);
   const q = useListStock(params);
   const cache = useQueryClient();
-  const status = useGetMoyskladStatus();
   const sync = useSyncMoysklad();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const response = await fetch('/api/dashboard/warehouses'); if (!response.ok) throw new Error('warehouses'); return response.json(); } });
   const chosen = warehouses.data?.find(item => item.id === warehouseId);
@@ -506,7 +505,7 @@ function StockPage() {
   const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
   const chooseWarehouse = (id: string) => { setPage(1); setLocation(id ? `/stock?warehouseId=${encodeURIComponent(id)}` : '/stock'); };
   return <>
-    <PageHead title={t('stock.title')} subtitle={status.data?.lastSync ? t('stock.synced', { time: time(status.data.lastSync) }) : t('stock.sub')}/>
+    <PageHead title={t('stock.title')}/>
     {summary && <div className="product-kpis">
       <div><span>{t('dash.kpi.units')}</span><b>{fmt(summary.units)}</b></div>
       <div><span>{t('dash.kpi.products')}</span><b>{fmt(summary.products)}</b></div>
