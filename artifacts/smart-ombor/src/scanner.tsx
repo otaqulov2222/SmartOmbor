@@ -17,34 +17,59 @@ const FAST_HINTS = new Map<DecodeHintType, unknown>([
   [DecodeHintType.TRY_HARDER, true],
 ]);
 
-let scanAudio: AudioContext | null = null;
+function toneWav(freq: number, ms: number) {
+  const rate = 22050;
+  const count = Math.floor(rate * ms / 1000);
+  const buffer = new ArrayBuffer(44 + count * 2);
+  const view = new DataView(buffer);
+  const text = (offset: number, value: string) => { for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i)); };
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + count * 2, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, count * 2, true);
+  for (let i = 0; i < count; i += 1) {
+    const attack = Math.min(1, i / 60);
+    const release = Math.min(1, (count - i) / 180);
+    const sample = Math.sin((2 * Math.PI * freq * i) / rate) * attack * release * 0.95;
+    view.setInt16(44 + i * 2, sample * 32767, true);
+  }
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+const okSound = new Audio(toneWav(2470, 110));
+const badSound = new Audio(toneWav(440, 160));
+okSound.preload = 'auto';
+badSound.preload = 'auto';
 
 function unlockScanAudio() {
-  const Ctx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctx) return;
-  if (!scanAudio) scanAudio = new Ctx();
-  if (scanAudio.state === 'suspended') void scanAudio.resume();
+  for (const sound of [okSound, badSound]) {
+    sound.volume = 1;
+    const played = sound.play();
+    if (played) void played.then(() => { sound.pause(); sound.currentTime = 0; }).catch(() => undefined);
+  }
 }
 
 function beep(ok: boolean) {
+  const sound = ok ? okSound : badSound;
   try {
-    unlockScanAudio();
-    const ctx = scanAudio;
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const tone = ctx.createOscillator();
-    const gain = ctx.createGain();
-    tone.type = 'square';
-    tone.frequency.value = ok ? 2400 : 480;
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(ok ? 0.2 : 0.14, now + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + (ok ? 0.07 : 0.14));
-    tone.connect(gain);
-    gain.connect(ctx.destination);
-    tone.start(now);
-    tone.stop(now + 0.16);
-  } catch { /* sound is optional */ }
-  navigator.vibrate?.(ok ? 28 : [18, 36, 18]);
+    sound.pause();
+    sound.currentTime = 0;
+    sound.volume = 1;
+    void sound.play().catch(() => undefined);
+  } catch { /* the phone can block sound until the camera button is tapped */ }
+  navigator.vibrate?.(ok ? 45 : [22, 40, 22]);
 }
 
 function PageHead({ title, subtitle }: { title: string; subtitle: string }) {
@@ -91,17 +116,17 @@ function guideCrop(source: HTMLVideoElement) {
   const vh = source.videoHeight;
   const boxW = source.clientWidth || vw;
   const boxH = source.clientHeight || vh;
-  const fit = Math.min(boxW / vw, boxH / vh) || 1;
-  const offX = (boxW - vw * fit) / 2;
-  const offY = (boxH - vh * fit) / 2;
-  const guideW = Math.min(boxW * 0.96, 680);
-  const guideH = guideW / 1.7;
-  const x = Math.max(0, ((boxW - guideW) / 2 - offX) / fit);
-  const y = Math.max(0, ((boxH - guideH) / 2 - offY) / fit);
-  const w = Math.min(vw - x, guideW / fit);
-  const h = Math.min(vh - y, guideH / fit);
-  if (w < 40 || h < 40) return { x: Math.floor(vw * 0.1), y: Math.floor(vh * 0.26), w: Math.floor(vw * 0.8), h: Math.floor(vh * 0.48) };
-  return { x: Math.floor(x), y: Math.floor(y), w: Math.floor(w), h: Math.floor(h) };
+  const fit = Math.max(boxW / vw, boxH / vh) || 1;
+  const shownW = boxW / fit;
+  const shownH = boxH / fit;
+  const x = Math.max(0, (vw - shownW) / 2);
+  const y = Math.max(0, (vh - shownH) / 2);
+  const padX = shownW * 0.03;
+  const padY = shownH * 0.03;
+  const w = Math.min(vw - x, shownW) - padX * 2;
+  const h = Math.min(vh - y, shownH) - padY * 2;
+  if (w < 40 || h < 40) return { x: 0, y: 0, w: vw, h: vh };
+  return { x: Math.floor(x + padX), y: Math.floor(y + padY), w: Math.floor(w), h: Math.floor(h) };
 }
 
 function paintRegion(source: HTMLVideoElement, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, region: { x: number; y: number; w: number; h: number }, scale: number, smooth = false) {
@@ -265,6 +290,7 @@ export function ScannerPage() {
   const labelSeen = useRef(new Map<string, number>());
   const labelFlight = useRef(new Set<string>());
   const generation = useRef(0);
+  const liveTimer = useRef(0);
   const lastBeep = useRef({ key: '', at: 0 });
   const burst = useRef<string[]>([]);
   const learned = useRef(new Map<string, BarcodeLookup>());
@@ -282,7 +308,9 @@ export function ScannerPage() {
     setMiss('');
     const names = [lookup.products[0].name, ...burst.current.filter(item => item !== lookup.products[0].name)].slice(0, 3);
     burst.current = names;
-    setLive(names.join(' · '));
+    setLive(lookup.products[0].name);
+    window.clearTimeout(liveTimer.current);
+    liveTimer.current = window.setTimeout(() => setLive(''), 1400);
     if (!repeat) beep(true);
     setHits(list => [lookup, ...list.filter(item => item.products.map(product => product.id).join('-') !== key)].slice(0, 200));
     if (source === 'manual') field.current?.focus();
@@ -445,9 +473,8 @@ export function ScannerPage() {
         if (!scanBusy && ctx && source && source.readyState >= 2 && source.videoWidth > 0) {
           scanBusy = true;
           const guide = guideCrop(source);
-          const bars = { x: guide.x, y: guide.y + Math.floor(guide.h * 0.34), w: guide.w, h: Math.max(28, Math.floor(guide.h * 0.34)) };
-          const scale = Math.min(3, Math.max(1.4, 1800 / Math.max(1, bars.w)));
-          paintRegion(source, ctx, canvas, bars, scale);
+          const scale = Math.min(2, Math.max(1, 1280 / Math.max(guide.w, guide.h)));
+          paintRegion(source, ctx, canvas, guide, scale);
           if (copyCtx) {
             copy.width = canvas.width;
             copy.height = canvas.height;
@@ -509,7 +536,7 @@ export function ScannerPage() {
           }
         } catch { /* this frame had no readable label */ }
         finally { reading = false; }
-        if (active) ocrTimer = window.setTimeout(read, 40);
+        if (active) ocrTimer = window.setTimeout(read, 700);
       };
       nudgeOcr.current = () => {
         if (!active || reading) return;

@@ -683,19 +683,21 @@ function nameIndexFor(catalog: Catalog) {
 export function findProductsByLabel(catalog: Catalog, raw: string): { products: CatalogProduct[]; label: string } {
   const index = nameIndexFor(catalog);
   const tokens = labelTokens(raw);
-  if (tokens.length < 2) return { products: [], label: "" };
+  const useful = tokens.filter((token) => (index.get(token)?.length ?? 0) > 0);
+  if (useful.length < 2) return { products: [], label: "" };
   let ids: Set<string> | null = null;
   const byId = new Map<string, CatalogProduct>();
-  for (const token of tokens) {
+  for (const token of useful) {
     const list = index.get(token) ?? [];
     for (const product of list) byId.set(product.id, product);
     const next = new Set(list.map((product) => product.id));
     ids = ids === null ? next : new Set([...ids].filter((id) => next.has(id)));
     if (ids.size === 0) return { products: [], label: "" };
   }
+  if (ids && ids.size > 1 && useful.length < 3) return { products: [], label: "" };
   if (!ids || ids.size === 0 || ids.size > 6) return { products: [], label: "" };
   const products = [...ids].map((id) => byId.get(id)).filter((product): product is CatalogProduct => !!product);
-  return { products, label: tokens.join(" ") };
+  return { products, label: useful.join(" ") };
 }
 
 function eanCheck(code: string) {
