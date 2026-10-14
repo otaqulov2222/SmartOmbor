@@ -37,18 +37,6 @@ export function AutoRefresh() {
       }
     };
 
-    const arm = async () => {
-      try {
-        const response = await fetch('/api/dashboard');
-        if (!response.ok) throw new Error('dashboard');
-        const body = await response.json() as { lastSync?: string | null };
-        const age = body.lastSync ? Date.now() - new Date(body.lastSync).getTime() : AUTO_REFRESH_MS;
-        if (age >= AUTO_REFRESH_MS) void run();
-      } catch {
-        void run();
-      }
-    };
-    void arm();
     const id = window.setInterval(() => void run(), AUTO_REFRESH_MS);
     const onVis = () => {
       const state = cache.getQueryData<AutoRefreshState>(AUTO_REFRESH_KEY);

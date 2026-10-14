@@ -25,11 +25,10 @@ import type {
 } from '@workspace/api-client-react';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TKey } from '@/i18n';
-import { AutoRefresh, AUTO_REFRESH_KEY, AUTO_REFRESH_MS, type AutoRefreshState } from '@/auto-refresh';
+import { AutoRefresh, AUTO_REFRESH_MS } from '@/auto-refresh';
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
-import { loadScanIndex } from '@/scan-match';
 import { PartnersPage } from '@/partners';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
@@ -206,7 +205,6 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const current = navigation.find(x => x.href === path);
   const currentUser = useGetCurrentUser();
   const connection = useGetMoyskladStatus();
-  const auto = useQuery<AutoRefreshState>({ queryKey: [...AUTO_REFRESH_KEY], queryFn: async () => ({ pending: false, last: null, nextAt: Date.now() }), enabled: false, initialData: { pending: false, last: null, nextAt: Date.now() } });
   const alerts = useQuery<{ pending: number }>({
     queryKey: ['partner-alerts'],
     queryFn: async () => {
@@ -231,7 +229,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       </div>
     </aside>
     <div className="main">
-      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><span className={`chip ${connected ? 'chip-on' : ''}`} data-testid="status-moysklad" title={connection.isLoading ? t('shell.checking') : connected ? t('shell.connected') : t('shell.disconnected')}><i/><span>{connection.isLoading ? t('shell.checking') : connected ? t('shell.connected') : t('shell.disconnected')}</span></span>{auto.data?.pending && <span className="chip chip-sync" title={t('refresh.every')}><RefreshCw size={13} className="spin"/><span>{t('refresh.updating')}</span></span>}<LangSwitch compact/><Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link></div></header>
+      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/><Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link></div></header>
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
@@ -330,7 +328,7 @@ function DashboardPage() {
   const [day, setDay] = useState(today);
   const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: AUTO_REFRESH_MS });
-  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 2, refetchInterval: query => query.state.status === 'error' ? 15_000 : AUTO_REFRESH_MS });
+  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1, refetchInterval: AUTO_REFRESH_MS });
   const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today, refetchInterval: AUTO_REFRESH_MS } });
   const connected = !!status.data?.configured && !!status.data?.connected;
   const d = q.data;
@@ -1086,7 +1084,6 @@ function ClerkRoutes() {
   </ClerkProvider>;
 }
 function App() {
-  useEffect(() => { void loadScanIndex(); }, []);
   return <I18nProvider><QueryClientProvider client={queryClient}><AutoRefresh/><WouterRouter base={basePath}>{clerkPubKey ? <ClerkRoutes/> : <LocalRoutes/>}</WouterRouter></QueryClientProvider></I18nProvider>;
 }
 export default App;
