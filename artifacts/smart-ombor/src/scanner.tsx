@@ -13,8 +13,13 @@ type Detected = { rawValue?: string };
 type DetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<Detected[]> };
 
 const FORMATS = ['aztec', 'codabar', 'code_39', 'code_93', 'code_128', 'data_matrix', 'ean_8', 'ean_13', 'itf', 'pdf417', 'qr_code', 'upc_a', 'upc_e', 'databar', 'databar_expanded'];
+const BARCODE_FORMATS = [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.ITF, BarcodeFormat.CODABAR, BarcodeFormat.QR_CODE];
 const FAST_HINTS = new Map<DecodeHintType, unknown>([
-  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.ITF, BarcodeFormat.CODABAR, BarcodeFormat.QR_CODE]],
+  [DecodeHintType.POSSIBLE_FORMATS, BARCODE_FORMATS],
+  [DecodeHintType.TRY_HARDER, false],
+]);
+const HARD_HINTS = new Map<DecodeHintType, unknown>([
+  [DecodeHintType.POSSIBLE_FORMATS, BARCODE_FORMATS],
   [DecodeHintType.TRY_HARDER, true],
 ]);
 
@@ -326,6 +331,7 @@ export function ScannerPage() {
   const labelRef = useRef('');
   const labelSeen = useRef(new Map<string, number>());
   const labelFlight = useRef(new Set<string>());
+  const cameraPending = useRef(new Set<string>());
   const generation = useRef(0);
   const liveTimer = useRef(0);
   const lastBeep = useRef({ key: '', at: 0 });
@@ -409,20 +415,16 @@ export function ScannerPage() {
         showHit(local, source);
         return;
       }
-      if (source === 'manual') {
-        setChecking('');
-        setMiss(clean);
-        beep(false);
-        field.current?.focus();
-      }
-      return;
     }
+    if (source === 'camera' && cameraPending.current.has(clean)) return;
     const gen = source === 'manual' ? ++generation.current : 0;
     if (source === 'manual') {
       setMiss('');
       setChecking(clean);
     }
+    if (source === 'camera') cameraPending.current.add(clean);
     void resolveScanRequest(clean, source === 'camera' ? labelRef.current : '').then(lookup => {
+      if (source === 'camera') cameraPending.current.delete(clean);
       if (source === 'manual' && generation.current !== gen) return;
       if (lookup.products.length) {
         remember(clean, lookup);
@@ -434,6 +436,7 @@ export function ScannerPage() {
         field.current?.focus();
       }
     }).catch(() => {
+      if (source === 'camera') cameraPending.current.delete(clean);
       if (source !== 'manual' || generation.current !== gen) return;
       setChecking('');
       setMiss(clean);
@@ -454,12 +457,13 @@ export function ScannerPage() {
     labelFlight.current.add(signature);
     labelRef.current = value;
     if (scanIndexReady()) {
-      labelFlight.current.delete(signature);
       const local = matchScan('', value);
-      if (!local?.products.length) return;
-      labelSeen.current.set(signature, Date.now());
-      showHit(local, 'camera');
-      return;
+      if (local?.products.length) {
+        labelFlight.current.delete(signature);
+        labelSeen.current.set(signature, Date.now());
+        showHit(local, 'camera');
+        return;
+      }
     }
     void resolveScanRequest('', value).then(lookup => {
       labelFlight.current.delete(signature);
@@ -563,10 +567,12 @@ export function ScannerPage() {
         try { detector = formats.length ? new Detector({ formats }) : new Detector(); } catch { try { detector = new Detector(); } catch { detector = null; } }
       }
       const fastReader = new BrowserMultiFormatReader(FAST_HINTS);
+      const hardReader = new BrowserMultiFormatReader(HARD_HINTS);
       let scanBusy = false;
-      const readBars = (target: HTMLCanvasElement) => {
+      let frame = 0;
+      const readBars = (target: HTMLCanvasElement, hard: boolean) => {
         try {
-          const decoded = fastReader.decodeFromCanvas(target);
+          const decoded = (hard ? hardReader : fastReader).decodeFromCanvas(target);
           if (decoded) consider(decoded.getText());
           return Boolean(decoded);
         } catch { return false; }
@@ -577,30 +583,27 @@ export function ScannerPage() {
         if (!scanBusy && ctx && source && source.readyState >= 2 && source.videoWidth > 0) {
           scanBusy = true;
           const guide = guideCrop(source);
-          const scale = Math.min(1.5, Math.max(1, 900 / Math.max(guide.w, guide.h)));
+          const longest = Math.max(guide.w, guide.h);
+          const scale = longest > 800 ? 800 / longest : 1;
           paintRegion(source, ctx, canvas, guide, scale);
-          if (copyCtx) {
+          frame += 1;
+          const found = readBars(canvas, false);
+          if (!found && frame % 3 === 0 && copyCtx) {
             copy.width = canvas.width;
             copy.height = canvas.height;
             copyCtx.drawImage(canvas, 0, 0);
+            thresholdBars(copyCtx, copy);
+            readBars(copy, true);
           }
-          let pending = 1;
-          const finish = () => { pending -= 1; if (pending <= 0) scanBusy = false; };
           if (detector) {
-            pending += 1;
-            void detector.detect(canvas).then(rows => {
+            const shot = canvas;
+            void detector.detect(shot).then(rows => {
               for (const item of rows) consider(item.rawValue || '');
-            }).catch(() => undefined).finally(finish);
+            }).catch(() => undefined);
           }
-          window.setTimeout(() => {
-            if (active && copyCtx && !readBars(copy)) {
-              thresholdBars(copyCtx, copy);
-              readBars(copy);
-            }
-            finish();
-          }, 0);
+          scanBusy = false;
         }
-        nativeTimer = window.setTimeout(tick, 80);
+        nativeTimer = window.setTimeout(tick, 50);
       };
       nativeTimer = window.setTimeout(tick, 40);
     };
@@ -627,7 +630,8 @@ export function ScannerPage() {
         }
         reading = true;
         const guide = guideCrop(source);
-        const scale = Math.min(2.2, Math.max(1.2, 1400 / Math.max(1, guide.w)));
+        const longest = Math.max(guide.w, guide.h, 1);
+        const scale = Math.min(1.4, 1100 / longest);
         paintRegion(source, ctx, canvas, guide, scale, true);
         try {
           const found = await worker.recognize(canvas);

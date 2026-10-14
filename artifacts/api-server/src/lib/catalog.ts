@@ -729,13 +729,16 @@ let scanIndexCatalog: Catalog | null = null;
 let scanIndexBody: { loadedAt: string; products: unknown[] } | null = null;
 
 export function scanIndex(catalog: Catalog) {
+  if (catalog.products.length === 0) return { loadedAt: catalog.loadedAt, products: [] };
   if (scanIndexCatalog === catalog && scanIndexBody) return scanIndexBody;
   const places = new Map<string, Array<{ productId: string; warehouseName: string; quantity: number; inTransit: number }>>();
-  const ranked = [...catalog.stockRows].sort((a, b) => b.quantity - a.quantity);
-  for (const row of ranked) {
+  for (const row of catalog.stockRows) {
+    if (row.quantity <= 0 && row.inTransit <= 0) continue;
     const list = places.get(row.product.id) ?? [];
-    if (list.length >= 3 || (row.quantity <= 0 && row.inTransit <= 0)) continue;
+    if (list.length >= 3 && list.every((item) => item.quantity >= row.quantity)) continue;
     list.push({ productId: row.product.id, warehouseName: row.warehouse.name, quantity: row.quantity, inTransit: row.inTransit });
+    list.sort((a, b) => b.quantity - a.quantity);
+    if (list.length > 3) list.length = 3;
     places.set(row.product.id, list);
   }
   const body = {

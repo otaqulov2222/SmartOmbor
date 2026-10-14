@@ -148,11 +148,12 @@ export function loadScanIndex() {
   if (!loading) {
     loading = fetch('/api/scan-index').then(async response => {
       if (!response.ok) throw new Error('index');
-      const body = await response.json() as { products: Row[] };
+      const body = await response.json() as { products?: Row[] };
+      if (!body.products?.length) throw new Error('empty');
       const barcode = new Map<string, Row[]>();
       const name = new Map<string, Row[]>();
       for (const row of body.products) {
-        for (const value of [row.code, row.article, ...row.barcodes]) {
+        for (const value of [row.code, row.article, ...(row.barcodes ?? [])]) {
           if (!value) continue;
           for (const key of indexKeys(value)) {
             const list = barcode.get(key);
@@ -167,7 +168,10 @@ export function loadScanIndex() {
         }
       }
       built = { barcode, name };
-    }).catch(() => { loading = null; });
+    }).catch(() => {
+      loading = null;
+      window.setTimeout(() => { void loadScanIndex(); }, 5000);
+    });
   }
   return loading;
 }
