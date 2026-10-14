@@ -25,6 +25,7 @@ import {
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
 import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addScanHit, clearScanSession, readScanSession, removeScanHit } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
@@ -591,6 +592,22 @@ router.get("/products/:id/image", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+router.get("/scan-session", (_req, res) => {
+  res.json(readScanSession());
+});
+
+router.post("/scan-session", (req, res) => {
+  res.json(addScanHit(req.body));
+});
+
+router.delete("/scan-session/:productId", (req, res) => {
+  res.json(removeScanHit(String(req.params.productId)));
+});
+
+router.delete("/scan-session", (_req, res) => {
+  res.json(clearScanSession());
 });
 
 router.get("/products/resolve", async (req, res, next) => {
