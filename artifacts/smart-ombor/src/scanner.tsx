@@ -396,6 +396,7 @@ export function ScannerPage() {
   const accept = (value: string, source: 'manual' | 'camera' = 'manual') => {
     const clean = readCode(value);
     if (clean.length < 3) return;
+    if (source === 'camera') setLive(clean);
     if (source === 'manual') {
       setCode('');
       if (field.current) field.current.value = '';
@@ -595,12 +596,12 @@ export function ScannerPage() {
           paintRegion(source, ctx, canvas, guide, scale);
           frame += 1;
           const found = readBars(canvas, false);
-          if (!found && frame % 2 === 0 && copyCtx) {
-            const bandH = Math.max(48, Math.floor(guide.h * 0.46));
-            const band = { x: guide.x, y: guide.y + Math.floor((guide.h - bandH) / 2), w: guide.w, h: bandH };
-            const bandScale = band.w > 1400 ? 1400 / band.w : 1;
+          if (!found && copyCtx) {
+            const bandH = Math.max(64, Math.floor(guide.h * 0.62));
+            const band = { x: guide.x, y: guide.y + guide.h - bandH, w: guide.w, h: bandH };
+            const bandScale = band.w > 1100 ? 1100 / band.w : 1;
             paintRegion(source, copyCtx, copy, band, bandScale);
-            if (!readBars(copy, true)) {
+            if (!readBars(copy, true) && frame % 3 === 0) {
               thresholdBars(copyCtx, copy);
               readBars(copy, true);
             }

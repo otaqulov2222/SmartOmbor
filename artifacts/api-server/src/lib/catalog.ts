@@ -619,6 +619,12 @@ function lookupKeys(value: string): string[] {
   const keys = new Set(indexKeys(compact));
   if (/^\d+$/.test(compact) && compact.length >= 4 && compact.length < 6) keys.add(compact.padStart(6, "0"));
   if (/^\d+$/.test(compact) && compact.length === 12) keys.add(`0${compact}`);
+  if (/^\d{13}$/.test(compact) && compact.startsWith("2000000")) {
+    const tail = compact.slice(-6);
+    keys.add(tail);
+    const bare = tail.replace(/^0+/, "");
+    if (bare.length >= 3) keys.add(bare);
+  }
   return [...keys];
 }
 
