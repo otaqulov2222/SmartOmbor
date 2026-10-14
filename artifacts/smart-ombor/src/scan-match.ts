@@ -17,6 +17,72 @@ type Built = { barcode: Map<string, Row[]>; name: Map<string, Row[]> };
 
 let built: Built | null = null;
 let loading: Promise<void> | null = null;
+const readyWaiters: Array<() => void> = [];
+
+function install(rows: Row[]) {
+  const barcode = new Map<string, Row[]>();
+  const name = new Map<string, Row[]>();
+  for (const row of rows) {
+    if (!row?.id || !row.name) continue;
+    const safe = { ...row, barcodes: row.barcodes ?? [] };
+    for (const value of [safe.code, safe.article, ...safe.barcodes]) {
+      if (!value) continue;
+      for (const key of indexKeys(value)) {
+        const list = barcode.get(key);
+        if (list) { if (!list.some(item => item.id === safe.id)) list.push(safe); }
+        else barcode.set(key, [safe]);
+      }
+    }
+    for (const token of labelTokens(`${safe.name} ${safe.article ?? ''}`)) {
+      const list = name.get(token);
+      if (list) { if (!list.some(item => item.id === safe.id)) list.push(safe); }
+      else name.set(token, [safe]);
+    }
+  }
+  if (barcode.size === 0 && name.size === 0) return false;
+  built = { barcode, name };
+  const waiters = readyWaiters.splice(0);
+  for (const waiter of waiters) waiter();
+  return true;
+}
+
+function openCache() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('smart-ombor', 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('scan-index')) request.result.createObjectStore('scan-index');
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readCache() {
+  try {
+    const db = await openCache();
+    const rows = await new Promise<Row[] | null>((resolve, reject) => {
+      const request = db.transaction('scan-index').objectStore('scan-index').get('products');
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result as Row[] : null);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return rows;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCache(rows: Row[]) {
+  try {
+    const db = await openCache();
+    await new Promise<void>((resolve, reject) => {
+      const request = db.transaction('scan-index', 'readwrite').objectStore('scan-index').put(rows, 'products');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+  } catch { /* the next open fetches the list again */ }
+}
 
 function compact(value: string) {
   return value.trim().replace(/[\s-]/g, '').toLowerCase();
@@ -125,6 +191,18 @@ export function scanIndexReady() {
   return built != null;
 }
 
+export function onScanIndex(done: () => void) {
+  if (built) {
+    done();
+    return () => undefined;
+  }
+  readyWaiters.push(done);
+  return () => {
+    const index = readyWaiters.indexOf(done);
+    if (index >= 0) readyWaiters.splice(index, 1);
+  };
+}
+
 export function matchScan(code: string, text: string): BarcodeLookup | null {
   if (!built) return null;
   const clean = code.trim();
@@ -144,34 +222,18 @@ export function matchScan(code: string, text: string): BarcodeLookup | null {
 }
 
 export function loadScanIndex() {
-  if (built) return Promise.resolve();
-  if (!loading) {
-    loading = fetch('/api/scan-index').then(async response => {
-      if (!response.ok) throw new Error('index');
-      const body = await response.json() as { products?: Row[] };
-      if (!body.products?.length) throw new Error('empty');
-      const barcode = new Map<string, Row[]>();
-      const name = new Map<string, Row[]>();
-      for (const row of body.products) {
-        for (const value of [row.code, row.article, ...(row.barcodes ?? [])]) {
-          if (!value) continue;
-          for (const key of indexKeys(value)) {
-            const list = barcode.get(key);
-            if (list) { if (!list.some(item => item.id === row.id)) list.push(row); }
-            else barcode.set(key, [row]);
-          }
-        }
-        for (const token of labelTokens(`${row.name} ${row.article ?? ''}`)) {
-          const list = name.get(token);
-          if (list) { if (!list.some(item => item.id === row.id)) list.push(row); }
-          else name.set(token, [row]);
-        }
-      }
-      built = { barcode, name };
-    }).catch(() => {
-      loading = null;
-      window.setTimeout(() => { void loadScanIndex(); }, 5000);
-    });
-  }
+  if (loading) return loading;
+  loading = (async () => {
+    const cached = await readCache();
+    if (cached?.length) install(cached);
+    const response = await fetch('/api/scan-index');
+    if (!response.ok) throw new Error('index');
+    const body = await response.json() as { products?: Row[] };
+    if (!body.products?.length) throw new Error('empty');
+    if (install(body.products)) await writeCache(body.products);
+  })().catch(() => {
+    loading = null;
+    window.setTimeout(() => { void loadScanIndex(); }, 5000);
+  });
   return loading;
 }

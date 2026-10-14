@@ -7,7 +7,7 @@ import { CircleAlert, Flashlight, Package, Pencil, ScanBarcode, Search, Trash2, 
 import { Link, useSearch } from 'wouter';
 import { type BarcodeLocation, type BarcodeLookup, type Product } from '@workspace/api-client-react';
 import { useI18n, type TKey } from '@/i18n';
-import { loadScanIndex, matchScan, scanIndexReady } from '@/scan-match';
+import { loadScanIndex, matchScan, onScanIndex, scanIndexReady } from '@/scan-match';
 
 type Detected = { rawValue?: string };
 type DetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<Detected[]> };
@@ -489,7 +489,13 @@ export function ScannerPage() {
     };
   }, []);
 
-  useEffect(() => { void loadScanIndex(); }, []);
+  useEffect(() => {
+    void loadScanIndex();
+    return onScanIndex(() => {
+      const latest = recentCode.current;
+      if (latest.value && Date.now() - latest.at < 4000) acceptRef.current(latest.value, 'camera');
+    });
+  }, []);
 
   useEffect(() => {
     if (initial) accept(initial, 'manual');
@@ -569,6 +575,7 @@ export function ScannerPage() {
       const fastReader = new BrowserMultiFormatReader(FAST_HINTS);
       const hardReader = new BrowserMultiFormatReader(HARD_HINTS);
       let scanBusy = false;
+      let detectorBusy = false;
       let frame = 0;
       const readBars = (target: HTMLCanvasElement, hard: boolean) => {
         try {
@@ -584,22 +591,29 @@ export function ScannerPage() {
           scanBusy = true;
           const guide = guideCrop(source);
           const longest = Math.max(guide.w, guide.h);
-          const scale = longest > 800 ? 800 / longest : 1;
+          const scale = longest > 1200 ? 1200 / longest : 1;
           paintRegion(source, ctx, canvas, guide, scale);
           frame += 1;
           const found = readBars(canvas, false);
-          if (!found && frame % 3 === 0 && copyCtx) {
-            copy.width = canvas.width;
-            copy.height = canvas.height;
-            copyCtx.drawImage(canvas, 0, 0);
-            thresholdBars(copyCtx, copy);
-            readBars(copy, true);
+          if (!found && frame % 2 === 0 && copyCtx) {
+            const bandH = Math.max(48, Math.floor(guide.h * 0.46));
+            const band = { x: guide.x, y: guide.y + Math.floor((guide.h - bandH) / 2), w: guide.w, h: bandH };
+            const bandScale = band.w > 1400 ? 1400 / band.w : 1;
+            paintRegion(source, copyCtx, copy, band, bandScale);
+            if (!readBars(copy, true)) {
+              thresholdBars(copyCtx, copy);
+              readBars(copy, true);
+            }
           }
-          if (detector) {
-            const shot = canvas;
+          if (detector && !detectorBusy) {
+            detectorBusy = true;
+            const shot = document.createElement('canvas');
+            shot.width = canvas.width;
+            shot.height = canvas.height;
+            shot.getContext('2d')?.drawImage(canvas, 0, 0);
             void detector.detect(shot).then(rows => {
               for (const item of rows) consider(item.rawValue || '');
-            }).catch(() => undefined);
+            }).catch(() => undefined).finally(() => { detectorBusy = false; });
           }
           scanBusy = false;
         }

@@ -29,6 +29,7 @@ import { AutoRefresh, AUTO_REFRESH_KEY, AUTO_REFRESH_MS, type AutoRefreshState }
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
+import { loadScanIndex } from '@/scan-match';
 import { PartnersPage } from '@/partners';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
@@ -1086,6 +1087,7 @@ function ClerkRoutes() {
   </ClerkProvider>;
 }
 function App() {
+  useEffect(() => { void loadScanIndex(); }, []);
   return <I18nProvider><QueryClientProvider client={queryClient}><AutoRefresh/><WouterRouter base={basePath}>{clerkPubKey ? <ClerkRoutes/> : <LocalRoutes/>}</WouterRouter></QueryClientProvider></I18nProvider>;
 }
 export default App;
