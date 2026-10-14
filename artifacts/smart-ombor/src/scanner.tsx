@@ -53,7 +53,21 @@ const badSound = new Audio(toneWav(440, 160));
 okSound.preload = 'auto';
 badSound.preload = 'auto';
 
+let scanAudio: AudioContext | null = null;
+
 function unlockScanAudio() {
+  const Ctx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (Ctx) {
+    if (!scanAudio) scanAudio = new Ctx();
+    if (scanAudio.state !== 'running') void scanAudio.resume();
+    const tone = scanAudio.createOscillator();
+    const gain = scanAudio.createGain();
+    gain.gain.value = 0.001;
+    tone.connect(gain);
+    gain.connect(scanAudio.destination);
+    tone.start();
+    tone.stop(scanAudio.currentTime + 0.02);
+  }
   for (const sound of [okSound, badSound]) {
     sound.volume = 1;
     const played = sound.play();
@@ -62,13 +76,34 @@ function unlockScanAudio() {
 }
 
 function beep(ok: boolean) {
-  const sound = ok ? okSound : badSound;
+  let heard = false;
   try {
-    sound.pause();
-    sound.currentTime = 0;
-    sound.volume = 1;
-    void sound.play().catch(() => undefined);
-  } catch { /* the phone can block sound until the camera button is tapped */ }
+    if (scanAudio) {
+      if (scanAudio.state !== 'running') void scanAudio.resume();
+      const now = scanAudio.currentTime;
+      const tone = scanAudio.createOscillator();
+      const gain = scanAudio.createGain();
+      tone.type = 'sine';
+      tone.frequency.value = ok ? 2470 : 440;
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(ok ? 0.85 : 0.45, now + 0.015);
+      gain.gain.linearRampToValueAtTime(0.001, now + (ok ? 0.12 : 0.18));
+      tone.connect(gain);
+      gain.connect(scanAudio.destination);
+      tone.start(now);
+      tone.stop(now + 0.2);
+      heard = scanAudio.state === 'running';
+    }
+  } catch { heard = false; }
+  if (!heard) {
+    const sound = ok ? okSound : badSound;
+    try {
+      sound.pause();
+      sound.currentTime = 0;
+      sound.volume = 1;
+      void sound.play().catch(() => undefined);
+    } catch { /* sound stays optional if the phone blocks both paths */ }
+  }
   navigator.vibrate?.(ok ? 45 : [22, 40, 22]);
 }
 
