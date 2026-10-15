@@ -5,6 +5,7 @@ import { idleDays, loadCatalog, peekCatalog } from "./catalog";
 import { textPdf } from "./report-pdf";
 import { logger } from "./logger";
 import { orderBasis, orderRecommendations, productTraits } from "./recommendations";
+import { recommendationPdf, recommendationRows, recommendationXlsx } from "./reco-export";
 
 const STATE_FILE = dataFile("telegram.json");
 const HOUR = 19;
@@ -102,6 +103,10 @@ function tashkentParts(date = new Date()) {
   return { day: `${pick("day")}.${pick("month")}.${pick("year")}`, hour: Number(pick("hour")), stamp: `${pick("year")}-${pick("month")}-${pick("day")}` };
 }
 
+function titleMark(index: number, model: string) {
+  return `<a href="https://smartombor.onrender.com/recommendations"><b>${String(index).padStart(2, "0")}   ${escapeHtml(model)}</b></a>`;
+}
+
 function orderCard(index: number, model: string, rows: ReturnType<typeof orderRecommendations>) {
   const sorted = [...rows].sort((a, b) => {
     const left = productTraits(a.product.name).size ?? "";
@@ -112,15 +117,25 @@ function orderCard(index: number, model: string, rows: ReturnType<typeof orderRe
     const traits = productTraits(line.product.name);
     const size = traits.size ? escapeHtml(traits.size) : "o‘lchamsiz";
     const color = traits.color ? COLOR_LABEL[traits.color] : "";
-    const tone = color ? ` · ${escapeHtml(color)}` : "";
-    const code = line.product.code ? ` · <code>${escapeHtml(line.product.code)}</code>` : "";
-    const article = line.product.article ? ` · ${escapeHtml(line.product.article)}` : "";
+    const identity = color ? `${size} · ${escapeHtml(color)}` : size;
+    const marks = [
+      line.product.code ? `kod <code>${escapeHtml(line.product.code)}</code>` : "",
+      line.product.article ? `artikul ${escapeHtml(line.product.article)}` : "",
+    ].filter(Boolean).join(" · ");
     const basis = orderBasis(line);
-    return `${size}${tone}${code}${article}\n${basis.windowDays} kunda sotilgan <b>${pieces(basis.sold)}</b>\nqoldiq <b>${pieces(line.onHand)}</b> · yo‘lda <b>${pieces(line.inTransit)}</b> · yetadi <b>${piecesDecimal(basis.coverDays)}</b> kun\n${basis.coverTarget} kunga kerak <b>${pieces(basis.target)}</b>  →  buyurtma <b>${pieces(line.suggestedQuantity)}</b>`;
+    return [
+      `<b>${identity}</b>`,
+      marks,
+      `${basis.windowDays} kunda <b>${pieces(basis.sold)}</b> dona sotilgan.`,
+      `Hozir qoldiq <b>${pieces(line.onHand)}</b> dona. Yo‘lda <b>${pieces(line.inTransit)}</b> dona.`,
+      `Shu tezlikda qoldiq <b>${piecesDecimal(basis.coverDays)}</b> kunga yetadi.`,
+      `${basis.coverTarget} kunlik qoldiq uchun <b>${pieces(basis.target)}</b> dona kerak.`,
+      `<b>Buyurtma:</b> <code>${pieces(line.suggestedQuantity)} dona</code>`,
+    ].filter(Boolean).join("\n");
   });
   const total = rows.reduce((sum, line) => sum + line.suggestedQuantity, 0);
-  const foot = rows.length > 1 ? `\n\nJami buyurtma · <b>${pieces(total)}</b>` : "";
-  return `<blockquote><b>${String(index).padStart(2, "0")}   ${escapeHtml(model)}</b>\n${lines.join("\n\n")}${foot}</blockquote>`;
+  const foot = rows.length > 1 ? `\n\nShu modeldan jami buyurtma: <code>${pieces(total)} dona</code>` : "";
+  return `<blockquote>${titleMark(index, model)}\n\n${lines.join("\n\n")}${foot}</blockquote>`;
 }
 
 function idleCard(index: number, name: string, code: string | null, stock: number, days: number) {
@@ -130,7 +145,7 @@ function idleCard(index: number, name: string, code: string | null, stock: numbe
   const tone = color ? `${escapeHtml(color)} · ` : "";
   const mark = code ? `<code>${escapeHtml(code)}</code> · ` : "";
   const label = days >= 90 ? "90 kun savdosiz" : "30 kun savdosiz";
-  return `<blockquote><b>${String(index).padStart(2, "0")}   ${escapeHtml(modelTitle(name))}</b>\n${size}${tone}${mark}qoldiq <b>${pieces(stock)}</b>\n<i>${label}</i></blockquote>`;
+  return `<blockquote>${titleMark(index, modelTitle(name))}\n${size}${tone}${mark}qoldiq <code>${pieces(stock)} dona</code>\n<i>${label}</i></blockquote>`;
 }
 
 export function digestParts() {
@@ -149,7 +164,7 @@ export function digestParts() {
   const cards = [...groups.entries()].map(([model, rows], index) => orderCard(index + 1, model, rows));
   const parts: string[] = [];
   let current = lines.length
-    ? ["<b>Smart Ombor</b>", when.day, "", "<b>Buyurtma</b>", `${pieces(groups.size)} ta model · ${pieces(lines.length)} ta o‘lcham · <b>${pieces(total)}</b> dona`, "Miqdor shu o‘lchamning o‘z savdosidan. Maqsad — 30 kunlik qoldiq."].join("\n")
+    ? ["<b>Smart Ombor</b>", when.day, "", `<a href="https://smartombor.onrender.com/recommendations"><b>Buyurtma</b></a>`, `Eng katta ${pieces(lines.length)} ta o‘lcham · ${pieces(groups.size)} ta model`, `Jami buyurtma: <code>${pieces(total)} dona</code>`, "", "Har bir miqdor shu o‘lchamning o‘z savdosidan olingan.", "Maqsad — omborda 30 kunga yetadigan qoldiq."].join("\n")
     : `<b>Smart Ombor</b>\n${when.day}\n\n<b>Buyurtma</b>\nBugun buyurtma talab qiladigan mahsulot yo‘q.`;
   for (const card of cards) {
     const next = `${current}\n\n${card}`;
@@ -167,7 +182,7 @@ export function digestParts() {
   if (idle.length) {
     const stock = idle.reduce((sum, row) => sum + row.product.stock, 0);
     const idleCards = idle.map((row, index) => idleCard(index + 1, row.product.name, row.product.code, row.product.stock, row.days ?? 30));
-    let idleText = ["<b>Smart Ombor</b>", when.day, "", "<b>Turib qolgan</b>", `${pieces(idle.length)} ta · qoldiq <b>${pieces(stock)}</b> dona`].join("\n");
+    let idleText = ["<b>Smart Ombor</b>", when.day, "", "<b>Turib qolgan</b>", `${pieces(idle.length)} ta mahsulot · qoldiq <code>${pieces(stock)} dona</code>`, "Savdo kamida 30 kundan beri yo‘q, omborda esa qolgan."].join("\n");
     for (const card of idleCards) {
       const next = `${idleText}\n\n${card}`;
       if (next.length > 3800) {
@@ -180,17 +195,34 @@ export function digestParts() {
   return parts;
 }
 
-async function send(chatId: number, text: string) {
+const DOWNLOADS = {
+  inline_keyboard: [[
+    { text: "PDF yuklab olish", callback_data: "reco-pdf" },
+    { text: "Excel yuklab olish", callback_data: "reco-xlsx" },
+  ]],
+};
+
+async function send(chatId: number, text: string, markup?: typeof DOWNLOADS) {
   const result = await telegram("sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
+    ...(markup ? { reply_markup: markup } : {}),
   });
   return Boolean(result && (result as { ok?: boolean }).ok !== false);
 }
 
-const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nKechki buyurtma har kuni soat <b>19:00</b> da shu yerga keladi. PDF hisobot har 2 kunda.";
+async function sendDigest(chatId: number) {
+  const parts = digestParts();
+  let sent = true;
+  for (let index = 0; index < parts.length; index += 1) {
+    sent = await send(chatId, parts[index], index === 0 ? DOWNLOADS : undefined) && sent;
+  }
+  return sent;
+}
+
+const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nKechki buyurtma har kuni soat <b>19:00</b> da shu yerga keladi. Xabardagi tugma to‘liq PDF va Excel ro‘yxatni yuboradi.";
 
 function daysBetween(from: string, to: string) {
   const start = Date.parse(`${from}T00:00:00Z`);
@@ -230,14 +262,33 @@ function reportLines() {
   return lines;
 }
 
-async function sendPdf(chatId: number, body: Buffer, filename: string) {
+async function sendFile(chatId: number, body: Buffer, filename: string, mime: string, caption: string) {
   const key = token();
-  if (!key) return;
+  if (!key) return false;
   const form = new FormData();
   form.set("chat_id", String(chatId));
-  form.set("caption", "Smart Ombor · 2 kunlik hisobot");
-  form.set("document", new Blob([body], { type: "application/pdf" }), filename);
-  await fetch(`https://api.telegram.org/bot${key}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(35_000) });
+  form.set("caption", caption);
+  form.set("document", new Blob([body], { type: mime }), filename);
+  const response = await fetch(`https://api.telegram.org/bot${key}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(35_000) });
+  if (!response.ok) {
+    const detail = await response.text();
+    logger.warn({ status: response.status, detail: detail.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot").slice(0, 240) }, "Telegram file failed");
+    return false;
+  }
+  return true;
+}
+
+async function sendRecommendationFile(chatId: number, kind: "pdf" | "xlsx") {
+  const catalog = await loadCatalog();
+  const rows = recommendationRows(catalog);
+  const when = tashkentParts();
+  const caption = `Tavsiyalar · ${rows.length} ta · to‘liq ro‘yxat · ${when.day}`;
+  if (kind === "xlsx") {
+    return sendFile(chatId, recommendationXlsx(catalog), `tavsiyalar-${when.stamp}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", caption);
+  }
+  const pdf = await recommendationPdf(catalog, `${when.day} · ${rows.length} ta tavsiya`);
+  if (!pdf) return false;
+  return sendFile(chatId, pdf, `tavsiyalar-${when.stamp}.pdf`, "application/pdf", caption);
 }
 
 let ticking = false;
@@ -247,23 +298,32 @@ async function tick() {
   ticking = true;
   try {
     const state = readState();
-    const payload = await telegram("getUpdates", { offset: state.offset, timeout: 0, allowed_updates: ["message"] });
-    const updates = Array.isArray(payload?.result) ? payload.result as Array<{ update_id: number; message?: { chat?: { id?: number }; text?: string } }> : [];
+    const payload = await telegram("getUpdates", { offset: state.offset, timeout: 0, allowed_updates: ["message", "callback_query"] });
+    const updates = Array.isArray(payload?.result) ? payload.result as Array<{ update_id: number; message?: { chat?: { id?: number }; text?: string }; callback_query?: { id: string; data?: string; message?: { chat?: { id?: number } } } }> : [];
     for (const update of updates) {
       state.offset = update.update_id + 1;
+      const query = update.callback_query;
+      if (query) {
+        await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Fayl tayyorlanmoqda" });
+        const chatId = query.message?.chat?.id;
+        if (chatId && chatId === state.chatId && (query.data === "reco-pdf" || query.data === "reco-xlsx")) {
+          await sendRecommendationFile(chatId, query.data === "reco-pdf" ? "pdf" : "xlsx");
+        }
+        continue;
+      }
       const chatId = update.message?.chat?.id;
       if (!chatId) continue;
       const first = state.chatId == null;
       state.chatId = chatId;
       if (first || update.message?.text?.startsWith("/start")) {
         await send(chatId, WELCOME);
-        for (const part of digestParts()) await send(chatId, part);
+        await sendDigest(chatId);
         logger.info("Telegram chat linked");
       }
     }
     const now = tashkentParts();
     if (state.chatId && now.hour >= HOUR && state.sentOn !== now.stamp) {
-      for (const part of digestParts()) await send(state.chatId, part);
+      await sendDigest(state.chatId);
       state.sentOn = now.stamp;
     }
     if (state.chatId && now.hour >= HOUR) {
@@ -271,7 +331,7 @@ async function tick() {
       else if (daysBetween(state.sentPdfOn, now.stamp) >= 2) {
         const pdf = await textPdf(`Smart Ombor ${now.day}`, reportLines());
         if (pdf) {
-          await sendPdf(state.chatId, pdf, `smart-ombor-${now.stamp}.pdf`);
+          await sendFile(state.chatId, pdf, `smart-ombor-${now.stamp}.pdf`, "application/pdf", "Smart Ombor · 2 kunlik hisobot");
           state.sentPdfOn = now.stamp;
         }
       }
@@ -289,9 +349,7 @@ export async function sendPreview() {
   await loadCatalog();
   const state = readState();
   if (!state.chatId) return false;
-  let sent = true;
-  for (const part of digestParts()) sent = await send(state.chatId, part) && sent;
-  return sent;
+  return sendDigest(state.chatId);
 }
 
 export function startTelegramDigest() {
