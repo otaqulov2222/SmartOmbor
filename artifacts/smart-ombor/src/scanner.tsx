@@ -170,6 +170,17 @@ function guideCrop(source: HTMLVideoElement) {
   return { x: Math.floor(x + padX), y: Math.floor(y + padY), w: Math.floor(w), h: Math.floor(h) };
 }
 
+function turn180(source: HTMLCanvasElement, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+  canvas.width = source.width;
+  canvas.height = source.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width, canvas.height);
+  ctx.rotate(Math.PI);
+  ctx.drawImage(source, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
 function paintRegion(source: HTMLVideoElement, ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, region: { x: number; y: number; w: number; h: number }, scale: number, smooth = false) {
   canvas.width = Math.max(1, Math.floor(region.w * scale));
   canvas.height = Math.max(8, Math.floor(region.h * scale));
@@ -575,8 +586,10 @@ export function ScannerPage() {
       if (preview) { preview.srcObject = stream; await preview.play(); }
       const canvas = document.createElement('canvas');
       const copy = document.createElement('canvas');
+      const turned = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const copyCtx = copy.getContext('2d', { willReadFrequently: true });
+      const turnCtx = turned.getContext('2d', { willReadFrequently: true });
       const Detector = (window as Window & { BarcodeDetector?: DetectorCtor & { getSupportedFormats?: () => Promise<string[]> } }).BarcodeDetector;
       let detector: { detect: (source: CanvasImageSource) => Promise<Detected[]> } | null = null;
       if (Detector) {
@@ -609,7 +622,11 @@ export function ScannerPage() {
           const scale = longest > 1200 ? 1200 / longest : 1;
           paintRegion(source, ctx, canvas, guide, scale);
           frame += 1;
-          const found = readBars(canvas, false);
+          let found = readBars(canvas, false);
+          if (!found && turnCtx && frame % 2 === 0) {
+            turn180(canvas, turnCtx, turned);
+            found = readBars(turned, false);
+          }
           if (!found && copyCtx && frame % 4 === 0) {
             const bandH = Math.max(64, Math.floor(guide.h * 0.62));
             const band = { x: guide.x, y: guide.y + guide.h - bandH, w: guide.w, h: bandH };
