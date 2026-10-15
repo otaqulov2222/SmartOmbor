@@ -15,7 +15,7 @@ type Product = {
   id: string; name: string; code: string | null; article: string | null; barcodes: string[];
   factory: string | null; category: string | null; unit: string | null; stock: number; available: number;
   cost: number | null; salePrice: number | null; lastSale: string | null; lastReceipt: string | null;
-  sales30: number; daysCover: number | null; stockStatus: string; inTransit: number;
+  sales7: number; sales30: number; daysCover: number | null; stockStatus: string; inTransit: number;
 };
 type Warehouse = { id: string; name: string; code: string | null; address: string | null };
 type Document = {
@@ -37,7 +37,7 @@ type Dashboard = {
   lowStockCount: number; nonMovingCount: number; pendingTransfers: number; incomingToday: number; lastSync: string | null;
 };
 type Sales = { period: string; totalAmount: number; totalQuantity: number; averagePerDay: number; trend: { date: string; amount: number; quantity: number }[]; topProducts: Product[] };
-type Reco = { product: Product; onHand: number; inTransit: number; dailyAverage: number; leadTimeDays: number; suggestedQuantity: number; reason: string };
+type Reco = { product: Product; onHand: number; inTransit: number; dailyAverage: number; leadTimeDays: number; safetyStock: number; suggestedQuantity: number; reason: string };
 
 export type BuiltReport = {
   title: string;
@@ -256,9 +256,12 @@ export async function buildReport(kind: ExportKind, period: Period, lang: Lang):
     sheets.push(sheet(t(lang, 'report.recommendations'), [
       t(lang, 'col.name'), t(lang, 'col.code'), t(lang, 'col.onHand'), t(lang, 'stock.col.inTransit'), t(lang, 'col.perDay'), t(lang, 'col.leadTime'), t(lang, 'col.suggested'), t(lang, 'col.reason'),
     ], items.map(r => {
-      const reasonKey = `reco.reason.${r.reason}` as TKey;
-      const reason = t(lang, reasonKey);
-      return [r.product.name, r.product.code || r.product.article || '', r.onHand, r.inTransit, r.dailyAverage, r.leadTimeDays, r.suggestedQuantity, reason === reasonKey ? r.reason : reason];
+      const windowDays = r.product.sales30 > 0 ? 30 : 7;
+      const sold = windowDays === 30 ? r.product.sales30 : r.product.sales7;
+      const daily = sold / windowDays;
+      const cover = daily > 0 ? Math.round((r.onHand / daily) * 10) / 10 : 0;
+      const reason = `${t(lang, 'reco.fact.sold', { days: windowDays, sold })}. ${t(lang, 'reco.fact.need', { stock: r.onHand, transit: r.inTransit, cover, days: r.leadTimeDays, need: r.safetyStock, order: r.suggestedQuantity })}`;
+      return [r.product.name, r.product.code || r.product.article || '', r.onHand, r.inTransit, r.dailyAverage, r.leadTimeDays, r.suggestedQuantity, reason];
     })));
   } else if (kind === 'audit') {
     const items = await getJson<Array<{ id: string; createdAt: string; action: string; entityType: string; entityId: string | null; actor: string; details: string | null }>>('/api/audit') || [];

@@ -796,7 +796,13 @@ function RecommendationsPage() {
   const [search, setSearch] = useState('');
   const params = useMemo(() => ({ warehouseId: warehouse || undefined }), [warehouse]);
   const q = useGetPurchaseRecommendations(params);
-  const reason = (code: string) => { const key = `reco.reason.${code}` as TKey; const v = t(key); return v === key ? code : v; };
+  const basis = (row: { product: { sales30: number; sales7: number }; onHand: number }) => {
+    const windowDays = row.product.sales30 > 0 ? 30 : 7;
+    const sold = windowDays === 30 ? row.product.sales30 : row.product.sales7;
+    const daily = sold / windowDays;
+    const cover = daily > 0 ? Math.round((row.onHand / daily) * 10) / 10 : 0;
+    return { windowDays, sold, cover };
+  };
   const traits = (name: string) => {
     const size = name.match(/(\d{2})\s*[-–]\s*(\d{2})/);
     const color = RECO_COLORS.find(([pattern]) => pattern.test(name));
@@ -819,7 +825,7 @@ function RecommendationsPage() {
         <article><span>{t('reco.kpi.units')}</span><strong>{fmt(units)}</strong><small>{t('reco.kpi.unitsNote')}</small></article>
         <article><span>{t('reco.kpi.fast')}</span><strong>{fmt(fast)}</strong><small>{t('reco.kpi.fastNote')}</small></article>
       </section>
-      {rows.length ? <Card className="table-card" title={t('reco.panel')} meta={t('reco.count', { count: fmt(rows.length) })}><Table testId="table-recommendations" numeric={[3, 4, 5]} columns={[t('common.product'), t('reco.col.size'), t('reco.col.color'), t('reco.col.current'), t('reco.col.perDay'), t('reco.col.suggested'), t('reco.col.reason')]} rows={rows.map(r => { const look = traits(r.product.name); return { key: `${r.product.id}-${r.warehouseId}`, testId: `row-recommendation-${r.product.id}`, cells: [<ProductTitle product={r.product} href={`/products?search=${encodeURIComponent(r.product.code || r.product.name)}`}/>, look.size, look.color, <span className="cell-two"><b>{t('reco.onHand', { count: fmt(r.onHand) })}</b><small>{t('reco.inTransit', { count: fmt(r.inTransit) })}</small></span>, fmt(r.dailyAverage, 2), <b className="move-qty">{fmt(r.suggestedQuantity)} {unit(r.product.unit)}</b>, reason(r.reason)] }; })}/></Card> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
+      {rows.length ? <Card className="table-card" title={t('reco.panel')} meta={t('reco.count', { count: fmt(rows.length) })}><Table testId="table-recommendations" numeric={[5]} columns={[t('common.product'), t('reco.col.size'), t('reco.col.color'), t('reco.col.current'), t('reco.col.reason'), t('reco.col.suggested')]} rows={rows.map(r => { const look = traits(r.product.name); const fact = basis(r); return { key: `${r.product.id}-${r.warehouseId}`, testId: `row-recommendation-${r.product.id}`, cells: [<ProductTitle product={r.product} href={`/products?search=${encodeURIComponent(r.product.code || r.product.name)}`}/>, look.size, look.color, <span className="cell-two"><b>{t('reco.onHand', { count: fmt(r.onHand) })}</b><small>{t('reco.inTransit', { count: fmt(r.inTransit) })}</small></span>, <span className="cell-two reco-fact"><b>{t('reco.fact.sold', { days: fact.windowDays, sold: fmt(fact.sold) })}</b><small>{t('reco.fact.need', { stock: fmt(r.onHand), transit: fmt(r.inTransit), cover: fmt(fact.cover, 1), days: r.leadTimeDays, need: fmt(r.safetyStock), order: fmt(r.suggestedQuantity) })}</small></span>, <b className="move-qty">{fmt(r.suggestedQuantity)} {unit(r.product.unit)}</b>] }; })}/></Card> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
     </> : <EmptyState title={t('reco.empty.title')} body={t('reco.empty.body')} icon={Sparkles}/>}
   </>;
 }

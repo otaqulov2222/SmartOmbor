@@ -4,7 +4,7 @@ import { dataFile } from "./data-dir";
 import { idleDays, loadCatalog, peekCatalog } from "./catalog";
 import { textPdf } from "./report-pdf";
 import { logger } from "./logger";
-import { orderRecommendations, productTraits } from "./recommendations";
+import { orderBasis, orderRecommendations, productTraits } from "./recommendations";
 
 const STATE_FILE = dataFile("telegram.json");
 const HOUR = 19;
@@ -57,6 +57,10 @@ function pieces(value: number) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value).replace(/\u00a0|\u202f/g, " ");
 }
 
+function piecesDecimal(value: number) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(value).replace(/\u00a0|\u202f/g, " ");
+}
+
 function escapeHtml(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -73,12 +77,6 @@ const COLOR_LABEL: Record<string, string> = {
   bej: "Bej",
   pushti: "Pushti",
 };
-
-function statusLabel(reason: string) {
-  if (reason === "out_of_stock") return "tugagan";
-  if (reason === "fast") return "tez ketadi";
-  return "kam qoldiq";
-}
 
 function modelTitle(name: string) {
   const colors = Object.values(COLOR_LABEL).map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
@@ -117,7 +115,8 @@ function orderCard(index: number, model: string, rows: ReturnType<typeof orderRe
     const tone = color ? ` · ${escapeHtml(color)}` : "";
     const code = line.product.code ? ` · <code>${escapeHtml(line.product.code)}</code>` : "";
     const article = line.product.article ? ` · ${escapeHtml(line.product.article)}` : "";
-    return `${size}${tone}${code}${article}\nqoldiq <b>${pieces(line.onHand)}</b>  →  buyurtma <b>${pieces(line.suggestedQuantity)}</b>\n<i>${statusLabel(line.reason)}</i>`;
+    const basis = orderBasis(line);
+    return `${size}${tone}${code}${article}\n${basis.windowDays} kunda sotilgan <b>${pieces(basis.sold)}</b>\nqoldiq <b>${pieces(line.onHand)}</b> · yo‘lda <b>${pieces(line.inTransit)}</b> · yetadi <b>${piecesDecimal(basis.coverDays)}</b> kun\n${basis.coverTarget} kunga kerak <b>${pieces(basis.target)}</b>  →  buyurtma <b>${pieces(line.suggestedQuantity)}</b>`;
   });
   const total = rows.reduce((sum, line) => sum + line.suggestedQuantity, 0);
   const foot = rows.length > 1 ? `\n\nJami buyurtma · <b>${pieces(total)}</b>` : "";
@@ -150,7 +149,7 @@ export function digestParts() {
   const cards = [...groups.entries()].map(([model, rows], index) => orderCard(index + 1, model, rows));
   const parts: string[] = [];
   let current = lines.length
-    ? ["<b>Smart Ombor</b>", when.day, "", "<b>Buyurtma</b>", `${pieces(groups.size)} ta model · ${pieces(lines.length)} ta o‘lcham · <b>${pieces(total)}</b> dona`, "Sotiladi. Qoldig‘i 30 kunga yetmaydi."].join("\n")
+    ? ["<b>Smart Ombor</b>", when.day, "", "<b>Buyurtma</b>", `${pieces(groups.size)} ta model · ${pieces(lines.length)} ta o‘lcham · <b>${pieces(total)}</b> dona`, "Miqdor shu o‘lchamning o‘z savdosidan. Maqsad — 30 kunlik qoldiq."].join("\n")
     : `<b>Smart Ombor</b>\n${when.day}\n\n<b>Buyurtma</b>\nBugun buyurtma talab qiladigan mahsulot yo‘q.`;
   for (const card of cards) {
     const next = `${current}\n\n${card}`;
@@ -213,7 +212,9 @@ function reportLines() {
   if (!orders.length) lines.push("Buyurtma talab qilinmaydi.");
   for (const line of orders) {
     const traits = productTraits(line.product.name);
-    lines.push(`${line.product.name}   ${line.product.code || "—"}   ${traits.size || "—"}   ${line.suggestedQuantity} dona`);
+    const basis = orderBasis(line);
+    lines.push(`${line.product.name}   ${line.product.code || "—"}   ${traits.size || "—"}`);
+    lines.push(`${basis.windowDays} kunda ${basis.sold} sotilgan. Qoldiq ${line.onHand}, yo‘lda ${line.inTransit}, ${basis.coverDays} kunga yetadi. ${basis.coverTarget} kunga ${basis.target} kerak, buyurtma ${line.suggestedQuantity}.`);
   }
   lines.push("", "Turib qolganlar");
   const idle = catalog.products

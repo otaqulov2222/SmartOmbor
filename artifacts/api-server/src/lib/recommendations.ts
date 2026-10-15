@@ -53,6 +53,14 @@ export function orderRecommendations(catalog: Catalog, warehouseId?: string): Or
   return lines.slice(0, 80);
 }
 
+export function orderBasis(line: OrderLine) {
+  const windowDays = line.product.sales30 > 0 ? 30 : 7;
+  const sold = windowDays === 30 ? line.product.sales30 : line.product.sales7;
+  const daily = windowDays > 0 ? sold / windowDays : 0;
+  const coverDays = daily > 0 ? Math.round((line.onHand / daily) * 10) / 10 : 0;
+  return { windowDays, sold, coverDays, target: line.safetyStock, coverTarget: line.leadTimeDays };
+}
+
 const COLOR_WORDS: Array<[RegExp, string]> = [
   [/\bqora\b|\bчерн/i, "qora"],
   [/\boq\b|\bбел(ый|ая|ое)?\b/i, "oq"],
