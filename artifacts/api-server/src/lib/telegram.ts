@@ -45,7 +45,11 @@ async function telegram(method: string, body: Record<string, unknown>) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(35_000),
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const detail = await response.text();
+    logger.warn({ status: response.status, detail: detail.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot").slice(0, 240) }, "Telegram request failed");
+    return null;
+  }
   return response.json() as Promise<{ ok?: boolean; result?: unknown }>;
 }
 
@@ -71,9 +75,20 @@ const COLOR_LABEL: Record<string, string> = {
 };
 
 function statusLabel(reason: string) {
-  if (reason === "out_of_stock") return "Qoldiq tugagan";
-  if (reason === "fast") return "Yaxshi sotiladi";
-  return "Qoldiq kam";
+  if (reason === "out_of_stock") return "tugagan";
+  if (reason === "fast") return "tez ketadi";
+  return "kam qoldiq";
+}
+
+function modelTitle(name: string) {
+  const colors = Object.values(COLOR_LABEL).map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const titled = name
+    .replace(/\d{2}\s*[-–]\s*\d{2}/g, " ")
+    .replace(new RegExp(`\\(\\s*(?:${colors})\\s*\\)`, "gi"), " ")
+    .replace(new RegExp(`\\b(?:${colors})\\b`, "gi"), " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return titled || name;
 }
 
 function tashkentParts(date = new Date()) {
@@ -89,41 +104,54 @@ function tashkentParts(date = new Date()) {
   return { day: `${pick("day")}.${pick("month")}.${pick("year")}`, hour: Number(pick("hour")), stamp: `${pick("year")}-${pick("month")}-${pick("day")}` };
 }
 
+function orderCard(index: number, model: string, rows: ReturnType<typeof orderRecommendations>) {
+  const sorted = [...rows].sort((a, b) => {
+    const left = productTraits(a.product.name).size ?? "";
+    const right = productTraits(b.product.name).size ?? "";
+    return left.localeCompare(right, "uz");
+  });
+  const lines = sorted.map((line) => {
+    const traits = productTraits(line.product.name);
+    const size = traits.size ? escapeHtml(traits.size) : "o‘lchamsiz";
+    const color = traits.color ? COLOR_LABEL[traits.color] : "";
+    const tone = color ? ` · ${escapeHtml(color)}` : "";
+    const code = line.product.code ? ` · <code>${escapeHtml(line.product.code)}</code>` : "";
+    const article = line.product.article ? ` · ${escapeHtml(line.product.article)}` : "";
+    return `${size}${tone}${code}${article}\nqoldiq <b>${pieces(line.onHand)}</b>  →  buyurtma <b>${pieces(line.suggestedQuantity)}</b>\n<i>${statusLabel(line.reason)}</i>`;
+  });
+  const total = rows.reduce((sum, line) => sum + line.suggestedQuantity, 0);
+  const foot = rows.length > 1 ? `\n\nJami buyurtma · <b>${pieces(total)}</b>` : "";
+  return `<blockquote><b>${String(index).padStart(2, "0")}   ${escapeHtml(model)}</b>\n${lines.join("\n\n")}${foot}</blockquote>`;
+}
+
+function idleCard(index: number, name: string, code: string | null, stock: number, days: number) {
+  const traits = productTraits(name);
+  const color = traits.color ? COLOR_LABEL[traits.color] : "";
+  const size = traits.size ? `${escapeHtml(traits.size)} · ` : "";
+  const tone = color ? `${escapeHtml(color)} · ` : "";
+  const mark = code ? `<code>${escapeHtml(code)}</code> · ` : "";
+  const label = days >= 90 ? "90 kun savdosiz" : "30 kun savdosiz";
+  return `<blockquote><b>${String(index).padStart(2, "0")}   ${escapeHtml(modelTitle(name))}</b>\n${size}${tone}${mark}qoldiq <b>${pieces(stock)}</b>\n<i>${label}</i></blockquote>`;
+}
+
 export function digestParts() {
   const catalog = peekCatalog();
   const when = tashkentParts();
   if (!catalog) return [`<b>Smart Ombor</b>\n${when.day}\n\nKatalog hali yuklanmagan.`];
-  const lines = orderRecommendations(catalog).slice(0, 15);
+  const lines = orderRecommendations(catalog).slice(0, 12);
   const total = lines.reduce((sum, line) => sum + line.suggestedQuantity, 0);
-  const header = [
-    "<b>Smart Ombor</b>",
-    `Kechki buyurtma · ${when.day}`,
-    "",
-    "Yaxshi sotilayotgan, qoldig‘i 30 kunga yetmaydigan mahsulotlar.",
-    "",
-    `<b>${pieces(lines.length)}</b> ta mahsulot  ·  jami <b>${pieces(total)}</b> dona`,
-  ].join("\n");
   const groups = new Map<string, typeof lines>();
   for (const line of lines) {
-    const key = line.product.name.replace(/\d{2}\s*[-–]\s*\d{2}/g, "").replace(/\s+/g, " ").trim() || line.product.name;
+    const key = modelTitle(line.product.name);
     const list = groups.get(key) ?? [];
     list.push(line);
     groups.set(key, list);
   }
-  const cards = [...groups.entries()].map(([model, rows], index) => {
-    const sizes = rows.map((line) => {
-      const traits = productTraits(line.product.name);
-      const code = line.product.code ? ` · <code>${escapeHtml(line.product.code)}</code>` : "";
-      const size = traits.size ? escapeHtml(traits.size) : "o‘lchamsiz";
-      return `${size}${code} · qoldiq <b>${pieces(line.onHand)}</b> · <b>${pieces(line.suggestedQuantity)} dona</b>`;
-    });
-    const groupTotal = rows.reduce((sum, line) => sum + line.suggestedQuantity, 0);
-    return `<blockquote><b>${String(index + 1).padStart(2, "0")}  ${escapeHtml(model)}</b>\n${sizes.join("\n")}\nJami · <b>${pieces(groupTotal)} dona</b></blockquote>`;
-  });
+  const cards = [...groups.entries()].map(([model, rows], index) => orderCard(index + 1, model, rows));
   const parts: string[] = [];
   let current = lines.length
-    ? header
-    : `<b>Smart Ombor</b>\nKechki buyurtma · ${when.day}\n\nBugun buyurtma talab qiladigan mahsulot topilmadi.`;
+    ? ["<b>Smart Ombor</b>", when.day, "", "<b>Buyurtma</b>", `${pieces(groups.size)} ta model · ${pieces(lines.length)} ta o‘lcham · <b>${pieces(total)}</b> dona`, "Sotiladi. Qoldig‘i 30 kunga yetmaydi."].join("\n")
+    : `<b>Smart Ombor</b>\n${when.day}\n\n<b>Buyurtma</b>\nBugun buyurtma talab qiladigan mahsulot yo‘q.`;
   for (const card of cards) {
     const next = `${current}\n\n${card}`;
     if (next.length > 3800) {
@@ -136,17 +164,12 @@ export function digestParts() {
     .map((product) => ({ product, days: idleDays(product, catalog.salesCoverage) }))
     .filter((row) => row.days != null && row.days >= 30 && row.product.stock > 0)
     .sort((a, b) => (b.days ?? 0) - (a.days ?? 0) || b.product.stock - a.product.stock)
-    .slice(0, 10);
+    .slice(0, 8);
   if (idle.length) {
-    const cards = idle.map((row, index) => {
-      const traits = productTraits(row.product.name);
-      const code = row.product.code ? ` · <code>${escapeHtml(row.product.code)}</code>` : "";
-      const size = traits.size ? ` · ${escapeHtml(traits.size)}` : "";
-      const label = row.days === 90 ? "90 kunda savdo yo‘q" : "30 kunda savdo yo‘q";
-      return `<b>${String(index + 1).padStart(2, "0")}  ${escapeHtml(row.product.name)}</b>${size}${code}\nQoldiq · <b>${pieces(row.product.stock)}</b> · <i>${label}</i>`;
-    });
-    let idleText = [`<b>Smart Ombor</b>`, `Turib qolganlar · ${when.day}`].join("\n");
-    for (const card of cards) {
+    const stock = idle.reduce((sum, row) => sum + row.product.stock, 0);
+    const idleCards = idle.map((row, index) => idleCard(index + 1, row.product.name, row.product.code, row.product.stock, row.days ?? 30));
+    let idleText = ["<b>Smart Ombor</b>", when.day, "", "<b>Turib qolgan</b>", `${pieces(idle.length)} ta · qoldiq <b>${pieces(stock)}</b> dona`].join("\n");
+    for (const card of idleCards) {
       const next = `${idleText}\n\n${card}`;
       if (next.length > 3800) {
         parts.push(idleText);

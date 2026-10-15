@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, Boxes, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, PanelLeft, PanelLeftClose, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, MoreHorizontal, PanelLeft, PanelLeftClose, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   Sparkles, UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -73,7 +73,12 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const navGroups: TKey[] = ['nav.group.workspace', 'nav.group.operations', 'nav.group.analytics', 'nav.group.system'];
+const primaryHrefs = ['/dashboard', '/products', '/scanner', '/partners', '/recommendations'];
+const moreGroups: { key: TKey; hrefs: string[] }[] = [
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
+];
+const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const roleOptions: AppUserRole[] = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst'];
 
 /* ---------- small helpers ---------- */
@@ -144,45 +149,82 @@ function ScanMark({ size = 18 }: { size?: number }) {
 }
 
 /* ---------- auth pages ---------- */
-function AuthSplash({ kicker, title, body, children }: { kicker: string; title: string; body: string; children: ReactNode }) {
-  return <div className="auth"><aside className="auth-side"><BrandMark light/><div><p className="eyebrow eyebrow-light">{kicker}</p><h1>{title}</h1><p className="auth-body">{body}</p></div><LangSwitch/></aside><main className="auth-main">{children}</main></div>;
+function AuthSplash({ title, body, children }: { title?: string; body?: string; children: ReactNode }) {
+  return <div className="auth"><aside className="auth-side"><BrandMark light/>{(title || body) && <div>{title && <h1>{title}</h1>}{body && <p className="auth-body">{body}</p>}</div>}<LangSwitch/></aside><main className="auth-main">{children}</main></div>;
 }
 function SignInPage() {
-  const { t } = useI18n();
-  return <AuthSplash kicker={t('auth.signIn.kicker')} title={t('auth.signIn.title')} body={t('auth.signIn.body')}><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></AuthSplash>;
+  return <AuthSplash><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></AuthSplash>;
 }
 function SignUpPage() {
-  const { t } = useI18n();
-  return <AuthSplash kicker={t('auth.signUp.kicker')} title={t('auth.signUp.title')} body={t('auth.signUp.body')}><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`}/></AuthSplash>;
+  return <AuthSplash><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`}/></AuthSplash>;
 }
 function LocalSignInNotice() {
   const { t } = useI18n();
-  return <AuthSplash kicker={t('auth.signIn.kicker')} title={t('auth.local.title')} body={t('auth.local.body')}><Link href="/" className="btn btn-primary">{t('auth.local.home')}</Link></AuthSplash>;
+  return <AuthSplash title={t('auth.local.title')} body={t('auth.local.body')}><Link href="/" className="btn btn-primary">{t('auth.local.home')}</Link></AuthSplash>;
 }
 
-/* ---------- landing ---------- */
-function PublicLanding() {
-  const { isSignedIn } = useUser();
-  return <LandingPage isSignedIn={Boolean(isSignedIn)}/>;
+/* ---------- entry ---------- */
+const LOCAL_SESSION = 'smart-ombor-session';
+const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst', 'accountant', 'worker'] as const;
+type LocalSession = { token: string; name: string; login: string; role: string };
+
+function readLocalSession(): LocalSession | null {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(LOCAL_SESSION) || '') as Partial<LocalSession>;
+    if (!parsed.token || !parsed.login || !parsed.role) return null;
+    return { token: parsed.token, name: parsed.name || parsed.login, login: parsed.login, role: parsed.role };
+  } catch {
+    return null;
+  }
 }
-function LandingPage({ isSignedIn, startHref }: { isSignedIn: boolean; startHref?: string }) {
+function PasswordField({ value, onChange, testId, autoComplete }: { value: string; onChange: (value: string) => void; testId: string; autoComplete?: string }) {
   const { t } = useI18n();
-  const start = startHref || (isSignedIn ? '/dashboard' : '/sign-up');
-  const features = [
-    { icon: Warehouse, title: t('landing.f1.title'), body: t('landing.f1.body') },
-    { icon: ScanBarcode, title: t('landing.f2.title'), body: t('landing.f2.body') },
-    { icon: BarChart3, title: t('landing.f3.title'), body: t('landing.f3.body') },
-    { icon: FileText, title: t('landing.f4.title'), body: t('landing.f4.body') },
-  ];
-  return <main className="landing" data-testid="page-public-landing">
-    <header className="landing-nav"><BrandMark/><nav className="landing-links"><a href="#about">{t('landing.nav.about')}</a><a href="#features">{t('landing.nav.ops')}</a></nav><div className="landing-actions"><LangSwitch compact/>{startHref || isSignedIn ? <Link href={startHref || '/dashboard'} className="btn btn-primary" data-testid="link-open-workspace">{t('landing.nav.workspace')} <ArrowRight size={16}/></Link> : <><Link href="/sign-in" className="btn btn-ghost" data-testid="link-sign-in">{t('landing.nav.signIn')}</Link><Link href="/sign-up" className="btn btn-primary" data-testid="link-sign-up">{t('landing.nav.start')} <ArrowRight size={16}/></Link></>}</div></header>
-    <section className="hero"><div className="hero-copy"><span className="pill"><span className="live-dot"/>{t('landing.badge')}</span><h1>{t('landing.title1')}<br/><span className="accent">{t('landing.title2')}</span></h1><p className="lead">{t('landing.lead')}</p><div className="hero-actions"><Link href={start} className="btn btn-primary btn-lg" data-testid="button-start-work">{t('landing.cta')} <ArrowRight size={17}/></Link><a href="#features" className="btn btn-ghost btn-lg" data-testid="link-explore">{t('landing.more')} <ChevronDown size={16}/></a></div></div>
-      <div className="hero-visual" aria-hidden="true"><div className="mock"><div className="mock-bar"><i/><i/><i/></div><div className="mock-kpis"><div><small>{t('dash.kpi.products')}</small><b>6 357</b></div><div><small>{t('dash.kpi.units')}</small><b>248 186</b></div><div><small>{t('dash.kpi.sales')}</small><b>56 956 800</b></div></div><div className="mock-rows">{[82, 54, 38, 26, 14].map((w, i) => <div key={i}><span/><i style={{ width: `${w}%` }}/></div>)}</div></div></div>
+  const [shown, setShown] = useState(false);
+  return <span className="secret"><input className="input" type={shown ? 'text' : 'password'} value={value} onChange={event => onChange(event.target.value)} autoComplete={autoComplete} data-testid={testId}/><button type="button" className="secret-eye" aria-label={shown ? t('auth.hidePassword') : t('auth.showPassword')} onClick={() => setShown(open => !open)}>{shown ? <EyeOff size={18}/> : <Eye size={18}/>}</button></span>;
+}
+
+function EntryScreen({ children }: { children: ReactNode }) {
+  return <main className="gate" data-testid="page-public-landing">
+    <section className="gate-brand"><BrandMark light/></section>
+    <section className="gate-main">
+      <div className="gate-lang"><LangSwitch compact/></div>
+      {children}
     </section>
-    <section className="features" id="features">{features.map(f => { const Icon = f.icon; return <article key={f.title} className="feature"><span className="feature-icon"><Icon size={20}/></span><h3>{f.title}</h3><p>{f.body}</p></article>; })}</section>
-    <section className="about" id="about"><p className="eyebrow">{t('landing.about.kicker')}</p><h2>{t('landing.about.title')}</h2><p>{t('landing.about.body')}</p></section>
-    <section className="closing"><h2>{t('landing.close.title')}</h2><Link href={startHref || (isSignedIn ? '/dashboard' : '/sign-in')} className="btn btn-light btn-lg" data-testid="button-enter-system">{t('landing.close.cta')} <ArrowRight size={16}/></Link><footer><span>{t('landing.footer.rights')}</span><span>{t('landing.footer.made')}</span><span>{t('landing.footer.integration')}</span></footer></section>
   </main>;
+}
+function LocalLoginForm() {
+  const { t } = useI18n();
+  const [, setLocation] = useLocation();
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(false);
+    try {
+      const response = await fetch('/api/local-login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ login, password }),
+      });
+      if (!response.ok) { setError(true); return; }
+      const body = await response.json() as LocalSession;
+      sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({ token: body.token, name: body.name, login: body.login, role: body.role }));
+      setLocation('/dashboard');
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <form className="gate-form" onSubmit={event => { void submit(event); }}>
+    <label className="field"><span>{t('auth.login')}</span><input className="input" value={login} onChange={event => setLogin(event.target.value)} autoComplete="username" autoFocus data-testid="input-login"/></label>
+    <label className="field"><span>{t('auth.password')}</span><PasswordField value={password} onChange={setPassword} testId="input-password" autoComplete="current-password"/></label>
+    {error && <p className="gate-error">{t('auth.invalid')}</p>}
+    <button className="btn btn-primary btn-lg" type="submit" disabled={busy || !login.trim() || !password} data-testid="button-sign-in">{t('landing.nav.signIn')}</button>
+  </form>;
 }
 
 /* ---------- workspace shell ---------- */
@@ -195,16 +237,18 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
 }
 function LocalShell({ children, title }: { children: ReactNode; title: string }) {
   const [, setLocation] = useLocation(); const { t } = useI18n();
-  return <WorkspaceChrome title={title} userName={t('shell.localUser')} onSignOut={() => setLocation('/')}>{children}</WorkspaceChrome>;
+  const session = readLocalSession();
+  return <WorkspaceChrome title={title} userName={session?.name || t('shell.localUser')} onSignOut={() => { sessionStorage.removeItem(LOCAL_SESSION); setLocation('/'); }}>{children}</WorkspaceChrome>;
 }
 function WorkspaceChrome({ children, title, userName, onSignOut }: { children: ReactNode; title: string; userName: string; onSignOut: () => void }) {
-  const { t, time, fmt } = useI18n(); const roleLabel = useRole();
+  const { t, fmt } = useI18n();
   const [path] = useLocation(); const [open, setOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
+  const inMore = moreHrefs.includes(path);
+  const [moreOpen, setMoreOpen] = useState(inMore);
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
+  useEffect(() => { setMoreOpen(inMore); }, [inMore]);
   const current = navigation.find(x => x.href === path);
-  const currentUser = useGetCurrentUser();
-  const connection = useGetMoyskladStatus();
   const alerts = useQuery<{ pending: number }>({
     queryKey: ['partner-alerts'],
     queryFn: async () => {
@@ -214,18 +258,28 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     },
     refetchInterval: 20_000,
   });
-  const connected = !!connection.data?.configured && !!connection.data?.connected;
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
+  const navItem = (href: string) => {
+    const item = navigation.find(entry => entry.href === href);
+    if (!item) return null;
+    const Icon = item.icon;
+    const active = path === item.href;
+    const pending = item.href === '/partners' ? alerts.data?.pending ?? 0 : 0;
+    return <Link key={item.href} href={item.href} className={`nav-item ${active ? 'is-active' : ''}`} title={t(item.key)} aria-current={active ? 'page' : undefined} data-testid={`nav-${item.href.slice(1)}`}><Icon size={18} strokeWidth={1.9}/><span>{t(item.key)}</span>{pending > 0 && <em className="nav-badge" title={t('partners.pending', { count: pending })}>{fmt(pending)}</em>}</Link>;
+  };
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => { document.body.classList.toggle('nav-open', open); return () => document.body.classList.remove('nav-open'); }, [open]);
   return <div className={`app ${rail ? 'is-rail' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <PanelLeft size={18}/> : <PanelLeftClose size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
-      <nav className="nav" aria-label={t('nav.group.workspace')}>{navGroups.map(group => <div key={group} className="nav-group"><p>{t(group)}</p>{navigation.filter(n => n.group === group).map(item => { const Icon = item.icon; const active = path === item.href; const pending = item.href === '/partners' ? alerts.data?.pending ?? 0 : 0; return <Link key={item.href} href={item.href} className={`nav-item ${active ? 'is-active' : ''}`} title={t(item.key)} aria-current={active ? 'page' : undefined} data-testid={`nav-${item.href.slice(1)}`}><Icon size={18} strokeWidth={1.9}/><span>{t(item.key)}</span>{pending > 0 && <em className="nav-badge" title={t('partners.pending', { count: pending })}>{fmt(pending)}</em>}</Link>; })}</div>)}</nav>
+      <nav className="nav" aria-label={t('brand.name')}>
+        {primaryHrefs.map(href => navItem(href))}
+        <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more"><MoreHorizontal size={18} strokeWidth={1.9}/><span>{t('nav.more')}</span><ChevronDown size={16} className="nav-more-chevron"/></button>
+        {moreOpen && <div className="nav-more-panel">{moreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
+      </nav>
       <div className="sidebar-bottom">
-        <Link href="/settings" className="conn" title={connection.isLoading ? t('shell.checking') : connected ? (connection.data?.companyName || 'MoySklad') : t('shell.disconnected')} data-testid="link-sidebar-connection"><span className={`dot ${connected ? 'dot-on' : ''}`}/><span className="conn-name">{connection.isLoading ? t('shell.checking') : connected ? (connection.data?.companyName || 'MoySklad') : t('shell.disconnected')}</span>{connection.data?.lastSync && <small>{time(connection.data.lastSync)}</small>}</Link>
-        <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b><small>{currentUser.data ? roleLabel(currentUser.data.role) : ''}</small></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
+        <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
       </div>
     </aside>
     <div className="main">
@@ -937,6 +991,51 @@ function ReportsPage() {
 }
 
 /* ---------- settings ---------- */
+type AccessAccount = { id: string; name: string; login: string; password: string; role: string };
+function AccessPanel() {
+  const { t, fmt } = useI18n(); const roleLabel = useRole();
+  const session = readLocalSession();
+  const [rows, setRows] = useState<AccessAccount[]>([]);
+  const [name, setName] = useState('');
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState('worker');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const headers = { authorization: `Bearer ${session?.token || ''}`, 'content-type': 'application/json' };
+  const load = async () => {
+    const response = await fetch('/api/local-accounts', { headers });
+    if (response.ok) setRows(await response.json());
+  };
+  useEffect(() => { void load(); }, []);
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setNote('');
+    const response = await fetch('/api/local-accounts', { method: 'POST', headers, body: JSON.stringify({ name, login, password, role }) });
+    setBusy(false);
+    if (response.status === 409) { setNote(t('auth.accessExists')); return; }
+    if (!response.ok) { setNote(t('auth.accessShort')); return; }
+    setRows(await response.json());
+    setName(''); setLogin(''); setPassword('');
+  };
+  const remove = async (id: string) => {
+    const response = await fetch(`/api/local-accounts/${id}`, { method: 'DELETE', headers });
+    if (response.ok) setRows(await response.json());
+  };
+  return <Card title={t('auth.access')} meta={t('auth.accessMeta', { count: fmt(rows.length) })}>
+    <form onSubmit={event => { void create(event); }}>
+      <div className="form-grid">
+        <Field label={t('auth.accessName')} testId="field-access-name"><TextInput testId="input-access-name" value={name} onChange={event => setName(event.target.value)}/></Field>
+        <Field label={t('auth.login')} testId="field-access-login"><TextInput testId="input-access-login" value={login} onChange={event => setLogin(event.target.value)} autoComplete="off"/></Field>
+        <Field label={t('auth.password')} testId="field-access-password"><PasswordField value={password} onChange={setPassword} testId="input-access-password" autoComplete="new-password"/></Field>
+        <Field label={t('auth.accessRole')} testId="field-access-role"><SelectInput value={role} onChange={setRole} testId="select-access-role">{accessRoles.map(item => <option key={item} value={item}>{roleLabel(item)}</option>)}</SelectInput></Field>
+      </div>
+      <div className="form-actions"><Button testId="button-access-create" type="submit" disabled={busy || !login.trim() || password.length < 4}>{t('auth.accessCreate')}</Button></div>
+    </form>
+    {note && <Notice kind="error" title={note} testId="status-access-error"/>}
+    <ul className="user-list">{rows.map(account => <li className="user-row" key={account.id} data-testid={`row-access-${account.id}`}><span className="avatar">{account.name.slice(0, 2).toUpperCase()}</span><span className="user-copy"><b>{account.name}</b><small>{account.login} · <span className="access-pass">{account.password}</span></small></span><span className="chip">{roleLabel(account.role)}</span>{account.login !== 'bordouzadmin' && account.login !== session?.login && <Button variant="danger" size="sm" testId={`button-access-delete-${account.id}`} onClick={() => { void remove(account.id); }}>{t('auth.accessDelete')}</Button>}</li>)}</ul>
+  </Card>;
+}
 function SettingsPage() {
   const { t, fmt, dateTime, lang, setLang } = useI18n(); const roleLabel = useRole(); const statusLabel = useStatusLabel();
   const status = useGetMoyskladStatus(); const users = useListUsers(); const me = useGetCurrentUser(); const sync = useSyncMoysklad(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
@@ -995,7 +1094,7 @@ function SettingsPage() {
     </section>
     <div className="two-col settings-grid">
       <Card title={t('settings.language')}><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? t('lang.uz') : t('lang.ru')}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
-      <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>
+      {!clerkPubKey && readLocalSession()?.role === 'super_admin' ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
     </div>
   </>;
 }
@@ -1028,7 +1127,10 @@ function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
 function RouteFrame({ title, children }: { title: string; children: ReactNode }) {
   const [location] = useLocation();
   const body = <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>{children}</ErrorBoundary>;
-  if (!clerkPubKey) return <LocalShell title={title}>{body}</LocalShell>;
+  if (!clerkPubKey) {
+    if (!readLocalSession()) return <Redirect to="/"/>;
+    return <LocalShell title={title}>{body}</LocalShell>;
+  }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
 }
 function ProtectedRoute({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
@@ -1036,9 +1138,9 @@ function ProtectedRoute({ titleKey, children }: { titleKey: TKey; children: Reac
   return <RouteFrame key={location} title={t(titleKey)}>{children}</RouteFrame>;
 }
 function HomeRoute() {
-  return <><Show when="signed-in"><Redirect to="/dashboard"/></Show><Show when="signed-out"><PublicLanding/></Show></>;
+  return <><Show when="signed-in"><Redirect to="/dashboard"/></Show><Show when="signed-out"><EntryScreen><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></EntryScreen></Show></>;
 }
-function LocalHome() { return <LandingPage isSignedIn={false} startHref="/dashboard"/>; }
+function LocalHome() { return <EntryScreen><LocalLoginForm/></EntryScreen>; }
 const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> = [
   { path: '/dashboard', titleKey: 'nav.dashboard', element: <DashboardPage/> },
   { path: '/products', titleKey: 'nav.products', element: <ProductsPage/> },
