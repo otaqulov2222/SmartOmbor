@@ -164,10 +164,13 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
 
   return <div className="cabinet">
     <section className="cabinet-hero">
-      <div>
-        <p className="eyebrow">{t('zavod.kicker')}</p>
-        <h1>{account.name}</h1>
-        <p className="cabinet-id"><span className="yx-code">{account.code}</span><span>{account.login}</span></p>
+      <div className="cabinet-identity">
+        <span className="cabinet-mark" aria-hidden="true">{account.name.trim().slice(0, 1).toUpperCase() || account.code.slice(0, 1)}</span>
+        <div>
+          <p className="eyebrow">{t('zavod.kicker')}</p>
+          <h1>{account.name}</h1>
+          <p className="cabinet-id"><span className="yx-code">{account.code}</span><span>{account.login}</span></p>
+        </div>
       </div>
       <div className="cabinet-kpis">
         <div><span>{t('zavod.docs')}</span><b>{fmt(shipments.length)}</b></div>
@@ -178,7 +181,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
     </section>
     <section className="yx">
     <div className="yx-head">
-      <div><p className="eyebrow">{t('zavod.newDoc')}</p><h1>{t('zavod.title')}</h1><p className="muted">{t('zavod.guide')}</p></div>
+      <div><p className="eyebrow">{t('zavod.newDoc')}</p><h2>{t('zavod.title')}</h2></div>
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
     <div className="yx-lines">
@@ -209,7 +212,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
         </article>;
       })}
     </div>
-    <div className="yx-actions"><button type="button" className="btn btn-secondary" onClick={() => setLines(rows => [...rows, blank()])}><Plus size={15}/>{t('zavod.addRow')}</button><span className="muted">{t('zavod.sumHint')}</span></div>
+    <div className="yx-actions"><button type="button" className="btn btn-secondary" onClick={() => setLines(rows => [...rows, blank()])}><Plus size={15}/>{t('zavod.addRow')}</button></div>
     <label className="field"><span>{t('zavod.note')}</span><input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder={t('zavod.notePlaceholder')}/></label>
     <div className="yx-foot">
       <div className="yx-totals">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Banknote, Boxes, Check, ChevronRight, Copy, Download, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
+import { ArrowLeft, Banknote, Boxes, Check, ChevronRight, Copy, Download, Eye, EyeOff, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { useListProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
@@ -246,7 +246,7 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
       });
       const body = await response.json();
       if (!response.ok) {
-        setError(body.error === 'login_taken' ? t('partners.loginTaken') : body.error === 'code_taken' ? t('partners.codeTaken') : t('partners.required'));
+        setError(body.error === 'login_taken' ? t('partners.loginTaken') : body.error === 'code_taken' ? t('partners.codeTaken') : body.error === 'password_short' ? t('partners.passwordShort') : t('partners.required'));
         return;
       }
       await onCreated();
@@ -276,7 +276,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [code, setCode] = useState(row.account?.code || '');
   const [login, setLogin] = useState(row.account?.login || row.name.toLowerCase().replace(/[^a-z0-9]+/gi, '').slice(0, 16));
   const [password, setPassword] = useState('');
-  const [revealed, setRevealed] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -288,18 +288,6 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [posting, setPosting] = useState<Shipment | null>(null);
   const [storeId, setStoreId] = useState('');
   const [postError, setPostError] = useState('');
-  const [agentId, setAgentId] = useState(row.account?.counterpartyId || '');
-  const [agentLabel, setAgentLabel] = useState(row.account?.counterpartyName || '');
-  const [agentQuery, setAgentQuery] = useState('');
-  const [agentHits, setAgentHits] = useState<Array<{ id: string; name: string }>>([]);
-  useEffect(() => {
-    const text = agentQuery.trim();
-    if (text.length < 2) { setAgentHits([]); return; }
-    const timer = window.setTimeout(() => {
-      void fetch(`/api/counterparties?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => setAgentHits(Array.isArray(data.items) ? data.items : [])).catch(() => setAgentHits([]));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [agentQuery]);
   useEffect(() => {
     setName(row.name);
     setCode(row.account?.code || '');
@@ -324,15 +312,15 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const response = await fetch(row.account ? `/api/partner-factories/${row.account.id}` : '/api/partner-factories', {
         method: row.account ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, catalogName: name, code, login, password: password || undefined, counterpartyId: agentId, counterpartyName: agentLabel }),
+        body: JSON.stringify({ name, catalogName: name, code, login, password: password || undefined }),
       });
       const body = await response.json();
       if (!response.ok) {
         setError(body.error === 'login_taken' ? t('partners.loginTaken') : body.error === 'code_taken' ? t('partners.codeTaken') : body.error === 'password_short' ? t('partners.passwordShort') : t('partners.required'));
         return;
       }
-      setRevealed(password ? body.password : '');
-      setPassword('');
+      setPassword(body.password || password);
+      setShowPassword(false);
       await cache.invalidateQueries({ queryKey: ['partner-factories'] });
       if (body.account?.id) await cache.invalidateQueries({ queryKey: ['partner-detail', body.account.id] });
       if (row.account && name.trim() !== row.name) setLocation(`/partners?factory=${encodeURIComponent(name.trim())}`);
@@ -407,6 +395,14 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const pairs = visible.reduce((sum, shipment) => sum + shipment.pairs, 0);
   const amount = visible.reduce((sum, shipment) => sum + shipment.amount, 0);
   const passwordShown = detail.data?.account.password || row.account?.password || '';
+  const passwordReady = useRef(false);
+  useEffect(() => {
+    if (!settings) { passwordReady.current = false; return; }
+    if (passwordReady.current || !passwordShown) return;
+    setPassword(passwordShown);
+    setShowPassword(false);
+    passwordReady.current = true;
+  }, [settings, passwordShown]);
 
   return <div className="partner-detail">
     <button type="button" className="partner-back" onClick={onBack}><ArrowLeft size={16}/>{t('partners.back')}</button>
@@ -467,12 +463,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         <label className="field"><span>{t('partners.name')}</span><input className="input" value={name} onChange={e => setName(e.target.value)} data-testid="input-partner-name"/></label>
         <label className="field"><span>{t('partners.code')}</span><input className="input" value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="BOP80" data-testid="input-partner-code"/></label>
         <label className="field"><span>{t('partners.login')}</span><input className="input" value={login} onChange={e => setLogin(e.target.value.toLowerCase())} data-testid="input-partner-login"/></label>
-        <label className="field"><span>{t('partners.password')}</span><input className="input" value={password} onChange={e => setPassword(e.target.value)} placeholder={row.account ? t('partners.passwordKeep') : t('partners.generate')} data-testid="input-partner-password"/></label>
-        {row.account && <label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agentLabel || agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgentId(''); setAgentLabel(''); setAgentQuery(event.target.value); }} />{agentHits.map(item => <button key={item.id} type="button" className="btn btn-secondary btn-sm" onClick={() => { setAgentId(item.id); setAgentLabel(item.name); setAgentHits([]); }}>{item.name}</button>)}{agentId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAgentId(''); setAgentLabel(''); }}>{t('partners.counterpartyClear')}</button>}</label>}
+        <label className="field"><span>{t('partners.password')}</span><span className="secret"><input className="input" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" data-testid="input-partner-password"/><button type="button" className="secret-eye" aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')} onClick={() => setShowPassword(open => !open)}>{showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}</button></span></label>
       </div>
-      {row.account && <div className="facts"><div><span>{t('partners.password')}</span><b className="secret">{passwordShown || t('partners.passwordMissing')}</b></div></div>}
       {error && <p className="error-text">{error}</p>}
-      {revealed && <div className="notice notice-success"><KeyRound size={18}/><div><b>{t('partners.once')}</b><p className="secret">{revealed}</p></div></div>}
       <div className="portal-link"><span>{t('partners.portal')}</span><code>{portalUrl()}</code><button type="button" className="btn btn-secondary btn-sm" onClick={() => void copy()}><Copy size={14}/>{copied ? t('partners.copied') : t('partners.copy')}</button></div>
       <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={() => setSettings(false)}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy || !name.trim() || !code.trim() || !login.trim()} onClick={() => void saveAccess()} data-testid="button-partner-access"><Pencil size={15}/>{busy ? t('common.saving') : t('partners.edit')}</button></div>
     </div></div>, document.body)}
