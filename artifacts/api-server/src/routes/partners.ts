@@ -376,16 +376,57 @@ router.get("/factory/me", requireFactory, (_req, res) => {
   res.json({ account, shipments: listShipments(account.id) });
 });
 
-router.post("/factory/shipments", requireFactory, (req, res) => {
+router.get("/factory/products", requireFactory, async (req, res, next) => {
   try {
+    const query = String(req.query.q ?? "").trim().toLowerCase();
+    if (query.length < 2) {
+      res.json({ items: [] });
+      return;
+    }
+    const catalog = await loadCatalog();
+    const compact = query.replace(/[\s-]/g, "");
+    const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];
+    for (const product of catalog.products) {
+      const code = (product.code || "").toLowerCase();
+      const article = (product.article || "").toLowerCase();
+      const name = product.name.toLowerCase();
+      const barcodes = product.barcodes.map((value) => value.toLowerCase());
+      let score = 0;
+      if (code === query || article === query || barcodes.includes(query) || code.replace(/[\s-]/g, "") === compact) score = 4;
+      else if (code.startsWith(query) || article.startsWith(query) || barcodes.some((value) => value.startsWith(query))) score = 3;
+      else if (name.startsWith(query)) score = 2;
+      else if (name.includes(query) || code.includes(query) || article.includes(query) || barcodes.some((value) => value.includes(query))) score = 1;
+      if (score) scored.push({ score, id: product.id, name: product.name, code: product.code, article: product.article, barcode: product.barcodes[0] ?? null });
+    }
+    scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    res.json({ items: scored.slice(0, 12).map(({ id, name, code, article, barcode }) => ({ id, name, code, article, barcode })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/factory/shipments", requireFactory, async (req, res, next) => {
+  try {
+    const catalog = await loadCatalog();
+    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
+      const product = byId.get(String(line?.productId ?? "").trim());
+      const typed = String(line?.productCode ?? "").trim().toLowerCase();
+      const matches = product && [product.code, product.article, product.name, ...product.barcodes].some((value) => String(value || "").trim().toLowerCase() === typed);
+      return matches && product ? { ...line, productId: product.id, productName: product.name } : { ...line, productId: null, productName: null };
+    });
     const shipment = createShipment(res.locals.factory.id, {
       date: req.body?.date,
       note: req.body?.note,
-      lines: Array.isArray(req.body?.lines) ? req.body.lines : [],
+      lines,
     });
     res.status(201).json(shipment);
   } catch (error) {
-    fail(res, error);
+    if (typeof error === "object" && error && "status" in error) {
+      fail(res, error);
+      return;
+    }
+    next(error);
   }
 });
 

@@ -111,7 +111,7 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
 
 function colorText(line: Line, fmt: (value: number) => string) {
   const colors = line.colors.filter(color => color.name && color.quantity > 0);
-  return colors.length ? colors.map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') : '';
+  return colors.length ? colors.map(color => `${color.name} · ${fmt(color.quantity)}`).join(', ') : '';
 }
 
 function statusLabel(status: Shipment['status'], t: (key: 'partners.accepted' | 'partners.declined' | 'partners.sent') => string) {
@@ -134,19 +134,16 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
-  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.section'), t('zavod.product'), t('zavod.model'), t('zavod.size'), t('zavod.pairs'), t('zavod.boxes'), t('zavod.quantity'), t('zavod.price'), t('zavod.colors'), t('zavod.sum')];
+  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.product'), t('zavod.size'), t('zavod.pairs'), t('zavod.boxes'), t('zavod.price'), t('zavod.colors'), t('zavod.sum')];
   const excel = () => {
     const rows = shipments.flatMap(shipment => shipment.lines.map(line => [
       shipment.number,
       date(shipment.date),
       statusLabel(shipment.status, t),
-      line.sectionCode,
       line.productCode,
-      line.model,
       line.size,
       line.pairs,
       line.boxes,
-      line.quantity,
       line.price,
       colorText(line, fmt),
       lineUnits(line) * line.price,
@@ -157,8 +154,8 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   };
   const pdf = () => {
     const blocks = shipments.map(shipment => {
-      const body = shipment.lines.map(line => `<tr><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.model || '—')}</td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${fmt(line.quantity)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
-      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.section'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.model'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.quantity'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
+      const body = shipment.lines.map(line => `<tr><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
+      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
     }).join('');
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"/><title>${htmlEscape(title)}</title><style>
       *{box-sizing:border-box} body{margin:0;font:12px/1.45 Inter,Segoe UI,sans-serif;color:#0f1b2d}
@@ -432,9 +429,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
           <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
           <strong className="waybill-sum">{money(shipment.amount)}</strong>
         </header>
-        <div className="mini-wrap"><table className="mini-table"><thead><tr><th>{t('zavod.section')}</th><th>{t('zavod.product')}</th><th>{t('zavod.model')}</th><th>{t('zavod.size')}</th><th>{t('zavod.pairs')}</th><th>{t('zavod.boxes')}</th><th>{t('zavod.quantity')}</th><th>{t('zavod.price')}</th><th>{t('zavod.colors')}</th><th>{t('zavod.sum')}</th></tr></thead><tbody>{shipment.lines.map(line => { const units = line.pairs > 0 ? line.pairs : line.quantity; const colors = line.colors.filter(color => color.name && color.quantity > 0); return <tr key={line.id}><td data-label={t('zavod.section')}>{line.sectionCode || '—'}</td><td data-label={t('zavod.product')}><b>{line.productCode || '—'}</b></td><td data-label={t('zavod.model')}>{line.model || '—'}</td><td data-label={t('zavod.size')}>{line.size || '—'}</td><td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td><td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td><td className="num" data-label={t('zavod.quantity')}>{fmt(line.quantity)}</td><td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td><td data-label={t('zavod.colors')}>{colors.length ? <span className="color-pills">{colors.map(color => <i key={color.name}>{color.name} {fmt(color.quantity)}</i>)}</span> : '—'}</td><td className="num" data-label={t('zavod.sum')}>{money(units * line.price)}</td></tr>; })}</tbody></table></div>
+        <div className="waybill-lines">{shipment.lines.map(line => { const units = line.pairs > 0 ? line.pairs : line.quantity; const colors = line.colors.filter(color => color.name && color.quantity > 0); return <article key={line.id} className="waybill-row"><div className="waybill-main"><b>{line.productCode || '—'}</b>{line.productName && <small>{line.productName}</small>}{line.size && <span>{line.size}</span>}</div><dl className="waybill-facts"><div><dt>{t('zavod.pairs')}</dt><dd>{fmt(line.pairs)}</dd></div><div><dt>{t('zavod.boxes')}</dt><dd>{fmt(line.boxes)}</dd></div><div><dt>{t('zavod.price')}</dt><dd>{line.price ? money(line.price) : '—'}</dd></div><div><dt>{t('zavod.sum')}</dt><dd>{money(units * line.price)}</dd></div></dl>{colors.length > 0 && <div className="color-pills">{colors.map(color => <i key={`${color.name}-${color.quantity}`}><b>{color.name}</b><span>{fmt(color.quantity)}</span></i>)}</div>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></article>; })}</div>
         {shipment.note && <p className="waybill-note">{shipment.note}</p>}
-        <div className="waybill-links">{shipment.lines.map(line => <LineLink key={line.id} shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/>)}</div>
         {shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
         {!shipment.moyskladId && shipment.lines.some(line => lineUnits(line) > 0 && !line.productId) && <p className="waybill-note">{t('partners.supplyNeed')}</p>}
         <div className="waybill-actions">

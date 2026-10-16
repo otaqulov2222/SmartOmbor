@@ -1,21 +1,24 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Eye, EyeOff, FilePlus2, History, LayoutDashboard, LogOut, Plus, Send, Trash2, UserRound, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LayoutDashboard, LogOut, Menu, Plus, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
-type Line = { id: string; sectionCode: string; productCode: string; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
+type Line = { id: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
 type Shipment = { id: string; number: string; date: string; status: string; note?: string; pairs: number; boxes: number; amount: number; lines: Line[] };
 type DraftColor = { name: string; quantity: string };
-type Draft = {
-  key: string; sectionCode: string; productCode: string; model: string; size: string;
-  pairs: string; boxes: string; quantity: string; price: string; colors: DraftColor[];
-};
+type Draft = { key: string; productId: string; productName: string; productCode: string; barcode: string; size: string; pairs: string; boxes: string; price: string; colors: DraftColor[] };
+type CatalogHit = { id: string; name: string; code: string | null; article: string | null; barcode: string | null };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
 
 function blank(): Draft {
-  return { key: Math.random().toString(36).slice(2), sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', colors: [{ name: '', quantity: '' }] };
+  return { key: Math.random().toString(36).slice(2), productId: '', productName: '', productCode: '', barcode: '', size: '', pairs: '', boxes: '', price: '', colors: [{ name: '', quantity: '' }] };
+}
+
+function sizeOf(name: string) {
+  const match = name.match(/(\d{2}\s*[-–]\s*\d{2})\s*(?:\([^)]*\))?\s*$/);
+  return match ? match[1].replace(/\s/g, '') : '';
 }
 
 function num(value: string) {
@@ -24,11 +27,7 @@ function num(value: string) {
 }
 
 function unitsOf(line: Draft) {
-  const pairs = num(line.pairs);
-  if (pairs > 0) return pairs;
-  const quantity = num(line.quantity);
-  if (quantity > 0) return quantity;
-  return line.colors.reduce((sum, color) => sum + num(color.quantity), 0);
+  return num(line.pairs);
 }
 
 export function FactoryPortal() {
@@ -99,16 +98,7 @@ export function FactoryPortal() {
     </main>;
   }
 
-  return <main className="factory-app">
-    <header className="factory-top">
-      <div className="brand" data-testid="brand-smart-ombor"><img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo.png`} alt={t('brand.name')} width={922} height={250}/></div>
-      <div className="factory-top-actions">
-        <LangMini lang={lang} setLang={setLang}/>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={signOut}><LogOut size={15}/>{t('zavod.signOut')}</button>
-      </div>
-    </header>
-    <Workspace account={account} shipments={shipments} token={token} onSent={() => load(token)} dateLabel={date} money={money} fmt={fmt} />
-  </main>;
+  return <Workspace account={account} shipments={shipments} token={token} onSent={() => load(token)} dateLabel={date} money={money} fmt={fmt} lang={lang} setLang={setLang} onSignOut={signOut} />;
 }
 
 function LangMini({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void }) {
@@ -116,7 +106,7 @@ function LangMini({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void
   return <div className="lang-dd" data-testid="factory-lang"><button type="button" className="lang-dd-btn" onClick={() => setLang(lang === 'uz' ? 'ru' : 'uz')} aria-label={t('common.language')}>{lang.toUpperCase()}</button></div>;
 }
 
-function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }: { account: Account; shipments: Shipment[]; token: string; onSent: () => void; dateLabel: (value: string) => string; money: (value: number) => string; fmt: (value: number) => string }) {
+function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, lang, setLang, onSignOut }: { account: Account; shipments: Shipment[]; token: string; onSent: () => void; dateLabel: (value: string) => string; money: (value: number) => string; fmt: (value: number) => string; lang: Lang; setLang: (lang: Lang) => void; onSignOut: () => void }) {
   const { t } = useI18n();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
@@ -125,6 +115,9 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
   const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
   const [section, setSection] = useState<'home' | 'waybill' | 'history' | 'profile'>('home');
+  const [navOpen, setNavOpen] = useState(false);
+  const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-factory-nav') === 'icons');
+  useEffect(() => { localStorage.setItem('smart-ombor-factory-nav', rail ? 'icons' : 'full'); }, [rail]);
   const [historyStatus, setHistoryStatus] = useState<'all' | 'sent' | 'accepted' | 'declined'>('all');
   const [query, setQuery] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -139,19 +132,22 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
   const patch = (key: string, next: Partial<Draft>) => setLines(rows => rows.map(row => row.key === key ? { ...row, ...next } : row));
 
   const submit = async () => {
-    const filled = lines.filter(line => line.sectionCode || line.productCode || line.model || line.size || line.pairs || line.boxes || line.quantity || line.price || line.colors.some(color => color.name || color.quantity));
+    const filled = lines.filter(line => line.productCode || line.size || line.pairs || line.boxes || line.price || line.colors.some(color => color.name || color.quantity));
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
     if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needProduct')); return; }
-    if (filled.some(line => unitsOf(line) <= 0 && num(line.boxes) <= 0)) { setError(t('zavod.needQty')); return; }
+    if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
+    if (filled.some(line => { const colors = line.colors.reduce((sum, color) => sum + (color.name.trim() ? num(color.quantity) : 0), 0); return colors > 0 && num(line.boxes) > 0 && colors !== num(line.boxes); })) { setError(t('zavod.colorMismatch')); return; }
     const payload = filled.map(line => ({
       factoryCode: account.code,
-      sectionCode: line.sectionCode,
+      sectionCode: '',
+      productId: line.productId || null,
+      productName: line.productName || null,
       productCode: line.productCode.trim(),
-      model: line.model,
-      size: line.size,
+      model: '',
+      size: line.size.trim(),
       pairs: num(line.pairs),
-      boxes: num(line.boxes),
-      quantity: num(line.quantity),
+      boxes: num(line.boxes) || line.colors.reduce((sum, color) => sum + (color.name.trim() ? num(color.quantity) : 0), 0),
+      quantity: 0,
       price: num(line.price),
       colors: line.colors.filter(color => color.name.trim() && num(color.quantity) > 0).map(color => ({ name: color.name.trim(), quantity: num(color.quantity) })),
     }));
@@ -195,13 +191,41 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
     return item.number.toLowerCase().includes(needle) || item.lines.some(line => `${line.productCode} ${line.model} ${line.size}`.toLowerCase().includes(needle));
   });
 
-  return <div className="cabinet">
-    <nav className="cabinet-nav" aria-label={t('zavod.kicker')}>
-      <button type="button" className={section === 'home' ? 'is-active' : ''} onClick={() => setSection('home')}><LayoutDashboard size={15}/>{t('zavod.nav.home')}</button>
-      <button type="button" className={section === 'waybill' ? 'is-active' : ''} onClick={() => setSection('waybill')}><FilePlus2 size={15}/>{t('zavod.nav.waybill')}</button>
-      <button type="button" className={section === 'history' ? 'is-active' : ''} onClick={() => setSection('history')}><History size={15}/>{t('zavod.nav.history')}</button>
-      <button type="button" className={section === 'profile' ? 'is-active' : ''} onClick={() => setSection('profile')}><UserRound size={15}/>{t('zavod.nav.profile')}</button>
-    </nav>
+  const choose = (next: 'home' | 'waybill' | 'history' | 'profile') => { setSection(next); setNavOpen(false); };
+  const sectionTitle = section === 'waybill' ? t('zavod.nav.waybill') : section === 'history' ? t('zavod.nav.history') : section === 'profile' ? t('zavod.nav.profile') : t('zavod.nav.home');
+  return <div className={`app factory-shell ${navOpen ? 'nav-open' : ''} ${rail ? 'is-rail' : ''}`}>
+    {navOpen && <button type="button" className="factory-scrim" aria-label={t('common.close')} onClick={() => setNavOpen(false)}/>}
+    <aside className={`sidebar ${navOpen ? 'is-open' : ''}`}>
+      <div className="sidebar-top">
+        <div className="brand">
+          <img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo-dark.png`} alt={t('brand.name')} width={922} height={250}/>
+          <img className="brand-mark" src={`${import.meta.env.BASE_URL}logo-mark.png`} alt="" width={243} height={250}/>
+        </div>
+        <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')}>{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>
+        <button type="button" className="icon-btn sidebar-close" onClick={() => setNavOpen(false)} aria-label={t('common.close')}><X size={18}/></button>
+      </div>
+      <nav className="nav" aria-label={t('zavod.kicker')}>
+        <div className="nav-group"><p>{t('zavod.kicker')}</p></div>
+        <button type="button" className={`nav-item ${section === 'home' ? 'is-active' : ''}`} title={t('zavod.nav.home')} onClick={() => choose('home')}><LayoutDashboard size={17}/><span>{t('zavod.nav.home')}</span></button>
+        <button type="button" className={`nav-item ${section === 'waybill' ? 'is-active' : ''}`} title={t('zavod.nav.waybill')} onClick={() => choose('waybill')}><FilePlus2 size={17}/><span>{t('zavod.nav.waybill')}</span></button>
+        <button type="button" className={`nav-item ${section === 'history' ? 'is-active' : ''}`} title={t('zavod.nav.history')} onClick={() => choose('history')}><History size={17}/><span>{t('zavod.nav.history')}</span>{waiting > 0 && <i className="nav-badge">{fmt(waiting)}</i>}</button>
+        <button type="button" className={`nav-item ${section === 'profile' ? 'is-active' : ''}`} title={t('zavod.nav.profile')} onClick={() => choose('profile')}><UserRound size={17}/><span>{t('zavod.nav.profile')}</span></button>
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="user">
+          <span className="avatar">{account.name.trim().slice(0, 1).toUpperCase() || account.code.slice(0, 1)}</span>
+          <span className="user-copy"><b>{account.name}</b><small>{account.code}</small></span>
+          <button type="button" className="icon-btn user-out" onClick={onSignOut} aria-label={t('zavod.signOut')}><LogOut size={16}/></button>
+        </div>
+      </div>
+    </aside>
+    <div className="main">
+    <header className="topbar">
+      <button type="button" className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label={t('zavod.kicker')}><Menu size={18}/></button>
+      <div className="crumbs"><b>{sectionTitle}</b></div>
+      <div className="topbar-right"><LangMini lang={lang} setLang={setLang}/></div>
+    </header>
+    <div className="content cabinet">
     {section === 'home' && <section className="cabinet-hero">
       <div className="cabinet-identity">
         <span className="cabinet-mark" aria-hidden="true">{account.name.trim().slice(0, 1).toUpperCase() || account.code.slice(0, 1)}</span>
@@ -232,16 +256,13 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
         return <article className="yx-line" key={line.key}>
-          <header><b>{String(index + 1).padStart(2, '0')}</b><span className="yx-code">{account.code}</span>{line.productCode && <small>{line.productCode}</small>}{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
+          <header><b>{String(index + 1).padStart(2, '0')}</b><span className="yx-code">{account.code}</span>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
           <div className="yx-grid">
-            <Field label={t('zavod.section')} className="span-3"><input className="input" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: e.target.value })}/></Field>
-            <Field label={t('zavod.product')} className="span-3"><input className="input" value={line.productCode} onChange={e => patch(line.key, { productCode: e.target.value })}/></Field>
-            <Field label={t('zavod.model')} className="span-3"><input className="input" value={line.model} onChange={e => patch(line.key, { model: e.target.value })}/></Field>
+            <Field label={t('zavod.product')} className="span-12"><ProductPick token={token} line={line} onChange={next => patch(line.key, next)}/></Field>
             <Field label={t('zavod.size')} className="span-3"><input className="input" value={line.size} onChange={e => patch(line.key, { size: e.target.value })}/></Field>
             <Field label={t('zavod.pairs')} className="span-2"><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })}/></Field>
             <Field label={t('zavod.boxes')} className="span-2"><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></Field>
-            <Field label={t('zavod.quantity')} className="span-2"><input className="input" inputMode="decimal" value={line.quantity} onChange={e => patch(line.key, { quantity: e.target.value })}/></Field>
-            <Field label={t('zavod.price')} className="span-3"><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })}/></Field>
+            <Field label={t('zavod.price')} className="span-2"><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })}/></Field>
             <Field label={t('zavod.sum')} className="span-3"><input className="input yx-sum" value={sum ? money(sum) : '—'} readOnly/></Field>
           </div>
           <div className="yx-colors">
@@ -279,16 +300,66 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpenId(openId === item.id ? null : item.id)}>{t('zavod.lines')}</button></header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)} / {fmt(line.quantity)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpenId(openId === item.id ? null : item.id)}>{t('zavod.lines')}</button></header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.productName || line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
       <article><span>{t('zavod.profile.code')}</span><b>{account.code}</b></article>
       <article><span>{t('zavod.profile.login')}</span><b>{account.login}</b></article>
     </section>}
+    </div>
+    </div>
   </div>;
 }
 
 function Field({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
-  return <label className={`field ${className}`}><span>{label}</span>{children}</label>;
+  return <div className={`field ${className}`}><span>{label}</span>{children}</div>;
+}
+
+function ProductPick({ token, line, onChange }: { token: string; line: Draft; onChange: (next: Partial<Draft>) => void }) {
+  const { t } = useI18n();
+  const box = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pickQuery, setPickQuery] = useState('');
+  const [hits, setHits] = useState<CatalogHit[]>([]);
+  const [looking, setLooking] = useState(false);
+  const query = pickQuery.trim();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (event: MouseEvent) => { if (!box.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || query.length < 2) { setHits([]); setLooking(false); return; }
+    const control = new AbortController();
+    const timer = window.setTimeout(() => {
+      setLooking(true);
+      fetch(`/api/factory/products?q=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` }, signal: control.signal })
+        .then(response => response.ok ? response.json() : { items: [] })
+        .then(body => setHits(Array.isArray(body.items) ? body.items : []))
+        .catch(error => { if (error?.name !== 'AbortError') setHits([]); })
+        .finally(() => { if (!control.signal.aborted) setLooking(false); });
+    }, 180);
+    return () => { window.clearTimeout(timer); control.abort(); };
+  }, [open, query, token]);
+
+  const choose = (item: CatalogHit) => {
+    onChange({ productId: item.id, productName: item.name, productCode: item.code || item.article || item.name, barcode: item.barcode || '', size: sizeOf(item.name) });
+    setOpen(false);
+  };
+
+  return <div className="yx-pick" ref={box}>
+    <div className="yx-pick-row">
+      <input className="input" value={line.productCode} onChange={event => onChange({ productCode: event.target.value, productId: '', productName: '', barcode: '' })}/>
+      <button type="button" className="icon-btn yx-pick-btn" aria-label={t('zavod.pick')} aria-expanded={open} onClick={() => setOpen(value => !value)}><ChevronDown size={16}/></button>
+    </div>
+    {line.productName && <p className="yx-picked">{line.productName}{line.barcode ? ` · ${line.barcode}` : ''}</p>}
+    {open && <div className="yx-pick-list" role="listbox">
+      <input className="input" value={pickQuery} onChange={event => setPickQuery(event.target.value)} placeholder={t('zavod.search')} autoFocus/>
+      {query.length < 2 ? <p>{t('zavod.pickHint')}</p> : looking ? <p>{t('common.loading')}</p> : hits.length ? hits.map(item => <button type="button" key={item.id} onClick={() => choose(item)}><b>{item.code || item.article || '—'}</b><span>{item.name}{item.barcode ? ` · ${item.barcode}` : ''}</span></button>) : <p>{t('zavod.noMatch')}</p>}
+    </div>}
+  </div>;
 }

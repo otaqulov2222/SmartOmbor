@@ -138,10 +138,10 @@ code { font-family: var(--app-font-mono); font-size: .85em; }
 .sidebar-collapse { color: #cbd5e1; flex: none; }
 .sidebar-collapse:hover { background: var(--side-hover); color: #fff; }
 @media (min-width: 901px) {
-  .app.is-rail { grid-template-columns: 76px minmax(0, 1fr); }
-  .app.is-rail .sidebar-top { flex-direction: column; justify-content: center; gap: .55rem; padding: .75rem .35rem; }
+  .app.is-rail { grid-template-columns: 104px minmax(0, 1fr); }
+  .app.is-rail .sidebar-top { flex-direction: row; justify-content: center; align-items: center; gap: .1rem; padding: .7rem .2rem; }
   .app.is-rail .brand-lockup, .app.is-rail .nav-group p, .app.is-rail .conn-name, .app.is-rail .conn small, .app.is-rail .user-copy { display: none; }
-  .app.is-rail .brand-mark { display: block; height: 2.45rem; }
+  .app.is-rail .brand-mark { display: block; height: 2.05rem; }
   .app.is-rail .brand { flex: none; }
   .app.is-rail .nav { padding-inline: .4rem; align-items: center; }
   .app.is-rail .nav-item { justify-content: center; width: 2.6rem; height: 2.6rem; padding: 0; }
@@ -850,22 +850,31 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill footer { display: flex; justify-content: flex-end; padding: .7rem 1rem; border-top: 1px solid var(--line); background: #fafbfc; }
 .waybill footer .btn { width: auto; }
 .waybill-note { margin: 0; padding: .7rem 1rem; color: var(--muted); font-size: .84rem; border-top: 1px solid var(--line); }
-.waybill .mini-wrap { border-top: 1px solid var(--line); }
-.waybill .mini-table th:first-child, .waybill .mini-table td:first-child { padding-left: 1rem; }
-.waybill .mini-table th:last-child, .waybill .mini-table td:last-child { padding-right: 1rem; }
+.waybill-lines { display: grid; }
+.waybill-row { display: grid; gap: .7rem; padding: .9rem 1rem; border-top: 1px solid var(--line); }
+.waybill-main { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+.waybill-main b { font-size: 1.02rem; letter-spacing: -.02em; }
+.waybill-main small { color: var(--muted); font-size: .82rem; }
+.waybill-main > span { margin-left: auto; padding: .12rem .55rem; border-radius: 999px; background: var(--surface-2); font-size: .78rem; font-weight: 750; }
+.waybill-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; margin: 0; }
+.waybill-facts div { background: var(--surface-2); border-radius: .7rem; padding: .5rem .75rem; }
+.waybill-facts dt { color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.waybill-facts dd { margin: .12rem 0 0; font-size: 1rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.waybill-row .waybill-link { padding-top: .15rem; }
 .mini-wrap { overflow-x: auto; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: .82rem; min-width: 720px; }
 .mini-table th, .mini-table td { text-align: left; padding: .45rem .4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .mini-table th { color: #fff; background: var(--brand); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .mini-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .color-pills { display: flex; flex-wrap: wrap; gap: .25rem; }
-.color-pills i { font-style: normal; background: var(--brand-soft); color: var(--brand-ink); border-radius: 999px; padding: .12rem .45rem; font-size: .74rem; font-weight: 700; }
+.color-pills i { display: inline-flex; align-items: center; gap: .35rem; font-style: normal; background: var(--brand-soft); color: var(--brand-ink); border-radius: 999px; padding: .18rem .55rem; font-size: .78rem; }
+.color-pills i b { font-weight: 800; }
+.color-pills i span { font-weight: 650; }
 
-.factory-app { min-height: 100vh; background: var(--bg); padding: 0 1.15rem 3rem; display: grid; align-content: start; gap: 1rem; max-width: 1180px; margin: 0 auto; }
-.cabinet { display: grid; gap: 1rem; }
-.cabinet-nav { display: flex; gap: .4rem; flex-wrap: wrap; }
-.cabinet-nav button { display: inline-flex; align-items: center; gap: .4rem; height: 2.35rem; padding: 0 .9rem; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink-2); font-weight: 650; }
-.cabinet-nav button.is-active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.factory-shell { min-height: 100vh; }
+.factory-shell .nav-item { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.factory-scrim { position: fixed; inset: 0; z-index: 40; border: 0; background: rgb(15 23 42 / .45); }
+.cabinet { display: grid; gap: 1rem; width: 100%; }
 .cabinet-kpis button { text-align: left; border: 0; width: 100%; color: inherit; cursor: pointer; }
 .cabinet-kpis button:hover { background: rgb(255 255 255 / 14%); }
 .cabinet-tools { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
@@ -909,8 +918,21 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .yx-line header span { font-weight: 700; letter-spacing: .04em; }
 .yx-line header .icon-btn { margin-left: auto; }
 .yx-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: .55rem; }
+.yx-grid .span-12 { grid-column: span 12; }
 .yx-grid .span-3 { grid-column: span 3; }
 .yx-grid .span-2 { grid-column: span 2; }
+.yx-pick { position: relative; }
+.yx-pick-row { display: flex; gap: .35rem; align-items: center; }
+.yx-pick-row .input { flex: 1; }
+.yx-pick-btn { border: 1px solid var(--line); background: #fff; flex: none; }
+.yx-picked { margin: .35rem 0 0; color: var(--ink-2); font-size: .82rem; }
+.yx-pick-list { position: absolute; z-index: 30; top: calc(100% + .3rem); left: 0; right: 2.6rem; max-height: 18rem; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: .75rem; box-shadow: var(--shadow-lg); display: grid; padding: .3rem; align-content: start; }
+.yx-pick-list > .input { margin: .15rem .15rem .25rem; }
+.yx-pick-list p { margin: 0; padding: .55rem .7rem; color: var(--muted); font-size: .82rem; }
+.yx-pick-list button { display: grid; gap: .1rem; width: 100%; text-align: left; padding: .5rem .7rem; border: 0; border-radius: .55rem; background: transparent; }
+.yx-pick-list button:hover { background: var(--surface-2); }
+.yx-pick-list button b { font-size: .82rem; }
+.yx-pick-list button span { color: var(--muted); font-size: .78rem; }
 .yx-code { background: var(--brand); color: #fff; border-radius: 999px; padding: .12rem .55rem; font-size: .75rem; letter-spacing: .04em; }
 .yx-line header small { color: var(--muted); }
 .yx-sum { font-weight: 700; background: #fff; }
@@ -959,6 +981,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .table td, .table td > * { min-width: 0; max-width: 100%; }
   .table td { align-items: flex-start; }
   .mini-wrap { overflow: visible; }
+  .waybill-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .waybill-main > span { margin-left: 0; }
   .mini-table { min-width: 0; }
   .mini-table thead { display: none; }
   .mini-table, .mini-table tbody, .mini-table tr, .mini-table td { display: block; width: 100%; }

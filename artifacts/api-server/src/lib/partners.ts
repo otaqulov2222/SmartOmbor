@@ -277,8 +277,8 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     price: Math.max(0, Number(raw.price) || 0),
     colors,
     note: String(raw.note ?? "").trim(),
-    productId: null,
-    productName: null,
+    productId: raw.productId ? String(raw.productId) : null,
+    productName: raw.productId && raw.productName ? String(raw.productName).trim() : null,
   };
 }
 

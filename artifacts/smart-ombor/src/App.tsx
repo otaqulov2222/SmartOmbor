@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, Boxes, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, MoreHorizontal, PanelLeft, PanelLeftClose, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   Sparkles, UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -272,7 +272,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   return <div className={`app ${rail ? 'is-rail' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-      <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <PanelLeft size={18}/> : <PanelLeftClose size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
+      <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         {primaryHrefs.map(href => navItem(href))}
         <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more"><MoreHorizontal size={18} strokeWidth={1.9}/><span>{t('nav.more')}</span><ChevronDown size={16} className="nav-more-chevron"/></button>
