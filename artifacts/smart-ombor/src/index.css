@@ -654,6 +654,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .secret-eye { position: absolute; top: 50%; right: .25rem; transform: translateY(-50%); width: 2.1rem; height: 2.1rem; display: grid; place-items: center; color: var(--muted); border-radius: .45rem; }
 .secret-eye:hover { color: var(--ink); background: var(--slate-soft); }
 .access-pass { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.gate-logo-plain { display: none; }
 .gate-form { width: min(100%, 22rem); display: grid; gap: .85rem; }
 .gate-form .btn { width: 100%; justify-content: center; }
 .gate-error { color: #dc2626; font-size: .86rem; font-weight: 650; }
@@ -715,7 +716,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .settings-connect { flex-direction: column; align-items: stretch; }
   .settings-connect .btn { width: 100%; }
   .form-grid, .detail-grid, .metrics-3, .metrics.metrics-3, .board, .maker-row, .auth, .kpis, .metrics, .dash-col, .stack, .partner-kpis, .product-kpis, .product-sheet { grid-template-columns: minmax(0, 1fr); }
-  .gate { grid-template-columns: minmax(0, 1fr); grid-template-rows: 34vh minmax(0, 1fr); }
+  .gate { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1.6rem; height: auto; min-height: 100dvh; padding: 1.5rem 1.15rem calc(1.5rem + env(safe-area-inset-bottom)); background: #fff; overflow: visible; }
   .metric strong { font-size: 1.25rem; word-break: normal; }
   .maker-open-head { flex-direction: column; }
   .maker-summary { grid-template-columns: 1fr; }
@@ -734,9 +735,14 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .scan-row-actions .btn { width: auto; flex: 1; }
   .scan-row-side { justify-items: end; text-align: right; grid-column: auto; }
   .auth-side { padding: 1.6rem; }
-  .gate-brand { padding: 1.5rem; }
-  .gate-brand .brand-lockup, .auth-side .brand-lockup { height: 3.1rem; }
-  .gate-form { width: min(100%, 22rem); }
+  .gate-brand { width: min(100%, 26rem); padding: 0; background: transparent; }
+  .gate-logo-navy { display: none; }
+  .gate-logo-plain, .gate-logo-plain .brand { display: flex; width: 100%; justify-content: center; }
+  .gate-logo-plain .brand-lockup { width: 100%; height: auto; }
+  .gate-main { position: static; width: min(100%, 26rem); padding: 0; place-items: stretch; align-content: start; overflow: visible; }
+  .gate-lang { top: .9rem; right: .9rem; z-index: 3; }
+  .gate-form { width: 100%; gap: 1rem; }
+  .gate-form .input { height: 3rem; background: #f7f9fc; }
   .wh-row { grid-template-columns: 1fr auto; row-gap: .35rem; }
   .wh-bar { grid-column: 1 / -1; }
   .wh-num { min-width: 0; }
@@ -760,7 +766,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .kpis { grid-template-columns: 1fr; }
   .kpi { border-right: 0 !important; border-bottom: 1px solid var(--line); } .kpi:last-child { border-bottom: 0; }
   .metrics { grid-template-columns: 1fr; }
-  .gate-brand .brand-lockup { height: 2.7rem; }
+  .gate { padding-inline: 1rem; }
   .spark { height: 120px; }
   .task-bottom { flex-direction: column; align-items: stretch; } .task-bottom .input { width: 100%; }
   .user-row { flex-wrap: wrap; } .user-row .input { width: 100%; max-width: none; margin-left: 0; }

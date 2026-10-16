@@ -3,6 +3,7 @@ import path from "node:path";
 import { dataFile } from "../lib/data-dir";
 import { Router, type IRouter, type Request } from "express";
 import {
+  getNonMovingProductsQueryDaysDefault,
   GetCurrentUserResponse,
   GetDashboardResponse,
   GetMoyskladStatusResponse,
@@ -31,6 +32,7 @@ import { recordAudit } from "../lib/audit";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
 const router: IRouter = Router();
+const SYNC_COOLDOWN_MS = 10 * 60 * 1000;
 
 function numericQuery(query: Request["query"], keys: string[]) {
   const next: Record<string, unknown> = { ...query };
@@ -108,8 +110,11 @@ router.get("/moysklad/status", async (_req, res) => {
 router.post("/moysklad/sync", async (_req, res) => {
   const startedAt = new Date().toISOString();
   try {
-    const catalog = await loadCatalog(true);
-    void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
+    const current = await loadCatalog(false);
+    const age = Date.now() - Date.parse(current.loadedAt);
+    const fresh = age >= 0 && age < SYNC_COOLDOWN_MS;
+    const catalog = fresh ? current : await loadCatalog(true);
+    if (!fresh) void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
     res.json(
       SyncMoyskladResponse.parse({
         id: crypto.randomUUID(),
@@ -147,7 +152,10 @@ router.get("/dashboard", async (_req, res, next) => {
         stockUnits: products.reduce((sum, product) => sum + product.stock, 0),
         stockValue: products.reduce((sum, product) => sum + (product.cost ?? 0) * product.stock, 0),
         lowStockCount: products.filter((product) => product.stockStatus === "low").length,
-        nonMovingCount: products.filter((product) => product.stockStatus === "non_moving").length,
+        nonMovingCount: products.filter((product) => {
+          const days = idleDays(product, catalog.salesCoverage ?? { days7: false, days30: false, days90: false });
+          return days != null && days >= getNonMovingProductsQueryDaysDefault;
+        }).length,
         expiringCount: 0,
         pendingTransfers: catalog.pendingTransfers,
         salesToday: catalog.salesToday,

@@ -185,7 +185,7 @@ function PasswordField({ value, onChange, testId, autoComplete }: { value: strin
 
 function EntryScreen({ children }: { children: ReactNode }) {
   return <main className="gate" data-testid="page-public-landing">
-    <section className="gate-brand"><BrandMark light/></section>
+    <section className="gate-brand"><div className="gate-logo-navy"><BrandMark light/></div><div className="gate-logo-plain"><BrandMark/></div></section>
     <section className="gate-main">
       <div className="gate-lang"><LangSwitch compact/></div>
       {children}
@@ -377,13 +377,13 @@ function WarehousesSelect({ value, onChange, testId }: { value: string; onChange
 type WarehouseTotal = { id: string; name: string; units: number; products: number; inTransit: number; value: number };
 type DayView = { date: string; sales: number; incoming: number; trend: Array<{ date: string; amount: number }>; documents: Array<{ id: string; kind: string; number: string; date: string; status: string; sourceWarehouse: string | null; targetWarehouse: string | null }> };
 function DashboardPage() {
-  const { t, lang, fmt, money, date } = useI18n(); const docKind = useDocKind();
+  const { t, lang, fmt, money, date, dateTime } = useI18n(); const docKind = useDocKind();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [day, setDay] = useState(today);
   const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: AUTO_REFRESH_MS });
-  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1, refetchInterval: AUTO_REFRESH_MS });
-  const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today, refetchInterval: AUTO_REFRESH_MS } });
+  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1 });
+  const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today } });
   const connected = !!status.data?.configured && !!status.data?.connected;
   const d = q.data;
   const shownDay = date(`${day}T12:00:00+05:00`);
@@ -392,15 +392,16 @@ function DashboardPage() {
   const trend = chosen.data?.trend?.some(point => point.amount > 0) ? chosen.data.trend : (isToday ? (sales.data?.trend ?? []).map(point => ({ date: point.date, amount: point.amount })) : (chosen.data?.trend ?? []));
   const maxSale = Math.max(1, ...trend.map(x => x.amount));
   const recentDocs = chosen.data?.documents ?? [];
+  const liveReady = chosen.data?.date === day;
   const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
   const attention = d ? [
-    { href: '/products', icon: CircleAlert, tone: 'tone-amber', label: t('dash.attention.low'), note: t('dash.attention.low.note'), value: d.lowStockCount },
-    { href: '/non-moving', icon: Clock3, tone: 'tone-slate', label: t('dash.attention.idle'), note: t('dash.attention.idle.note'), value: d.nonMovingCount },
-    { href: '/transfers', icon: ArrowLeftRight, tone: 'tone-blue', label: t('dash.attention.transfers'), note: t('dash.attention.transfers.note'), value: d.pendingTransfers },
-    { href: '/receipts', icon: ArrowDownLeft, tone: 'tone-green', label: isToday ? t('dash.attention.incoming') : t('dash.attention.incomingOn', { date: shownDay }), note: isToday ? t('dash.attention.incoming.note') : t('dash.attention.incomingOn.note'), value: chosen.data?.incoming ?? (isToday ? d.incomingToday : 0) },
+    { href: '/products', icon: CircleAlert, tone: 'tone-amber', label: t('dash.attention.low'), note: t('dash.attention.low.note'), value: d.lowStockCount as number | null },
+    { href: '/non-moving', icon: Clock3, tone: 'tone-slate', label: t('dash.attention.idle'), note: t('dash.attention.idle.note'), value: d.nonMovingCount as number | null },
+    { href: '/transfers', icon: ArrowLeftRight, tone: 'tone-blue', label: t('dash.attention.transfers'), note: t('dash.attention.transfers.note'), value: d.pendingTransfers as number | null },
+    { href: '/receipts', icon: ArrowDownLeft, tone: 'tone-green', label: isToday ? t('dash.attention.incoming') : t('dash.attention.incomingOn', { date: shownDay }), note: chosen.isError ? t('dash.live.missing') : isToday ? t('dash.attention.incoming.note') : t('dash.attention.incomingOn.note'), value: liveReady ? chosen.data!.incoming : null },
   ] : [];
   return <div className="dash">
-    <header className="page-head"><div><h1>{t('dash.title')}</h1></div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
+    <header className="page-head"><div><h1>{t('dash.title')}</h1>{d?.lastSync ? <p>{t('dash.catalog.asOf', { date: dateTime(d.lastSync) })}</p> : null}</div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={!connected || sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
     <QueryError q={q} id="dashboard"/>
     {status.isError && <Notice kind="error" title={t('dash.notice.statusFailed')} testId="status-integration-error"/>}
     {!status.isLoading && !connected && !status.isError && <Notice kind={status.data?.configured ? 'error' : 'info'} title={status.data?.configured ? t('dash.notice.disconnected') : t('dash.notice.unconfigured')} testId="status-integration-unconfigured">{status.data?.error || t('dash.notice.unconfiguredBody')} <Link href="/settings" className="notice-link" data-testid="link-settings-integration">{t('nav.settings')} <ArrowRight size={14}/></Link></Notice>}
@@ -410,7 +411,7 @@ function DashboardPage() {
         <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Box size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
         <Link href="/stock" className="kpi" data-testid="metric-units"><span className="kpi-icon tone-green"><Layers size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.units')}</span><strong>{fmt(d.stockUnits)}</strong><small>{t('dash.kpi.units.note', { count: warehouses.data?.length ?? '—' })}</small></Link>
         <div className="kpi" data-testid="metric-value"><span className="kpi-icon tone-amber"><Wallet size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.value')}</span><strong>{money(d.stockValue)}</strong><small>{t('dash.kpi.value.note')}</small></div>
-        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{chosen.isLoading && chosen.data?.date !== day ? '…' : money(chosen.data?.sales ?? (isToday ? d.salesToday : 0))}</strong><small>{isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
+        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{liveReady ? money(chosen.data!.sales) : chosen.isError ? '—' : '…'}</strong><small>{chosen.isError ? t('dash.live.missing') : isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
       </section>
       <div className="dash-grid">
         <div className="dash-col">
@@ -423,7 +424,7 @@ function DashboardPage() {
         </div>
         <div className="dash-col">
           <Card title={t('dash.attention')} meta={t('common.today')}>
-            <ul className="attn-list">{attention.map(a => { const Icon = a.icon; return <li key={a.href}><Link href={a.href} className="attn-row" data-testid={`link-${a.href.slice(1)}`}><span className={`attn-icon ${a.tone}`}><Icon size={17}/></span><span className="attn-copy"><b>{a.label}</b><small>{a.note}</small></span><strong className={a.value > 0 ? '' : 'is-zero'}>{fmt(a.value)}</strong><ChevronRight size={16} className="attn-chev"/></Link></li>; })}</ul>
+            <ul className="attn-list">{attention.map(a => { const Icon = a.icon; return <li key={a.href}><Link href={a.href} className="attn-row" data-testid={`link-${a.href.slice(1)}`}><span className={`attn-icon ${a.tone}`}><Icon size={17}/></span><span className="attn-copy"><b>{a.label}</b><small>{a.note}</small></span><strong className={a.value != null && a.value <= 0 ? 'is-zero' : ''}>{a.value == null ? (chosen.isError && a.href === '/receipts' ? '—' : '…') : fmt(a.value)}</strong><ChevronRight size={16} className="attn-chev"/></Link></li>; })}</ul>
           </Card>
           <Card title={isToday ? t('dash.sales7') : t('dash.sales7.on', { date: shownDay })} meta={trend.length ? money(trend.reduce((sum, point) => sum + point.amount, 0)) : ''}>
             {(chosen.isLoading || sales.isLoading) && !trend.length ? <LoadingRows count={2}/> : trend.length ? <><div className="spark" role="img" aria-label={t('dash.sales7.chart')}>{trend.map(x => <div key={x.date} className="spark-col" title={`${date(x.date)} · ${money(x.amount)}`}><i style={{ height: `${Math.max(3, (x.amount / maxSale) * 100)}%` }}/><span>{weekdayShort(lang, x.date)}</span></div>)}</div><div className="spark-foot"><span>{t('dash.sales7.avg')}</span><b>{money(trend.reduce((sum, point) => sum + point.amount, 0) / trend.length)}</b></div></> : <p className="muted">{t('dash.sales7.empty')}</p>}

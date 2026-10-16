@@ -176,9 +176,38 @@ function recall(): Catalog | null {
   try {
     const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Catalog & { imageHrefs: Array<[string, string]> };
     if (!raw?.loadedAt || !Array.isArray(raw.products)) return null;
-    return { ...raw, imageHrefs: new Map(raw.imageHrefs ?? []) };
+    const catalog = { ...raw, imageHrefs: new Map(raw.imageHrefs ?? []) };
+    alignStoreStock(catalog);
+    return catalog;
   } catch {
     return null;
+  }
+}
+
+export function alignStoreStock(catalog: Catalog): void {
+  const totals = new Map<string, number>();
+  for (const row of catalog.stockRows) {
+    totals.set(row.product.id, (totals.get(row.product.id) ?? 0) + row.quantity);
+  }
+  const salesKnown = catalog.salesCoverage?.days30 === true;
+  const changed = new Map<string, CatalogProduct>();
+  for (const product of catalog.products) {
+    const qty = totals.get(product.id);
+    if (qty == null || qty === product.stock) continue;
+    const reserve = product.stock - product.available;
+    product.stock = qty;
+    product.available = qty - reserve;
+    if (salesKnown && product.sales30 > 0) product.daysCover = Math.round(product.stock / (product.sales30 / 30));
+    product.stockStatus = stockStatus(product.stock, product.daysCover, product.sales30, salesKnown);
+    changed.set(product.id, product);
+  }
+  for (const row of catalog.stockRows) {
+    const product = changed.get(row.product.id);
+    if (!product || row.product === product) continue;
+    row.product.stock = product.stock;
+    row.product.available = product.available;
+    row.product.daysCover = product.daysCover;
+    row.product.stockStatus = product.stockStatus;
   }
 }
 
@@ -399,6 +428,7 @@ async function build(): Promise<Catalog> {
     imageHrefs,
     salesCoverage,
   };
+  alignStoreStock(catalog);
 
   logger.info(
     {

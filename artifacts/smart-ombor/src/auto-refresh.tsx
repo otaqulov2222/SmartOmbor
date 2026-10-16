@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { clearCatalogDump } from '@/lib/report';
 
 export const AUTO_REFRESH_MS = 10 * 60 * 1000;
 export const AUTO_REFRESH_KEY = ['auto-refresh'] as const;
@@ -25,10 +24,6 @@ export function AutoRefresh() {
       if (inflight.current || document.hidden) return;
       inflight.current = true;
       stamp(true, cache.getQueryData<AutoRefreshState>(AUTO_REFRESH_KEY)?.last ?? null);
-      try {
-        const r = await fetch('/api/moysklad/sync', { method: 'POST' });
-        if (r.ok) clearCatalogDump();
-      } catch { /* the screen still reloads the latest saved data */ }
       try {
         await cache.invalidateQueries({ predicate: q => q.queryKey[0] !== AUTO_REFRESH_KEY[0] });
       } finally {
