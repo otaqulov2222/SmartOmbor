@@ -344,6 +344,23 @@ export function deleteShipment(id: string) {
   return { ok: true };
 }
 
+export function linkExactShipmentLines(factoryId: string, match: (code: string) => { id: string; name: string } | null) {
+  const store = load();
+  let changed = false;
+  for (const shipment of store.shipments) {
+    if (shipment.factoryId !== factoryId || shipment.moyskladId) continue;
+    for (const line of shipment.lines) {
+      if (line.productId || !line.productCode.trim()) continue;
+      const product = match(line.productCode);
+      if (!product) continue;
+      line.productId = product.id;
+      line.productName = product.name;
+      changed = true;
+    }
+  }
+  if (changed) save(store);
+}
+
 export function linkShipmentLine(shipmentId: string, lineId: string, product: { id: string; name: string } | null) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);

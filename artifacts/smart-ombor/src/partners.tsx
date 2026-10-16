@@ -74,8 +74,9 @@ function lineUnits(line: Line) {
 
 function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
   const { t, fmt } = useI18n();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(line.productCode || '');
   const [hits, setHits] = useState<Array<{ id: string; name: string; code: string | null; stock: number }>>([]);
+  const [looking, setLooking] = useState(false);
   const [busy, setBusy] = useState(false);
   const matches = useQuery({
     queryKey: ['shipment-matches', shipmentId],
@@ -87,12 +88,13 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
   });
   useEffect(() => {
     const text = query.trim();
-    if (text.length < 2) { setHits([]); return; }
+    if (text.length < 2) { setHits([]); setLooking(false); return; }
     const timer = window.setTimeout(() => {
+      setLooking(true);
       void fetch(`/api/products?search=${encodeURIComponent(text)}&page=1&pageSize=6`).then(response => response.json()).then(data => {
         const items = Array.isArray(data.items) ? data.items as Array<{ id: string; name: string; code: string | null; stock: number }> : [];
         setHits(items.map(item => ({ id: item.id, name: item.name, code: item.code, stock: item.stock })));
-      }).catch(() => setHits([]));
+      }).catch(() => setHits([])).finally(() => setLooking(false));
     }, 250);
     return () => window.clearTimeout(timer);
   }, [query]);
@@ -106,7 +108,7 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
   if (line.productId) return <div className="waybill-link"><b>{t('partners.linked')}</b><span>{line.productName}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
   const options = matches.data?.lines.find(item => item.id === line.id)?.products ?? [];
   const list = hits.length ? hits : options;
-  return <div className="waybill-link"><input className="input" value={query} placeholder={t('partners.link')} onChange={event => setQuery(event.target.value)} />{list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void link(item.id)}>{item.name}{item.code ? ` · ${item.code}` : ''} · {fmt(item.stock)}</button>)}{!list.length && <small>{t('partners.noMatch')}</small>}</div>;
+  return <div className="waybill-link"><input className="input" value={query} placeholder={t('partners.link')} onChange={event => setQuery(event.target.value)} />{list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void link(item.id)}>{item.name}{item.code ? ` · ${item.code}` : ''} · {fmt(item.stock)}</button>)}{!looking && !list.length && <small>{t('partners.noMatch')}</small>}</div>;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -285,6 +287,25 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [posting, setPosting] = useState<Shipment | null>(null);
   const [storeId, setStoreId] = useState('');
   const [postError, setPostError] = useState('');
+  const [agentQuery, setAgentQuery] = useState('');
+  const [agentHits, setAgentHits] = useState<Array<{ id: string; name: string }>>([]);
+  const [agent, setAgent] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!posting) return;
+    setAgent(row.account?.counterpartyId && row.account.counterpartyName ? { id: row.account.counterpartyId, name: row.account.counterpartyName } : null);
+    setAgentQuery('');
+    setAgentHits([]);
+  }, [posting, row.account?.counterpartyId, row.account?.counterpartyName]);
+  useEffect(() => {
+    const text = agentQuery.trim();
+    if (text.length < 2) { setAgentHits([]); return; }
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/counterparties?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => {
+        setAgentHits(Array.isArray(data.items) ? data.items : []);
+      }).catch(() => setAgentHits([]));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [agentQuery]);
   useEffect(() => {
     setName(row.name);
     setCode(row.account?.code || '');
@@ -353,6 +374,14 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
     setBusy(true); setPostError('');
     try {
+      if (row.account && (agent ? agent.id !== row.account.counterpartyId : Boolean(row.account.counterpartyId))) {
+        const saved = await fetch(`/api/partner-factories/${row.account.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: row.account.name, code: row.account.code, login: row.account.login, password: '', counterpartyId: agent?.id ?? '', counterpartyName: agent?.name ?? '' }),
+        });
+        if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
+      }
       const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
       const body = await response.json().catch(() => ({})) as { error?: string };
       if (!response.ok) {
@@ -452,7 +481,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <ul className="partner-products">{products.data.items.map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
       <Link href="/factories" className="link">{t('nav.factories')}</Link>
     </section>}
-    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.filter(line => lineUnits(line) > 0).length), units: fmt(posting.lines.reduce((sum, line) => sum + lineUnits(line), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).map(line => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = new Set(mixed).size > 1; return <li key={line.id}><b>{line.productName}</b><small>{t('partners.supplyUnits', { units: fmt(lineUnits(line)) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{fmt(lineUnits(line))}</span></li>; })}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
+    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.filter(line => lineUnits(line) > 0).length), units: fmt(posting.lines.reduce((sum, line) => sum + lineUnits(line), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).map(line => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = new Set(mixed).size > 1; return <li key={line.id}><b>{line.productName}</b><small>{t('partners.supplyUnits', { units: fmt(lineUnits(line)) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{fmt(lineUnits(line))}</span></li>; })}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">
       <div className="modal-top"><div><p className="eyebrow">{row.name}</p><h2 id="partner-settings-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={() => setSettings(false)} aria-label={t('common.close')}><X size={18}/></button></div>
       <div className="form-grid">

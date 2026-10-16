@@ -7,6 +7,7 @@ import {
   createAccount,
   createShipment,
   getAccount,
+  linkExactShipmentLines,
   linkShipmentLine,
   listAccounts,
   listShipments,
@@ -162,14 +163,25 @@ router.post("/partner-factories/:id/password", (req, res) => {
   }
 });
 
-router.get("/partner-factories/:id", (req, res) => {
-  const account = getAccount(String(req.params.id));
-  if (!account) {
-    res.status(404).json({ error: "not_found" });
-    return;
+function exactCatalogProduct(catalog: Awaited<ReturnType<typeof loadCatalog>>, code: string) {
+  const found = findProductsByBarcode(catalog, code);
+  return found.length === 1 ? { id: found[0].id, name: found[0].name } : null;
+}
+
+router.get("/partner-factories/:id", async (req, res, next) => {
+  try {
+    const account = getAccount(String(req.params.id));
+    if (!account) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const catalog = await loadCatalog();
+    linkExactShipmentLines(account.id, (code) => exactCatalogProduct(catalog, code));
+    const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
+    res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
+  } catch (error) {
+    next(error);
   }
-  const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
-  res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
 });
 
 function lineUnits(line: { pairs: number; quantity: number; colors: Array<{ quantity: number }> }) {
@@ -415,11 +427,13 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
       const matches = product && [product.code, product.article, product.name, ...product.barcodes].some((value) => String(value || "").trim().toLowerCase() === typed);
       return matches && product ? { ...line, productId: product.id, productName: product.name } : { ...line, productId: null, productName: null };
     });
-    const shipment = createShipment(res.locals.factory.id, {
+    const created = createShipment(res.locals.factory.id, {
       date: req.body?.date,
       note: req.body?.note,
       lines,
     });
+    linkExactShipmentLines(res.locals.factory.id, (code) => exactCatalogProduct(catalog, code));
+    const shipment = listShipments(res.locals.factory.id).find((item) => item.id === created.id) ?? created;
     res.status(201).json(shipment);
   } catch (error) {
     if (typeof error === "object" && error && "status" in error) {
