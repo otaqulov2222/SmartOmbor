@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Eye, EyeOff, LogOut, Plus, Send, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, FilePlus2, History, LayoutDashboard, LogOut, Plus, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
@@ -122,8 +122,12 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<Draft[]>(() => [blank()]);
   const [error, setError] = useState('');
-  const [ok, setOk] = useState('');
+  const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
+  const [section, setSection] = useState<'home' | 'waybill' | 'history' | 'profile'>('home');
+  const [historyStatus, setHistoryStatus] = useState<'all' | 'sent' | 'accepted' | 'declined'>('all');
+  const [query, setQuery] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const totals = useMemo(() => lines.reduce((sum, line) => {
     sum.pairs += num(line.pairs);
@@ -151,7 +155,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
       price: num(line.price),
       colors: line.colors.filter(color => color.name.trim() && num(color.quantity) > 0).map(color => ({ name: color.name.trim(), quantity: num(color.quantity) })),
     }));
-    setBusy(true); setError(''); setOk('');
+    setBusy(true); setError(''); setFlash('');
     try {
       const response = await fetch('/api/factory/shipments', {
         method: 'POST',
@@ -160,22 +164,45 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
       });
       if (!response.ok) { setError(t('zavod.needQty')); return; }
       const body = await response.json();
-      setOk(`${t('zavod.sent')} · ${body.number}`);
+      setFlash(`${t('zavod.sent')} · ${body.number}`);
       setLines([blank()]);
       setNote('');
+      setHistoryStatus('all');
+      setQuery('');
+      setOpenId(body.id ?? null);
+      setSection('history');
       onSent();
     } finally {
       setBusy(false);
     }
   };
 
-  const sentPairs = shipments.reduce((sum, item) => sum + item.pairs, 0);
-  const sentAmount = shipments.reduce((sum, item) => sum + item.amount, 0);
+  const openHistory = (status: 'all' | 'sent' | 'accepted' | 'declined') => {
+    setHistoryStatus(status);
+    setSection('history');
+  };
+  const statusLabel = (status: string) => status === 'accepted' ? t('zavod.accepted') : status === 'declined' ? t('zavod.declined') : t('zavod.waiting');
+  const statusClass = (status: string) => status === 'accepted' ? 'badge-healthy' : status === 'declined' ? 'badge-rejected' : 'badge-in-transit';
   const waiting = shipments.filter(item => item.status === 'sent').length;
-  const accepted = shipments.length - waiting;
+  const accepted = shipments.filter(item => item.status === 'accepted').length;
+  const declined = shipments.filter(item => item.status === 'declined').length;
+  const sentAmount = shipments.reduce((sum, item) => sum + item.amount, 0);
+  const sentPairs = shipments.reduce((sum, item) => sum + item.pairs, 0);
+  const needle = query.trim().toLowerCase();
+  const shown = shipments.filter(item => {
+    if (historyStatus !== 'all' && item.status !== historyStatus) return false;
+    if (!needle) return true;
+    return item.number.toLowerCase().includes(needle) || item.lines.some(line => `${line.productCode} ${line.model} ${line.size}`.toLowerCase().includes(needle));
+  });
 
   return <div className="cabinet">
-    <section className="cabinet-hero">
+    <nav className="cabinet-nav" aria-label={t('zavod.kicker')}>
+      <button type="button" className={section === 'home' ? 'is-active' : ''} onClick={() => setSection('home')}><LayoutDashboard size={15}/>{t('zavod.nav.home')}</button>
+      <button type="button" className={section === 'waybill' ? 'is-active' : ''} onClick={() => setSection('waybill')}><FilePlus2 size={15}/>{t('zavod.nav.waybill')}</button>
+      <button type="button" className={section === 'history' ? 'is-active' : ''} onClick={() => setSection('history')}><History size={15}/>{t('zavod.nav.history')}</button>
+      <button type="button" className={section === 'profile' ? 'is-active' : ''} onClick={() => setSection('profile')}><UserRound size={15}/>{t('zavod.nav.profile')}</button>
+    </nav>
+    {section === 'home' && <section className="cabinet-hero">
       <div className="cabinet-identity">
         <span className="cabinet-mark" aria-hidden="true">{account.name.trim().slice(0, 1).toUpperCase() || account.code.slice(0, 1)}</span>
         <div>
@@ -185,13 +212,18 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
         </div>
       </div>
       <div className="cabinet-kpis">
-        <div><span>{t('zavod.docs')}</span><b>{fmt(shipments.length)}</b></div>
-        <div><span>{t('zavod.waiting')}</span><b>{fmt(waiting)}</b></div>
-        <div><span>{t('zavod.accepted')}</span><b>{fmt(accepted)}</b></div>
-        <div><span>{t('zavod.totalAmount')}</span><b>{money(sentAmount)}</b></div>
+        <button type="button" onClick={() => openHistory('all')}><span>{t('zavod.docs')}</span><b>{fmt(shipments.length)}</b></button>
+        <button type="button" onClick={() => openHistory('sent')}><span>{t('zavod.waiting')}</span><b>{fmt(waiting)}</b></button>
+        <button type="button" onClick={() => openHistory('accepted')}><span>{t('zavod.accepted')}</span><b>{fmt(accepted)}</b></button>
+        <button type="button" onClick={() => openHistory('declined')}><span>{t('zavod.declined')}</span><b>{fmt(declined)}</b></button>
       </div>
-    </section>
-    <section className="yx">
+    </section>}
+    {section === 'home' && <section className="card factory-history">
+      <div className="card-head"><h2>{t('zavod.recent')}</h2><button type="button" className="btn btn-secondary btn-sm" onClick={() => openHistory('all')}>{t('zavod.nav.history')}</button></div>
+      {shipments.length ? <div className="shipment-list">{shipments.slice(0, 5).map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.lines.length)} {t('zavod.lines').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></header></article>)}</div> : <p className="muted">{t('zavod.emptyHistory')}</p>}
+      <p className="muted">{money(sentAmount)} · {fmt(sentPairs)} {t('zavod.pairs').toLowerCase()}</p>
+    </section>}
+    <section className="yx" hidden={section !== 'waybill'}>
     <div className="yx-head">
       <div><p className="eyebrow">{t('zavod.newDoc')}</p><h2>{t('zavod.title')}</h2></div>
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
@@ -234,15 +266,26 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt }:
       </div>
       <div className="yx-send">
         {error && <p className="error-text">{error}</p>}
-        {ok && <p className="notice notice-success">{ok}</p>}
         <button type="button" className="btn btn-primary btn-lg yx-submit" disabled={busy} onClick={() => void submit()} data-testid="button-factory-submit"><Send size={16}/>{busy ? t('zavod.sending') : t('zavod.submit')}</button>
       </div>
     </div>
     </section>
-    <section className="card factory-history">
-      <div className="card-head"><h2>{t('zavod.history')}</h2><span className="card-meta">{fmt(shipments.length)} · {fmt(sentPairs)} {t('zavod.pairs').toLowerCase()}</span></div>
-      {shipments.length ? <div className="shipment-list">{shipments.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.lines.length)}</small></div><span className={`badge ${item.status === 'accepted' ? 'badge-healthy' : item.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{item.status === 'accepted' ? t('zavod.accepted') : item.status === 'declined' ? t('partners.declined') : t('zavod.waiting')}</span><strong>{money(item.amount)}</strong></header><ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>{item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{t('zavod.emptyHistory')}</p>}
-    </section>
+    {section === 'history' && <section className="card factory-history">
+      <div className="card-head"><h2>{t('zavod.history')}</h2><span className="card-meta">{fmt(shown.length)}</span></div>
+      {flash && <p className="notice notice-success">{flash}</p>}
+      <div className="cabinet-tools">
+        <label className="search"><input className="input" value={query} onChange={event => setQuery(event.target.value)} placeholder={t('zavod.search')}/></label>
+        <div className="cabinet-filters">
+          {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
+        </div>
+      </div>
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpenId(openId === item.id ? null : item.id)}>{t('zavod.lines')}</button></header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)} / {fmt(line.quantity)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+    </section>}
+    {section === 'profile' && <section className="cabinet-profile">
+      <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
+      <article><span>{t('zavod.profile.code')}</span><b>{account.code}</b></article>
+      <article><span>{t('zavod.profile.login')}</span><b>{account.login}</b></article>
+    </section>}
   </div>;
 }
 

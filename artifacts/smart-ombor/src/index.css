@@ -863,6 +863,21 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 
 .factory-app { min-height: 100vh; background: var(--bg); padding: 0 1.15rem 3rem; display: grid; align-content: start; gap: 1rem; max-width: 1180px; margin: 0 auto; }
 .cabinet { display: grid; gap: 1rem; }
+.cabinet-nav { display: flex; gap: .4rem; flex-wrap: wrap; }
+.cabinet-nav button { display: inline-flex; align-items: center; gap: .4rem; height: 2.35rem; padding: 0 .9rem; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink-2); font-weight: 650; }
+.cabinet-nav button.is-active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.cabinet-kpis button { text-align: left; border: 0; width: 100%; color: inherit; cursor: pointer; }
+.cabinet-kpis button:hover { background: rgb(255 255 255 / 14%); }
+.cabinet-tools { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.cabinet-tools .search { flex: 1; min-width: 12rem; }
+.cabinet-filters { display: flex; gap: .35rem; flex-wrap: wrap; }
+.cabinet-filters button { height: 2rem; padding: 0 .7rem; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: .8rem; font-weight: 650; color: var(--ink-2); }
+.cabinet-filters button.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
+.cabinet-profile { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.cabinet-profile article { background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1rem 1.1rem; }
+.cabinet-profile span { color: var(--muted); font-size: .75rem; font-weight: 700; }
+.cabinet-profile b { display: block; margin-top: .35rem; font-size: 1.2rem; }
+.yx[hidden] { display: none; }
 .cabinet-hero { display: grid; grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr); gap: 1.25rem; align-items: center; background: var(--ink); color: #fff; border-radius: var(--r-lg); padding: 1.25rem 1.35rem; }
 .cabinet-identity { display: flex; align-items: center; gap: .9rem; min-width: 0; }
 .cabinet-mark { width: 3.4rem; height: 3.4rem; border-radius: 1rem; display: grid; place-items: center; flex: none; background: var(--brand); color: #fff; font-size: 1.35rem; font-weight: 700; }
@@ -953,7 +968,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .sidebar { overflow: auto; }
   .lang-dd-menu { max-width: calc(100vw - 1.25rem); }
   .modal, .waybill-editor { width: min(560px, 100%); }
-  .cabinet-hero { grid-template-columns: 1fr; }
+  .cabinet-hero, .cabinet-profile { grid-template-columns: 1fr; }
   .yx-submit, .cabinet-hero, .yx-send, .yx-actions { align-items: stretch; }
   .yx-submit, .yx-send .btn, .yx-actions .btn { width: 100%; }
 }
