@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { LogOut, Plus, Send, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, LogOut, Plus, Send, Trash2, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
@@ -38,6 +38,7 @@ export function FactoryPortal() {
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -79,23 +80,34 @@ export function FactoryPortal() {
     setShipments([]);
   };
 
+  if (!account) {
+    return <main className="gate" data-testid="page-factory-login">
+      <section className="gate-brand">
+        <div className="gate-logo-navy"><div className="brand"><img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo-dark.png`} alt={t('brand.name')} width={922} height={250}/></div></div>
+        <div className="gate-logo-plain"><div className="brand"><img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo.png`} alt={t('brand.name')} width={922} height={250}/></div></div>
+      </section>
+      <section className="gate-main">
+        <div className="gate-lang"><LangMini lang={lang} setLang={setLang}/></div>
+        <form className="gate-form" onSubmit={signIn}>
+          <p className="eyebrow">{t('zavod.kicker')}</p>
+          <label className="field"><span>{t('zavod.login')}</span><input className="input" value={login} onChange={e => setLogin(e.target.value)} autoComplete="username" autoFocus data-testid="input-factory-login"/></label>
+          <label className="field"><span>{t('zavod.password')}</span><span className="secret"><input className="input" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" data-testid="input-factory-password"/><button type="button" className="secret-eye" aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')} onClick={() => setShowPassword(open => !open)}>{showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}</button></span></label>
+          {error && <p className="gate-error">{error}</p>}
+          <button className="btn btn-primary btn-lg" type="submit" disabled={busy || !login.trim() || !password} data-testid="button-factory-login">{t('zavod.enter')}</button>
+        </form>
+      </section>
+    </main>;
+  }
+
   return <main className="factory-app">
     <header className="factory-top">
       <div className="brand" data-testid="brand-smart-ombor"><img className="brand-lockup" src={`${import.meta.env.BASE_URL}logo.png`} alt={t('brand.name')} width={922} height={250}/></div>
       <div className="factory-top-actions">
         <LangMini lang={lang} setLang={setLang}/>
-        {account && <button type="button" className="btn btn-ghost btn-sm" onClick={signOut}><LogOut size={15}/>{t('zavod.signOut')}</button>}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={signOut}><LogOut size={15}/>{t('zavod.signOut')}</button>
       </div>
     </header>
-    {account ? <Workspace account={account} shipments={shipments} token={token} onSent={() => load(token)} dateLabel={date} money={money} fmt={fmt} /> : <form className="factory-login card" onSubmit={signIn}>
-      <p className="eyebrow">{t('zavod.kicker')}</p>
-      <h1>{t('zavod.title')}</h1>
-      <p className="muted">{t('zavod.lead')}</p>
-      <label className="field"><span>{t('zavod.login')}</span><input className="input" value={login} onChange={e => setLogin(e.target.value)} autoComplete="username" data-testid="input-factory-login"/></label>
-      <label className="field"><span>{t('zavod.password')}</span><input className="input" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" data-testid="input-factory-password"/></label>
-      {error && <p className="error-text">{error}</p>}
-      <button className="btn btn-primary" type="submit" disabled={busy || !login.trim() || !password} data-testid="button-factory-login">{t('zavod.enter')}</button>
-    </form>}
+    <Workspace account={account} shipments={shipments} token={token} onSent={() => load(token)} dateLabel={date} money={money} fmt={fmt} />
   </main>;
 }
 
