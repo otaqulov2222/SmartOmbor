@@ -274,11 +274,13 @@ export function accountFromToken(token: string) {
   return account ? publicAccount(account) : null;
 }
 
-function billableUnits(line: Pick<ShipmentLine, 'pairs' | 'quantity' | 'colors'>) {
-  if (line.pairs > 0) return line.pairs;
+function billableUnits(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">) {
+  const pack = line.pairs > 0 ? line.pairs : 0;
+  const colors = Array.isArray(line.colors) ? line.colors.filter((color) => color.name && color.quantity > 0) : [];
+  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
-  const colors = Array.isArray(line.colors) ? line.colors : [];
-  return colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
+  return pack;
 }
 
 function lineAmount(line: ShipmentLine) {
@@ -287,7 +289,7 @@ function lineAmount(line: ShipmentLine) {
 
 export function shipmentView(shipment: Shipment) {
   const lines = Array.isArray(shipment.lines) ? shipment.lines : [];
-  const pairs = lines.reduce((sum, line) => sum + (line.pairs || 0), 0);
+  const pairs = lines.reduce((sum, line) => sum + billableUnits(line), 0);
   const boxes = lines.reduce((sum, line) => sum + (line.boxes || 0), 0);
   const amount = lines.reduce((sum, line) => sum + lineAmount(line), 0);
   return { ...shipment, lines, pairs, boxes, amount };

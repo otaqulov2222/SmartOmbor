@@ -1,5 +1,6 @@
+import { matchWaybillProduct, type Catalog } from "./catalog";
 import type { ShipmentLine } from "./partners";
-import { MoySkladError, idFromHref, moysklad, moyskladSend } from "./moysklad";
+import { MoySkladError, moysklad, moyskladSend } from "./moysklad";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 
@@ -42,19 +43,15 @@ function entityMeta(href: string, type: string): Meta {
   return { href, type, mediaType: "application/json" };
 }
 
-export function receiptParts(line: Pick<ShipmentLine, "pairs" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
+export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
+  const pack = line.pairs > 0 ? line.pairs : 0;
   const colors = (line.colors ?? []).filter((color) => color.name.trim() && color.quantity > 0);
-  const total = line.pairs > 0 ? line.pairs : line.quantity > 0 ? line.quantity : colors.reduce((sum, color) => sum + color.quantity, 0);
+  if (pack > 0 && colors.length) return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity * pack }));
+  if (pack > 0 && line.boxes > 0) return [{ color: null, quantity: pack * line.boxes }];
+  const total = line.quantity > 0 ? line.quantity : pack;
   if (total <= 0) return [];
   if (!colors.length) return [{ color: null, quantity: total }];
-  const colorSum = colors.reduce((sum, color) => sum + color.quantity, 0);
-  if (colorSum === total) return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity }));
-  let used = 0;
-  return colors.flatMap((color, index) => {
-    const quantity = index === colors.length - 1 ? total - used : Math.floor((total * color.quantity) / colorSum);
-    used += quantity;
-    return quantity > 0 ? [{ color: color.name.trim(), quantity }] : [];
-  });
+  return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity }));
 }
 
 function sameColor(left: string, right: string) {
@@ -63,13 +60,6 @@ function sameColor(left: string, right: string) {
 
 function variantColor(variant: VariantRow) {
   return (variant.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang")?.value?.trim() || "";
-}
-
-function pickOne(rows: ProductRow[], size: string) {
-  if (rows.length === 1) return rows[0];
-  if (!size) return null;
-  const sized = rows.filter((row) => (row.name || "").includes(size));
-  return sized.length === 1 ? sized[0] : null;
 }
 
 let rangCharacteristic: { id: string; name: string; href: string } | null = null;
@@ -91,20 +81,6 @@ async function productById(id: string) {
     if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
   }
   return null;
-}
-
-async function variantById(id: string) {
-  try {
-    return await moysklad<VariantRow>(`/entity/variant/${encodeURIComponent(id)}?expand=product`);
-  } catch (error) {
-    if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
-    return null;
-  }
-}
-
-async function rowsBy(path: string) {
-  const page = await moysklad<{ rows: ProductRow[] }>(path);
-  return page.rows.filter((row) => row.id);
 }
 
 async function variantsOf(productId: string) {
@@ -136,6 +112,7 @@ async function ensureVariant(product: ProductRow, color: string, known: VariantR
 export async function buildSupplyPositions(
   lines: ShipmentLine[],
   currencyMeta: Meta,
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
 ): Promise<Planned | null> {
   const parents = new Map<string, ProductRow>();
   const variantCache = new Map<string, VariantRow[]>();
@@ -145,31 +122,15 @@ export async function buildSupplyPositions(
   for (const line of lines) {
     const parts = receiptParts(line);
     if (!parts.length) continue;
-    let parent: ProductRow | null = null;
-    if (line.productId) {
-      parent = await productById(line.productId);
-      if (!parent) {
-        const variant = await variantById(line.productId);
-        const parentId = idFromHref(variant?.product?.meta?.href);
-        if (parentId) parent = await productById(parentId);
-      }
-    }
-    const code = line.productCode.trim();
-    if (!parent && code) {
-      const byCode = pickOne((await rowsBy(`/entity/product?limit=20&filter=code=${encodeURIComponent(code)}`)).filter((row) => row.code === code), line.size);
-      const byVariant = byCode ? null : (await moysklad<{ rows: VariantRow[] }>(`/entity/variant?limit=20&filter=code=${encodeURIComponent(code)}&expand=product`)).rows.find((row) => row.code === code);
-      const parentId = idFromHref(byVariant?.product?.meta?.href);
-      const fromVariant = parentId ? await productById(parentId) : null;
-      const byArticle = byCode || fromVariant ? null : pickOne((await rowsBy(`/entity/product?limit=20&filter=article=${encodeURIComponent(code)}`)).filter((row) => row.article === code), line.size);
-      parent = byCode || fromVariant || byArticle;
-      if (!parent && !byCode && !fromVariant && !byArticle) {
-        const codeRows = (await rowsBy(`/entity/product?limit=20&filter=code=${encodeURIComponent(code)}`)).filter((row) => row.code === code);
-        const articleRows = (await rowsBy(`/entity/product?limit=20&filter=article=${encodeURIComponent(code)}`)).filter((row) => row.article === code);
-        if (codeRows.length > 1 || articleRows.length > 1) return null;
-      }
-    }
-    const name = [line.productCode, line.model, line.size].filter(Boolean).join(" ").trim();
-    if (!parent && name.length < 2) return null;
+    const catalogMatch = matchWaybillProduct(scope.catalog, {
+      factoryCode: scope.factoryCode,
+      factoryName: scope.factoryName,
+      productCode: line.productCode,
+      size: line.size,
+    });
+    const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
+    const name = ["Bordo", scope.factoryCode, line.productCode, line.model, line.size].filter(Boolean).join(" ").trim();
+    if (!parent && (line.productCode.trim().length < 3 || name.length < 2)) return null;
     resolved.push({ line, parent, name });
   }
 
@@ -181,7 +142,7 @@ export async function buildSupplyPositions(
     const code = item.line.productCode.trim();
     const product = await moyskladSend<ProductRow>("/entity/product", {
       name: item.name,
-      ...(code ? { code } : {}),
+      ...(code.length >= 8 ? { code } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
     item.parent = product;

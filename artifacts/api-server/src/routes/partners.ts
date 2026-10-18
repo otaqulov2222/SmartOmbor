@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, findProductsByBarcode, findProductsByLabel, loadCatalog } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError } from "../lib/moysklad";
 import { recordAudit } from "../lib/audit";
@@ -165,9 +165,8 @@ router.post("/partner-factories/:id/password", (req, res) => {
   }
 });
 
-function exactCatalogProduct(catalog: Awaited<ReturnType<typeof loadCatalog>>, code: string) {
-  const found = findProductsByBarcode(catalog, code);
-  return found.length === 1 ? { id: found[0].id, name: found[0].name } : null;
+function exactCatalogProduct(_catalog: Awaited<ReturnType<typeof loadCatalog>>, _code: string) {
+  return null;
 }
 
 router.get("/partner-factories/:id", async (req, res, next) => {
@@ -215,13 +214,17 @@ router.get("/partner-factories/shipments/:id/matches", async (req, res, next) =>
       return;
     }
     const catalog = await loadCatalog();
+    const account = getAccount(shipment.factoryId);
     const lines = shipment.lines.map((line) => {
+      const matched = account ? matchWaybillProduct(catalog, { factoryCode: account.code, factoryName: account.catalogName || account.name, productCode: line.productCode, size: line.size }) : null;
       const text = [line.productCode, line.model, line.size].filter(Boolean).join(" ");
       const found = new Map<string, { id: string; name: string; code: string | null; stock: number }>();
-      for (const product of findProductsByBarcode(catalog, line.productCode)) {
-        found.set(product.id, { id: product.id, name: product.name, code: product.code, stock: product.stock });
+      if (matched) {
+        const product = catalog.products.find((item) => item.id === matched.id);
+        if (product) found.set(product.id, { id: product.id, name: product.name, code: product.code, stock: product.stock });
       }
       for (const product of findProductsByLabel(catalog, text).products) {
+        if (!account || !productBelongsToFactory(product, account.code, account.catalogName || account.name)) continue;
         found.set(product.id, { id: product.id, name: product.name, code: product.code, stock: product.stock });
       }
       return { id: line.id, products: found.size > 6 ? [] : [...found.values()] };
@@ -299,7 +302,11 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       res.status(400).json({ error: agentMeta ? "currency" : "agent" });
       return;
     }
-    const planned = await buildSupplyPositions(positions.map((item) => item.line), currency.meta);
+    const planned = await buildSupplyPositions(positions.map((item) => item.line), currency.meta, {
+      factoryCode: account?.code || "",
+      factoryName: account?.catalogName || account?.name || "",
+      catalog,
+    });
     if (!planned || !planned.positions.length) {
       res.status(400).json({ error: "unlinked" });
       return;
@@ -429,18 +436,19 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
       return;
     }
     const catalog = await loadCatalog();
+    const account = res.locals.factory as { code?: string; name?: string; catalogName?: string };
     const compact = query.replace(/[\s-]/g, "");
     const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];
     for (const product of catalog.products) {
+      if (!productBelongsToFactory(product, account.code || "", account.catalogName || account.name || "")) continue;
       const code = (product.code || "").toLowerCase();
       const article = (product.article || "").toLowerCase();
       const name = product.name.toLowerCase();
-      const barcodes = product.barcodes.map((value) => value.toLowerCase());
       let score = 0;
-      if (code === query || article === query || barcodes.includes(query) || code.replace(/[\s-]/g, "") === compact) score = 4;
-      else if (code.startsWith(query) || article.startsWith(query) || barcodes.some((value) => value.startsWith(query))) score = 3;
-      else if (name.startsWith(query)) score = 2;
-      else if (name.includes(query) || code.includes(query) || article.includes(query) || barcodes.some((value) => value.includes(query))) score = 1;
+      const token = new RegExp(`(^|\\D)${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`);
+      if (code === query || article === query) score = 4;
+      else if (token.test(name)) score = 3;
+      else if (code === compact || article === compact) score = 2;
       if (score) scored.push({ score, id: product.id, name: product.name, code: product.code, article: product.article, barcode: product.barcodes[0] ?? null });
     }
     scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

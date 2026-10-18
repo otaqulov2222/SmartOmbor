@@ -663,6 +663,42 @@ function lookupKeys(value: string): string[] {
 let indexedCatalog: Catalog | null = null;
 let barcodeIndex = new Map<string, CatalogProduct[]>();
 
+function wholeToken(name: string, token: string) {
+  const clean = token.trim();
+  if (clean.length < 3) return false;
+  return new RegExp(`(^|\\D)${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`).test(name);
+}
+
+export function productBelongsToFactory(product: { name: string; factory: string | null }, factoryCode: string, factoryName: string) {
+  const factory = (product.factory || "").trim().toLowerCase();
+  const label = factoryName.trim().toLowerCase();
+  if (label && factory && (factory === label || factory.includes(label) || label.includes(factory))) return true;
+  const code = factoryCode.trim().toLowerCase();
+  return code.length >= 3 && wholeToken(`${product.factory || ""} ${product.name}`.toLowerCase(), code);
+}
+
+export function matchWaybillProduct(
+  catalog: Catalog,
+  input: { factoryCode: string; factoryName: string; productCode: string; size: string },
+): { id: string; name: string } | null {
+  const code = input.productCode.trim();
+  const size = input.size.trim();
+  if (code.length < 3) return null;
+  const bases = catalog.products.filter((product) => {
+    if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
+    if (!wholeToken(product.name, code)) return false;
+    if (size && !product.name.includes(size)) return false;
+    return !/\([^)]*\)\s*$/.test(product.name);
+  });
+  const exact = size ? bases.filter((product) => product.name.trim().endsWith(size)) : bases;
+  const pool = exact.length ? exact : bases;
+  if (pool.length === 1) return { id: pool[0].id, name: pool[0].name };
+  if (pool.length < 2) return null;
+  const shortest = Math.min(...pool.map((product) => product.name.length));
+  const names = pool.filter((product) => product.name.length === shortest);
+  return names.length === 1 ? { id: names[0].id, name: names[0].name } : null;
+}
+
 export function findProductsByBarcode(catalog: Catalog, raw: string): CatalogProduct[] {
   if (indexedCatalog !== catalog) {
     const next = new Map<string, CatalogProduct[]>();

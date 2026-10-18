@@ -67,24 +67,23 @@ function asNumber(value: string) {
 }
 
 function lineUnits(line: Line) {
-  if (line.pairs > 0) return line.pairs;
+  const pack = line.pairs > 0 ? line.pairs : 0;
+  const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
+  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
-  return (line.colors ?? []).reduce((sum, color) => sum + color.quantity, 0);
+  return pack;
 }
 
 function receiptParts(line: Line) {
+  const pack = line.pairs > 0 ? line.pairs : 0;
   const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
-  const total = line.pairs > 0 ? line.pairs : line.quantity > 0 ? line.quantity : colors.reduce((sum, color) => sum + color.quantity, 0);
+  if (pack > 0 && colors.length) return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity * pack }));
+  if (pack > 0 && line.boxes > 0) return [{ color: null as string | null, quantity: pack * line.boxes }];
+  const total = line.quantity > 0 ? line.quantity : pack;
   if (total <= 0) return [];
-  if (!colors.length) return [{ color: null as string | null, quantity: total }];
-  const colorSum = colors.reduce((sum, color) => sum + color.quantity, 0);
-  if (colorSum === total) return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity }));
-  let used = 0;
-  return colors.flatMap((color, index) => {
-    const quantity = index === colors.length - 1 ? total - used : Math.floor((total * color.quantity) / colorSum);
-    used += quantity;
-    return quantity > 0 ? [{ color: color.name.trim(), quantity }] : [];
-  });
+  if (!colors.length) return [{ color: null, quantity: total }];
+  return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity }));
 }
 
 function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
@@ -130,9 +129,10 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
 
 function linkedLabel(line: Line) {
   const name = (line.productName || '').replace(/\s+/g, ' ').trim();
-  const repeated = [line.productCode, line.model, line.size].map(part => (part || '').trim()).filter(Boolean);
-  const same = new Set([repeated.join(' '), [line.productCode, line.size].map(part => (part || '').trim()).filter(Boolean).join(' ')].filter(Boolean));
-  return name && !same.has(name) ? name : '';
+  const code = (line.productCode || '').trim();
+  if (!name || (code && !new RegExp(`(^|\\D)${code.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}(\\D|$)`).test(name))) return '';
+  if (line.size && !name.includes(line.size)) return '';
+  return name;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -571,7 +571,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     </header>
     <div className="partner-kpis">
       <div><span className="kpi-icon"><Truck size={18}/></span><div><span>{t('partners.incoming')}</span><b>{fmt(visible.length)}</b></div></div>
-      <div><span className="kpi-icon"><Boxes size={18}/></span><div><span>{t('zavod.pairs')}</span><b>{fmt(pairs)}</b></div></div>
+      <div><span className="kpi-icon"><Boxes size={18}/></span><div><span>{t('zavod.totalPairs')}</span><b>{fmt(pairs)}</b></div></div>
       <div><span className="kpi-icon"><Banknote size={18}/></span><div><span>{t('zavod.sum')}</span><b>{money(amount)}</b></div></div>
     </div>
     <section className="card factory-sheet">
@@ -633,7 +633,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <ul className="partner-products">{(products.data?.items ?? []).map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
       <Link href="/factories" className="link">{t('nav.factories')}</Link>
     </section>}
-    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = new Set(mixed).size > 1; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
+    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = false; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">
       <div className="modal-top"><div><p className="eyebrow">{row.name}</p><h2 id="partner-settings-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={() => setSettings(false)} aria-label={t('common.close')}><X size={18}/></button></div>
       <div className="form-grid">

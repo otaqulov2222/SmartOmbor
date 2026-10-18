@@ -42,7 +42,10 @@ function digits(value: string) {
 }
 
 function unitsOf(line: Draft) {
-  return num(line.pairs);
+  const pack = num(line.pairs);
+  const boxes = num(line.boxes);
+  if (pack > 0 && boxes > 0) return pack * boxes;
+  return pack || boxes;
 }
 
 export function FactoryPortal() {
@@ -140,7 +143,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const [openId, setOpenId] = useState<string | null>(null);
 
   const totals = useMemo(() => lines.reduce((sum, line) => {
-    sum.pairs += num(line.pairs);
+    sum.pairs += unitsOf(line);
     sum.boxes += num(line.boxes);
     sum.amount += unitsOf(line) * num(line.price);
     return sum;
@@ -310,7 +313,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(line.pairs * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(line.pairs * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
@@ -357,7 +360,10 @@ function ProductPick({ token, line, onChange }: { token: string; line: Draft; on
   }, [open, query, token]);
 
   const choose = (item: CatalogHit) => {
-    onChange({ productId: item.id, productName: item.name, productCode: item.code || item.article || item.name, barcode: item.barcode || '', size: sizeOf(item.name) });
+    const typed = line.productCode.trim();
+    const picked = query.replace(/\D/g, '');
+    const keep = typed && item.name.includes(typed) ? typed : picked && item.name.includes(picked) ? picked : typed;
+    onChange({ productId: '', productName: '', productCode: keep, barcode: '', size: sizeOf(item.name) || line.size });
     setOpen(false);
   };
 
