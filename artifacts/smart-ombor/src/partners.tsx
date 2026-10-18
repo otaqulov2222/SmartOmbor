@@ -120,11 +120,19 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
     await onChanged();
     setBusy(false);
   };
-  if (locked) return line.productName ? <p className="waybill-link"><b>{line.productName}</b></p> : null;
-  if (line.productId) return <div className="waybill-link"><span>{line.productName}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
+  const label = linkedLabel(line);
+  if (locked) return label ? <p className="waybill-link"><b>{label}</b></p> : null;
+  if (line.productId) return <div className="waybill-link">{label && <span>{label}</span>}<button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
   const options = matches.data?.lines.find(item => item.id === line.id)?.products ?? [];
   const list = hits.length ? hits : options;
   return <div className="waybill-link">{!open && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>{t('partners.link')}</button>}{open && <input className="input" value={query} placeholder={t('partners.link')} autoFocus onChange={event => setQuery(event.target.value)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} />}{open && list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onMouseDown={event => event.preventDefault()} onClick={() => void link(item.id)}>{item.name}</button>)}{open && !looking && query.trim().length >= 2 && !list.length && <small>{t('partners.noMatch')}</small>}</div>;
+}
+
+function linkedLabel(line: Line) {
+  const name = (line.productName || '').replace(/\s+/g, ' ').trim();
+  const repeated = [line.productCode, line.model, line.size].map(part => (part || '').trim()).filter(Boolean);
+  const same = new Set([repeated.join(' '), [line.productCode, line.size].map(part => (part || '').trim()).filter(Boolean).join(' ')].filter(Boolean));
+  return name && !same.has(name) ? name : '';
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -736,13 +744,11 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
     {lines.map((line, index) => <article className="waybill-line" key={line.key}>
       <header><b>{String(index + 1).padStart(2, '0')}</b>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
       <div className="form-grid">
-        <label className="field"><span>{t('zavod.section')}</span><input className="input" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.product')}</span><input className="input" value={line.productCode} onChange={e => patch(line.key, { productCode: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.model')}</span><input className="input" value={line.model} onChange={e => patch(line.key, { model: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.size')}</span><input className="input" value={line.size} onChange={e => patch(line.key, { size: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.quantity')}</span><input className="input" inputMode="decimal" value={line.quantity} onChange={e => patch(line.key, { quantity: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })}/></label>
       </div>
       <div className="yx-colors">
