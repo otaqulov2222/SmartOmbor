@@ -213,9 +213,12 @@ function LocalLoginForm() {
       if (!response.ok) { setError(true); return; }
       const body = await response.json() as LocalSession;
       sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({ token: body.token, name: body.name, login: body.login, role: body.role }));
-      const back = sessionStorage.getItem(RETURN_PATH) || '';
+      window.dispatchEvent(new Event('smart-ombor-auth'));
+      const here = `${window.location.pathname}${window.location.search}`;
+      const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
-      setLocation(back.startsWith('/') && !back.startsWith('//') ? back : '/dashboard');
+      const target = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '/dashboard';
+      setLocation(target);
     } catch {
       setError(true);
     } finally {
@@ -441,8 +444,9 @@ function DashboardPage() {
 /* ---------- products ---------- */
 function ProductsPage() {
   const { t, fmt, money } = useI18n(); const unit = useUnit();
-  const urlSearch = new URLSearchParams(useSearch()).get('search') || '';
-  const productId = new URLSearchParams(useSearch()).get('product') || '';
+  const urlQuery = new URLSearchParams(useSearch() || window.location.search);
+  const urlSearch = urlQuery.get('search') || '';
+  const productId = urlQuery.get('product') || '';
   const [search, setSearch] = useState(urlSearch); const [stockStatus, setStatus] = useState('all'); const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Product | null>(null);
   useEffect(() => { setSearch(urlSearch); setPage(1); }, [urlSearch]);
@@ -1097,12 +1101,19 @@ function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
 /* ---------- routing ---------- */
 function RouteFrame({ title, children }: { title: string; children: ReactNode }) {
   const [location] = useLocation();
+  const [sessionTick, setSessionTick] = useState(0);
+  useEffect(() => {
+    const refresh = () => setSessionTick(value => value + 1);
+    window.addEventListener('smart-ombor-auth', refresh);
+    return () => window.removeEventListener('smart-ombor-auth', refresh);
+  }, []);
   const body = <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>{children}</ErrorBoundary>;
+  const signedIn = Boolean(readLocalSession()) || sessionTick < 0;
   if (!clerkPubKey) {
-    if (!readLocalSession()) {
+    if (!signedIn) {
       const next = `${window.location.pathname}${window.location.search}`;
       if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
-      return <Redirect to="/"/>;
+      return <EntryScreen><LocalLoginForm/></EntryScreen>;
     }
     return <LocalShell title={title}>{body}</LocalShell>;
   }
