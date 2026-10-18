@@ -311,16 +311,12 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
   const edit = (index: number, field: 'name' | 'quantity', value: string) => {
     setChecked(false);
     setFailed(false);
-    setRows(list => list.map((item, i) => i === index ? { ...item, [field]: field === 'name' ? value.toLocaleUpperCase('ru-RU') : value } : item));
-  };
-  const openNext = (index: number, quantity = rows[index]?.quantity ?? '') => {
-    const current = rows[index];
-    if (!current?.name.trim() || !(Number(quantity.replace(',', '.')) > 0)) return;
-    const blank = rows.findIndex((item, i) => i > index && !item.name.trim() && !item.quantity.trim());
-    if (blank >= 0) { nameRefs.current[blank]?.focus(); return; }
-    if (index < rows.length - 1) { nameRefs.current[index + 1]?.focus(); return; }
-    focusAt.current = rows.length;
-    setRows(list => [...list, { name: '', quantity: '' }]);
+    setRows(list => {
+      const next = list.map((item, i) => i === index ? { ...item, [field]: field === 'name' ? value.toLocaleUpperCase('ru-RU') : value } : item);
+      if (field !== 'quantity' || !next[index]?.name.trim() || !(Number(value.replace(',', '.')) > 0)) return next;
+      if (next.some((item, i) => i > index && !item.name.trim() && !item.quantity.trim())) return next;
+      return [...next, { name: '', quantity: '' }];
+    });
   };
   const filled = rows
     .map(row => ({ name: row.name.trim(), quantity: Math.max(0, Number(row.quantity.replace(',', '.')) || 0) }))
@@ -349,7 +345,7 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
     {rows.map((row, index) => <div key={index} className="color-pair">
       <input className="input" ref={node => { nameRefs.current[index] = node; }} value={row.name} aria-label={t('zavod.colorName')} placeholder={t('zavod.colorName')} autoCapitalize="characters" onChange={event => edit(index, 'name', event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.parentElement?.querySelector<HTMLInputElement>('.color-qty')?.focus(); } }}/>
       <span>/</span>
-      <input className="input color-qty" inputMode="numeric" value={row.quantity} aria-label={t('zavod.boxes')} placeholder={t('zavod.boxes')} onChange={event => edit(index, 'quantity', event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} onBlur={event => { if ((event.relatedTarget as HTMLElement | null)?.closest('button')) return; openNext(index, event.currentTarget.value); }}/>
+      <input className="input color-qty" inputMode="numeric" value={row.quantity} aria-label={t('zavod.boxes')} placeholder={t('zavod.boxes')} onChange={event => edit(index, 'quantity', event.target.value)} onKeyDown={event => { if (event.key !== 'Enter') return; event.preventDefault(); const next = event.currentTarget.parentElement?.nextElementSibling?.querySelector('input'); if (next instanceof HTMLInputElement) next.focus(); }}/>
     </div>)}
     <button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => { setChecked(false); focusAt.current = rows.length; setRows(list => [...list, { name: '', quantity: '' }]); }}><Plus size={14}/></button>
     {checked && <p className={ready ? 'color-ok' : 'color-warn'}>{message}</p>}
