@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByBarcode, findProductsByLabel, loadCatalog } from "../lib/catalog";
+import { buildSupplyPositions } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError } from "../lib/moysklad";
 import { recordAudit } from "../lib/audit";
 import {
@@ -298,37 +299,18 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       res.status(400).json({ error: agentMeta ? "currency" : "agent" });
       return;
     }
-    for (const item of positions) {
-      if (item.line.productId) continue;
-      const name = [item.line.productCode, item.line.model, item.line.size].filter(Boolean).join(" ").trim();
-      const code = item.line.productCode.trim();
-      const existing = code
-        ? await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string }> }>(`/entity/product?limit=20&filter=code=${encodeURIComponent(code)}`)
-        : { rows: [] };
-      const matches = existing.rows.filter((row) => row.id && row.code === code);
-      const sized = item.line.size ? matches.filter((row) => (row.name || "").includes(item.line.size)) : [];
-      const found = matches.length === 1 ? matches[0] : sized.length === 1 ? sized[0] : null;
-      if (!found && matches.length > 1) {
-        res.status(400).json({ error: "unlinked" });
-        return;
-      }
-      if (!found && name.length < 2) {
-        res.status(400).json({ error: "unlinked" });
-        return;
-      }
-      const product = found?.id
-        ? { id: found.id, name: found.name || name, code: found.code }
-        : await moyskladSend<{ id: string; name: string; code?: string }>("/entity/product", {
-            name,
-            ...(code ? { code } : {}),
-            ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currency.meta } } } : {}),
-          });
-      linkShipmentLine(shipment.id, item.line.id, { id: product.id, name: product.name });
+    const planned = await buildSupplyPositions(positions.map((item) => item.line), currency.meta);
+    if (!planned || !planned.positions.length) {
+      res.status(400).json({ error: "unlinked" });
+      return;
+    }
+    for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
+    for (const product of planned.created) {
       addCatalogProduct({
         id: product.id,
-        name: product.name,
-        code: product.code || item.line.productCode || null,
-        article: null,
+        name: product.name || "",
+        code: product.code || null,
+        article: product.article || null,
         barcodes: [],
         factory: account?.name || null,
         category: null,
@@ -338,8 +320,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         imageUrl: null,
         stock: 0,
         available: 0,
-        cost: item.line.price || null,
-        salePrice: item.line.price || null,
+        cost: null,
+        salePrice: null,
         lastSale: null,
         lastReceipt: null,
         sales7: 0,
@@ -351,12 +333,6 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         inTransit: 0,
       });
     }
-    const fresh = listShipments().find((item) => item.id === shipment.id) || shipment;
-    positions = fresh.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
-    if (positions.some((item) => !item.line.productId)) {
-      res.status(400).json({ error: "unlinked" });
-      return;
-    }
     const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
       name: shipment.number,
       moment: `${shipment.date} 12:00:00`,
@@ -365,13 +341,13 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       agent: { meta: agentMeta },
       store: { meta: meta(`${base}/entity/store/${store.id}`, "store") },
       rate: { currency: { meta: currency.meta } },
-      positions: positions.map((item) => ({
+      positions: planned.positions.map((item) => ({
         quantity: item.quantity,
-        price: Math.round(item.line.price * 100),
-        assortment: { meta: meta(`${base}/entity/product/${item.line.productId}`, "product") },
+        price: item.price,
+        assortment: item.assortment,
       })),
     });
-    applyReceiptStock(positions.map((item) => ({ productId: item.line.productId || "", warehouseId: store.id, quantity: item.quantity })));
+    applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
     res.status(201).json({ id: created.id, number: created.name || shipment.number, shipment: saved });

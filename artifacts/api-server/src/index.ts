@@ -1,6 +1,7 @@
 import app from "./app";
 import { loadCatalog } from "./lib/catalog";
 import { logger } from "./lib/logger";
+import { hydratePartners } from "./lib/partners";
 import { sendIdlePreview, sendPreview, startTelegramDigest } from "./lib/telegram";
 
 const rawPort = process.env["PORT"];
@@ -26,16 +27,22 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+void hydratePartners()
+  .catch((error: unknown) => {
+    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
+  })
+  .finally(() => {
+    app.listen(port, (err) => {
+      if (err) {
+        logger.error({ err }, "Error listening on port");
+        process.exit(1);
+      }
 
-  logger.info({ port }, "Server listening");
-  void loadCatalog().catch((error: unknown) => {
-    logger.warn({ err: error }, "Catalog cache was not warmed");
+      logger.info({ port }, "Server listening");
+      void loadCatalog().catch((error: unknown) => {
+        logger.warn({ err: error }, "Catalog cache was not warmed");
+      });
+      startTelegramDigest();
+    });
   });
-  startTelegramDigest();
-});
 }

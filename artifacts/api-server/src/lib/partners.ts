@@ -1,7 +1,9 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
+import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
 
@@ -59,30 +61,71 @@ type Store = {
 };
 
 const filePath = dataFile("partners.json");
+let memory: Store | null = null;
 
 function emptyStore(): Store {
   return { accounts: [], shipments: [], sessions: [] };
 }
 
-function load(): Store {
+function normalizeStore(value: unknown): Store {
+  const parsed = value && typeof value === "object" ? value as Partial<Store> : {};
+  return {
+    accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+    shipments: Array.isArray(parsed.shipments) ? parsed.shipments : [],
+    sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+  };
+}
+
+function readFileStore(): Store {
   try {
-    const raw = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<Store>;
-    return {
-      accounts: parsed.accounts ?? [],
-      shipments: parsed.shipments ?? [],
-      sessions: parsed.sessions ?? [],
-    };
+    return normalizeStore(JSON.parse(readFileSync(filePath, "utf8")));
   } catch {
     return emptyStore();
   }
 }
 
-function save(store: Store) {
+function writeFileStore(store: Store) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp`;
   writeFileSync(tmp, JSON.stringify(store, null, 2));
   renameSync(tmp, filePath);
+}
+
+async function persistStore(store: Store) {
+  await pool.query(
+    "insert into partner_store (id, document, updated_at) values ('main', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+    [JSON.stringify(store)],
+  );
+}
+
+export async function hydratePartners() {
+  await pool.query(`
+    create table if not exists partner_store (
+      id text primary key,
+      document jsonb not null,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  const result = await pool.query("select document from partner_store where id = 'main'");
+  const remote = result.rows[0] ? normalizeStore(result.rows[0].document) : null;
+  const hasRemote = Boolean(remote && (remote.accounts.length || remote.shipments.length || remote.sessions.length));
+  memory = hasRemote && remote ? remote : readFileStore();
+  writeFileStore(memory);
+  if (!hasRemote) await persistStore(memory);
+  logger.info({ accounts: memory.accounts.length, shipments: memory.shipments.length }, "Partner data loaded");
+}
+
+function load(): Store {
+  memory ??= readFileStore();
+  return memory;
+}
+
+function save(store: Store) {
+  memory = store;
+  writeFileStore(store);
+  void persistStore(store).catch((error: unknown) => {
+    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner data was not saved to the database");
+  });
 }
 
 function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
