@@ -72,15 +72,15 @@ function pickOne(rows: ProductRow[], size: string) {
   return sized.length === 1 ? sized[0] : null;
 }
 
-let rangHref: string | null = null;
+let rangCharacteristic: { id: string; name: string; href: string } | null = null;
 
-async function colorCharacteristicHref() {
-  if (rangHref) return rangHref;
+async function colorCharacteristic() {
+  if (rangCharacteristic) return rangCharacteristic;
   const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
-  const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id);
-  if (!found?.id) throw new MoySkladError("rang", 400);
-  rangHref = `${BASE}/entity/variant/metadata/characteristics/${found.id}`;
-  return rangHref;
+  const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id && item.name);
+  if (!found?.id || !found.name) throw new MoySkladError("rang", 400);
+  rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
+  return rangCharacteristic;
 }
 
 async function productById(id: string) {
@@ -115,11 +115,11 @@ async function variantsOf(productId: string) {
 async function ensureVariant(product: ProductRow, color: string, known: VariantRow[]) {
   const found = known.find((row) => sameColor(variantColor(row), color));
   if (found?.id) return found;
-  const href = await colorCharacteristicHref();
+  const rang = await colorCharacteristic();
   const prices = (product.salePrices ?? []).filter((price) => price.priceType?.meta && price.value != null);
   const body = {
     product: { meta: product.meta },
-    characteristics: [{ meta: entityMeta(href, "attributemetadata"), value: color }],
+    characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
     ...(prices.length ? { salePrices: prices.map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } })) } : {}),
   };
   let created: VariantRow;

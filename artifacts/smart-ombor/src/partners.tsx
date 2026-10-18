@@ -455,7 +455,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
       const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };
       if (!response.ok) {
-        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : body.error === 'unlinked' ? t('partners.noMatch') : body.detail || t('partners.supplyFailed'));
+        const detail = body.detail && !body.detail.trim().startsWith('{') ? body.detail : '';
+        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : body.error === 'unlinked' ? t('partners.noMatch') : detail || t('partners.supplyFailed'));
         return;
       }
       setPosting(null);
