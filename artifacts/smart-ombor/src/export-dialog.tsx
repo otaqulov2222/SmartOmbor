@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownLeft, ArrowLeftRight, BarChart3, Boxes, CalendarDays, ClipboardCheck, ClipboardList, Clock3, Download, Factory, FileSpreadsheet, FileText, LayoutDashboard, Package, Repeat, ShieldCheck, Sparkles, Warehouse, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowLeftRight, BarChart3, Boxes, CalendarDays, ClipboardCheck, ClipboardList, Clock3, Download, Factory, FileSpreadsheet, FileText, LayoutDashboard, ListChecks, Package, Repeat, ShieldCheck, Warehouse, X } from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
 import { downloadReportPdf } from '@/lib/pdf';
 import { downloadXlsx } from '@/lib/xlsx';
@@ -94,7 +94,7 @@ const REPORT_ICON: Record<ExportKind, typeof FileText> = {
   dashboard: LayoutDashboard, products: Package, stock: Boxes, warehouses: Warehouse,
   receipts: ArrowDownLeft, transfers: ArrowLeftRight, inventory: ClipboardCheck, documents: FileText,
   sales: BarChart3, nonMoving: Clock3, factories: Factory, branches: Repeat,
-  recommendations: Sparkles, audit: ShieldCheck, tasks: ClipboardList,
+  recommendations: ListChecks, audit: ShieldCheck, tasks: ClipboardList,
 };
 export function ReportsHub() {
   const { t } = useI18n();

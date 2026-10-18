@@ -7,9 +7,9 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, Boxes, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, LogOut, Menu, MoreHorizontal, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
-  Sparkles, UserRound, Users, Wallet, Warehouse, X,
+  UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
 import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useSearch } from 'wouter';
 import {
@@ -68,12 +68,12 @@ const navigation: NavItem[] = [
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
   { key: 'nav.branches', href: '/branches', icon: Repeat, group: 'nav.group.analytics' },
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
-  { key: 'nav.recommendations', href: '/recommendations', icon: Sparkles, group: 'nav.group.analytics' },
+  { key: 'nav.recommendations', href: '/recommendations', icon: ListChecks, group: 'nav.group.analytics' },
   { key: 'nav.reports', href: '/reports', icon: FileBarChart, group: 'nav.group.analytics' },
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/products', '/scanner', '/partners', '/recommendations'];
+const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
@@ -827,7 +827,7 @@ function RecommendationsPage() {
         <article><span>{t('reco.kpi.fast')}</span><strong>{fmt(fast)}</strong><small>{t('reco.kpi.fastNote')}</small></article>
       </section>
       {rows.length ? <Card className="table-card" title={t('reco.panel')} meta={t('reco.count', { count: fmt(rows.length) })}><Table testId="table-recommendations" numeric={[5]} columns={[t('common.product'), t('reco.col.size'), t('reco.col.color'), t('reco.col.current'), t('reco.col.reason'), t('reco.col.suggested')]} rows={rows.map(r => { const look = traits(r.product.name); const fact = basis(r); return { key: `${r.product.id}-${r.warehouseId}`, testId: `row-recommendation-${r.product.id}`, cells: [<ProductTitle product={r.product} href={`/products?search=${encodeURIComponent(r.product.code || r.product.name)}`}/>, look.size, look.color, <span className="cell-two"><b>{t('reco.onHand', { count: fmt(r.onHand) })}</b><small>{t('reco.inTransit', { count: fmt(r.inTransit) })}</small></span>, <span className="cell-two reco-fact"><b>{t('reco.fact.sold', { days: fact.windowDays, sold: fmt(fact.sold) })}</b><small>{t('reco.fact.need', { stock: fmt(r.onHand), transit: fmt(r.inTransit), cover: fmt(fact.cover, 1), days: r.leadTimeDays, need: fmt(r.safetyStock), order: fmt(r.suggestedQuantity) })}</small></span>, <b className="move-qty">{fmt(r.suggestedQuantity)} {unit(r.product.unit)}</b>] }; })}/></Card> : <EmptyState title={t('products.empty.search')} body={t('products.empty.searchBody')} icon={Search}/>}
-    </> : <EmptyState title={t('reco.empty.title')} body={t('reco.empty.body')} icon={Sparkles}/>}
+    </> : <EmptyState title={t('reco.empty.title')} body={t('reco.empty.body')} icon={ListChecks}/>}
   </>;
 }
 
