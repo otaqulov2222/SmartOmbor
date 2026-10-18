@@ -3,6 +3,8 @@ import type { ShipmentLine } from "./partners";
 import { MoySkladError, moysklad, moyskladSend } from "./moysklad";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
+const PIECE_UOM = "19f1edc0-fc42-4001-94cb-c9ec9c62ec10";
+const PACHKA_UOM = "2061e032-0683-11f1-0a80-00e70010dbf7";
 
 type Meta = { href: string; type: string; mediaType: string };
 
@@ -31,6 +33,7 @@ export type SupplyPosition = {
   price: number;
   assortment: { meta: Meta };
   stockId: string;
+  pack?: { id: string; quantity: number; uom: { meta: Meta } };
 };
 
 type Planned = {
@@ -41,6 +44,40 @@ type Planned = {
 
 function entityMeta(href: string, type: string): Meta {
   return { href, type, mediaType: "application/json" };
+}
+
+function uomMeta(id: string): Meta {
+  return entityMeta(`${BASE}/entity/uom/${id}`, "uom");
+}
+
+type GoodsPack = { id: string; quantity: number; uom?: { meta?: Meta; name?: string } };
+
+function packBody(pack: GoodsPack, quantity = pack.quantity) {
+  return { id: pack.id, quantity, uom: { meta: pack.uom?.meta ?? uomMeta(PACHKA_UOM) } };
+}
+
+async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
+  const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
+  const packs = current.packs ?? [];
+  const pachka = packs.find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka");
+  if (!(packSize > 1)) {
+    if (!current.uom) await moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT");
+    return null;
+  }
+  if (pachka?.id && pachka.quantity === packSize && current.uom && pachka.uom?.meta) return pachka;
+  const next = packs
+    .filter((pack) => pack.id && pack.id !== pachka?.id)
+    .map((pack) => packBody(pack));
+  if (packSize > 1) next.push(pachka?.id ? packBody(pachka, packSize) : { quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } });
+  const updated = await moyskladSend<{ packs?: GoodsPack[] }>(`/entity/product/${productId}`, {
+    ...(current.uom ? {} : { uom: { meta: uomMeta(PIECE_UOM) } }),
+    ...(next.length ? { packs: next } : {}),
+  }, "PUT");
+  if (!(packSize > 1)) return null;
+  const saved = (updated.packs ?? []).find((pack) => pack.quantity === packSize && pack.uom?.meta);
+  if (saved?.id && saved.uom?.meta) return saved;
+  const again = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom`);
+  return (again.packs ?? []).find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka" && pack.quantity === packSize) ?? null;
 }
 
 export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
@@ -116,6 +153,7 @@ export async function buildSupplyPositions(
 ): Promise<Planned | null> {
   const parents = new Map<string, ProductRow>();
   const variantCache = new Map<string, VariantRow[]>();
+  const packCache = new Map<string, GoodsPack | null>();
   const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string }> = [];
   const created: ProductRow[] = [];
 
@@ -140,11 +178,16 @@ export async function buildSupplyPositions(
       continue;
     }
     const code = item.line.productCode.trim();
-    const product = await moyskladSend<ProductRow>("/entity/product", {
+    const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
+    const product = await moyskladSend<ProductRow & { packs?: GoodsPack[] }>("/entity/product", {
       name: item.name,
+      uom: { meta: uomMeta(PIECE_UOM) },
+      ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
       ...(code.length >= 8 ? { code } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
+    const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
+    if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
     item.parent = product;
     parents.set(product.id, product);
     created.push(product);
@@ -164,6 +207,11 @@ export async function buildSupplyPositions(
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
+    const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
+    const packKey = `${product.id}:${packSize}`;
+    if (!packCache.has(packKey)) packCache.set(packKey, await ensurePachka(product.id, packSize));
+    const salePack = packCache.get(packKey);
+    const pack = salePack?.id && salePack.uom?.meta ? { id: salePack.id, quantity: salePack.quantity, uom: { meta: salePack.uom.meta } } : undefined;
     let known = variantCache.get(product.id);
     if (!known && parts.some((part) => part.color)) {
       known = await variantsOf(product.id);
@@ -176,6 +224,7 @@ export async function buildSupplyPositions(
           price: Math.round(item.line.price * 100),
           assortment: { meta: product.meta?.href ? product.meta : entityMeta(`${BASE}/entity/product/${product.id}`, "product") },
           stockId: product.id,
+          ...(pack ? { pack } : {}),
         });
         continue;
       }
@@ -185,6 +234,7 @@ export async function buildSupplyPositions(
         price: Math.round(item.line.price * 100),
         assortment: { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") },
         stockId: variant.id,
+        ...(pack ? { pack } : {}),
       });
     }
   }

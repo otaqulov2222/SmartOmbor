@@ -352,6 +352,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         quantity: item.quantity,
         price: item.price,
         assortment: item.assortment,
+        ...(item.pack ? { pack: item.pack } : {}),
       })),
     });
     applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
