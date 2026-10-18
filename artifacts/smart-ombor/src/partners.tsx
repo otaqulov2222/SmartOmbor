@@ -348,6 +348,10 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     setAgentHits([]);
   }, [posting, row.account?.counterpartyId, row.account?.counterpartyName]);
   useEffect(() => {
+    const firstStore = warehouses.data?.[0]?.id;
+    if (posting && firstStore) setStoreId(current => current || firstStore);
+  }, [posting, warehouses.data]);
+  useEffect(() => {
     const text = agentQuery.trim();
     if (text.length < 2) { setAgentHits([]); return; }
     const timer = window.setTimeout(() => {
@@ -434,9 +438,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
       const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
-      const body = await response.json().catch(() => ({})) as { error?: string };
+      const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };
       if (!response.ok) {
-        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : t('partners.supplyFailed'));
+        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : body.error === 'unlinked' ? t('partners.noMatch') : body.detail || t('partners.supplyFailed'));
         return;
       }
       setPosting(null);

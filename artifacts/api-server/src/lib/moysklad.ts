@@ -58,7 +58,10 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new MoySkladError("rejected", response.status);
+  if (!response.ok) {
+    const text = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+    throw new MoySkladError(text || "rejected", response.status);
+  }
   return (await response.json()) as T;
 }
 

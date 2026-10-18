@@ -300,14 +300,28 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     for (const item of positions) {
       if (item.line.productId) continue;
       const name = [item.line.productCode, item.line.model, item.line.size].filter(Boolean).join(" ").trim();
-      if (name.length < 2) {
+      const code = item.line.productCode.trim();
+      const existing = code
+        ? await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string }> }>(`/entity/product?limit=20&filter=code=${encodeURIComponent(code)}`)
+        : { rows: [] };
+      const matches = existing.rows.filter((row) => row.id && row.code === code);
+      const sized = item.line.size ? matches.filter((row) => (row.name || "").includes(item.line.size)) : [];
+      const found = matches.length === 1 ? matches[0] : sized.length === 1 ? sized[0] : null;
+      if (!found && matches.length > 1) {
         res.status(400).json({ error: "unlinked" });
         return;
       }
-      const product = await moyskladSend<{ id: string; name: string; code?: string }>("/entity/product", {
-        name,
-        ...(item.line.productCode ? { code: item.line.productCode } : {}),
-      });
+      if (!found && name.length < 2) {
+        res.status(400).json({ error: "unlinked" });
+        return;
+      }
+      const product = found?.id
+        ? { id: found.id, name: found.name || name, code: found.code }
+        : await moyskladSend<{ id: string; name: string; code?: string }>("/entity/product", {
+            name,
+            ...(code ? { code } : {}),
+            ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currency.meta } } } : {}),
+          });
       linkShipmentLine(shipment.id, item.line.id, { id: product.id, name: product.name });
       addCatalogProduct({
         id: product.id,
@@ -362,7 +376,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     res.status(201).json({ id: created.id, number: created.name || shipment.number, shipment: saved });
   } catch (error) {
     if (error instanceof MoySkladError) {
-      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected" });
+      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected", detail: error.message });
       return;
     }
     next(error);
