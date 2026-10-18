@@ -478,8 +478,9 @@ a.kpi:hover { background: var(--surface-2); }
 .scan-session { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .scan-session span { color: var(--muted); font-size: .85rem; }
 .waybill-links { display: grid; gap: .45rem; padding: .2rem .2rem .4rem; }
-.waybill-link { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
-.waybill-link .input { max-width: 280px; }
+.waybill-link { display: flex; flex-wrap: wrap; gap: .25rem; align-items: center; }
+.waybill-link .input { max-width: 11rem; height: 2rem; }
+.waybill-link .btn { height: 1.85rem; padding-inline: .55rem; }
 .waybill-link small { color: var(--muted); }
 .scan-feed-empty { padding: 1.1rem 1.15rem; color: var(--muted); }
 .scan-miss { animation: scan-miss-in .28s ease; }
@@ -703,8 +704,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .audit-search { flex: 1; width: auto; max-width: none; }
   .factory-hero { grid-template-columns: auto minmax(0, 1fr); }
   .factory-actions { grid-column: 1 / -1; }
-  .waybill header { grid-template-columns: auto minmax(0, 1fr); }
-  .waybill header .badge, .waybill-sum { grid-column: 2; }
+  .waybill-open { grid-template-columns: auto minmax(0, 1fr); }
+  .waybill-open .badge, .waybill-open .waybill-sum { grid-column: 2; }
   .partner-bar { width: 100%; margin-left: 0; }
   .partner-search { width: auto; flex: 1; }
   .partner-bar .btn { flex: none; }
@@ -820,9 +821,12 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .shipment-list { display: grid; gap: 1rem; }
 .shipment { display: grid; gap: .6rem; padding: .8rem; border: 1px solid var(--line); border-radius: var(--r-md); background: #fff; }
 .shipment header { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+.shipment-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: .7rem; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.shipment-open strong { margin-left: auto; white-space: nowrap; }
 .shipment header strong { margin-left: auto; white-space: nowrap; }
 .waybill { border: 1px solid var(--line); border-radius: .9rem; overflow: hidden; background: #fff; }
-.waybill header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .75rem; padding: .9rem 1rem; background: #fff; }
+.waybill header { display: block; padding: .9rem 1rem; background: #fff; }
+.waybill-open { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .75rem; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .waybill-mark { width: 2.25rem; height: 2.25rem; border-radius: .65rem; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); }
 .waybill .mini-table th { background: var(--brand); border-bottom-color: var(--brand); }
 .waybill-head-tools { margin-left: auto; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
@@ -849,8 +853,21 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-sum { font-size: 1.05rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .waybill footer { display: flex; justify-content: flex-end; padding: .7rem 1rem; border-top: 1px solid var(--line); background: #fafbfc; }
 .waybill footer .btn { width: auto; }
-.waybill-note { margin: 0; padding: .7rem 1rem; color: var(--muted); font-size: .84rem; border-top: 1px solid var(--line); }
+.waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
 .waybill-lines { display: grid; }
+.waybill-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
+.waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.waybill-table th.num, .waybill-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.waybill-table td small { display: block; margin-top: .12rem; color: var(--muted); font-size: .75rem; }
+.waybill-colors { background: #fafbfc; }
+.color-edit { display: flex; flex-wrap: wrap; gap: .4rem .55rem; align-items: center; }
+.color-pair { display: flex; align-items: center; gap: .25rem; }
+.color-pair .input { width: 4.6rem; height: 2rem; position: relative; z-index: 1; }
+.color-pair .color-qty { width: 4.2rem; }
+.color-warn, .color-ok { margin: 0; font-size: .8rem; flex: 1 1 16rem; }
+.color-warn { color: #b42318; }
+.color-ok { color: #047857; }
 .waybill-row { display: grid; gap: .7rem; padding: .9rem 1rem; border-top: 1px solid var(--line); }
 .waybill-main { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
 .waybill-main b { font-size: 1.02rem; letter-spacing: -.02em; }
@@ -861,6 +878,13 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-facts dt { color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .waybill-facts dd { margin: .12rem 0 0; font-size: 1rem; font-weight: 750; font-variant-numeric: tabular-nums; }
 .waybill-row .waybill-link { padding-top: .15rem; }
+.waybill-line-tools { display: flex; justify-content: flex-end; gap: .35rem; }
+.yx-sheet { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #fff; }
+.yx-sheet-head, .yx-sheet-row { display: grid; grid-template-columns: 2.4rem minmax(9rem, 1.5fr) minmax(4.5rem, .7fr) minmax(4.2rem, .55fr) minmax(4.2rem, .55fr) minmax(5rem, .7fr) minmax(6.5rem, .85fr) 2.2rem; gap: .4rem; align-items: center; padding: .45rem .55rem; }
+.yx-sheet-head { background: #f4f7fb; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .03em; }
+.yx-sheet-row + .yx-sheet-row { border-top: 1px solid var(--line); }
+.yx-sheet-row > b { width: 1.8rem; height: 1.8rem; display: grid; place-items: center; border-radius: .45rem; background: var(--brand-soft); color: var(--brand-ink); font-size: .78rem; }
+.yx-sheet .yx-pick { min-width: 0; }
 .mini-wrap { overflow-x: auto; }
 .mini-table { width: 100%; border-collapse: collapse; font-size: .82rem; min-width: 720px; }
 .mini-table th, .mini-table td { text-align: left; padding: .45rem .4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -952,6 +976,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 6; }
   .yx-totals, .cabinet-kpis { grid-template-columns: 1fr 1fr; }
   .yx-history-lines li { grid-template-columns: 1fr 1fr; }
+  .yx-sheet-head { display: none; }
+  .yx-sheet-row { grid-template-columns: 1fr 1fr; }
+  .yx-sheet-row > b, .yx-sheet-row .yx-pick { grid-column: 1 / -1; }
 }
 @media (max-width: 560px) {
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 12; }

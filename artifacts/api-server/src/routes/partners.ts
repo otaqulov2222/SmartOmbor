@@ -17,6 +17,7 @@ import {
   deleteShipment,
   resetPassword,
   setShipmentStatus,
+  reviseShipment,
   updateShipment,
   updateAccount,
   suggestPassword,
@@ -413,6 +414,33 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
     scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     res.json({ items: scored.slice(0, 12).map(({ id, name, code, article, barcode }) => ({ id, name, code, article, barcode })) });
   } catch (error) {
+    next(error);
+  }
+});
+
+router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
+  try {
+    const catalog = await loadCatalog();
+    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
+      const product = byId.get(String(line?.productId ?? "").trim());
+      const typed = String(line?.productCode ?? "").trim().toLowerCase();
+      const matches = product && [product.code, product.article, product.name, ...product.barcodes].some((value) => String(value || "").trim().toLowerCase() === typed);
+      return matches && product ? { ...line, productId: product.id, productName: product.name } : { ...line, productId: null, productName: null };
+    });
+    const saved = reviseShipment(res.locals.factory.id, String(req.params.id), {
+      date: req.body?.date,
+      note: req.body?.note,
+      lines,
+    });
+    linkExactShipmentLines(res.locals.factory.id, (code) => exactCatalogProduct(catalog, code));
+    const shipment = listShipments(res.locals.factory.id).find((item) => item.id === saved.id) ?? saved;
+    res.json(shipment);
+  } catch (error) {
+    if (typeof error === "object" && error && "status" in error) {
+      fail(res, error);
+      return;
+    }
     next(error);
   }
 });

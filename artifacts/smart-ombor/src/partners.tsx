@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Banknote, Boxes, Check, ChevronRight, Copy, Download, Eye, EyeOff, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
@@ -73,8 +73,9 @@ function lineUnits(line: Line) {
 }
 
 function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
-  const { t, fmt } = useI18n();
+  const { t } = useI18n();
   const [query, setQuery] = useState(line.productCode || '');
+  const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<Array<{ id: string; name: string; code: string | null; stock: number }>>([]);
   const [looking, setLooking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -105,10 +106,10 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
     setBusy(false);
   };
   if (locked) return line.productName ? <p className="waybill-link"><b>{line.productName}</b></p> : null;
-  if (line.productId) return <div className="waybill-link"><b>{t('partners.linked')}</b><span>{line.productName}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
+  if (line.productId) return <div className="waybill-link"><span>{line.productName}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
   const options = matches.data?.lines.find(item => item.id === line.id)?.products ?? [];
   const list = hits.length ? hits : options;
-  return <div className="waybill-link"><input className="input" value={query} placeholder={t('partners.link')} onChange={event => setQuery(event.target.value)} />{list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void link(item.id)}>{item.name}{item.code ? ` · ${item.code}` : ''} · {fmt(item.stock)}</button>)}{!looking && !list.length && <small>{t('partners.noMatch')}</small>}</div>;
+  return <div className="waybill-link">{!open && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>{t('partners.link')}</button>}{open && <input className="input" value={query} placeholder={t('partners.link')} autoFocus onChange={event => setQuery(event.target.value)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} />}{open && list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onMouseDown={event => event.preventDefault()} onClick={() => void link(item.id)}>{item.name}</button>)}{open && !looking && query.trim().length >= 2 && !list.length && <small>{t('partners.noMatch')}</small>}</div>;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -267,6 +268,53 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
   </div></div>, document.body);
 }
 
+function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]) => Promise<boolean> }) {
+  const { t, fmt } = useI18n();
+  const [rows, setRows] = useState(() => line.colors.length ? line.colors.map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }]);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const edit = (index: number, field: 'name' | 'quantity', value: string) => {
+    setChecked(false);
+    setFailed(false);
+    setRows(list => list.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  };
+  const filled = rows
+    .map(row => ({ name: row.name.trim(), quantity: Math.max(0, Number(row.quantity.replace(',', '.')) || 0) }))
+    .filter(row => row.name && row.quantity > 0);
+  const sum = filled.reduce((total, row) => total + row.quantity, 0);
+  const boxes = line.boxes;
+  const diff = Math.abs(sum - boxes);
+  const ready = filled.length > 0 && sum === boxes;
+  const message = !filled.length
+    ? t('partners.colorUnder', { sum: fmt(0), boxes: fmt(boxes), diff: fmt(boxes) })
+    : sum > boxes
+      ? t('partners.colorOver', { sum: fmt(sum), boxes: fmt(boxes), diff: fmt(diff) })
+      : sum < boxes
+        ? t('partners.colorUnder', { sum: fmt(sum), boxes: fmt(boxes), diff: fmt(diff) })
+        : t('partners.colorMatch');
+  const save = async () => {
+    setChecked(true);
+    if (!ready) return;
+    setBusy(true);
+    setFailed(false);
+    const ok = await onSave(filled);
+    setBusy(false);
+    if (!ok) setFailed(true);
+  };
+  return <div className="color-edit" onMouseDown={event => event.stopPropagation()}>
+    {rows.map((row, index) => <div key={index} className="color-pair">
+      <input className="input" value={row.name} aria-label={t('zavod.colorName')} placeholder={t('zavod.colorName')} onChange={event => edit(index, 'name', event.target.value)}/>
+      <span>/</span>
+      <input className="input color-qty" inputMode="numeric" value={row.quantity} aria-label={t('zavod.boxes')} placeholder={t('zavod.boxes')} onChange={event => edit(index, 'quantity', event.target.value)}/>
+    </div>)}
+    <button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => { setChecked(false); setRows(list => [...list, { name: '', quantity: '' }]); }}><Plus size={14}/></button>
+    {checked && <p className={ready ? 'color-ok' : 'color-warn'}>{message}</p>}
+    {failed && <p className="color-warn">{t('partners.shipmentInvalid')}</p>}
+    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('partners.colorSave')}</button>
+  </div>;
+}
+
 function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const { t, fmt, money, date } = useI18n();
   const cache = useQueryClient();
@@ -282,8 +330,11 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [settings, setSettings] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [day, setDay] = useState(todayKey);
+  const [openShipment, setOpenShipment] = useState<string | null>(null);
+  const [colorFor, setColorFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Shipment | null>(null);
   const [removing, setRemoving] = useState<Shipment | null>(null);
+  const [lineEdit, setLineEdit] = useState<{ shipment: Shipment; line: Line } | null>(null);
   const [posting, setPosting] = useState<Shipment | null>(null);
   const [storeId, setStoreId] = useState('');
   const [postError, setPostError] = useState('');
@@ -393,6 +444,52 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     } finally { setBusy(false); }
   };
 
+  const lineBody = (line: Line, patch?: Partial<Line>) => {
+    const touchesIdentity = patch != null && (patch.productCode !== undefined || patch.size !== undefined);
+    return {
+      id: line.id,
+      sectionCode: line.sectionCode,
+      productCode: patch?.productCode ?? line.productCode,
+      model: line.model,
+      size: patch?.size ?? line.size,
+      pairs: patch?.pairs ?? line.pairs,
+      boxes: patch?.boxes ?? line.boxes,
+      quantity: line.quantity,
+      price: patch?.price ?? line.price,
+      colors: patch?.colors ?? line.colors,
+      productId: touchesIdentity ? null : line.productId,
+      productName: touchesIdentity ? null : line.productName,
+    };
+  };
+
+  const saveLine = async (shipment: Shipment, line: Line, patch: Partial<Line>) => {
+    const response = await fetch(`/api/partner-factories/shipments/${shipment.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date: shipment.date,
+        note: shipment.note,
+        lines: shipment.lines.map(item => item.id === line.id ? lineBody(line, patch) : lineBody(item)),
+      }),
+    });
+    if (!response.ok) return false;
+    await refreshShipments();
+    return true;
+  };
+
+  const removeLine = async (shipment: Shipment, line: Line) => {
+    const rest = shipment.lines.filter(item => item.id !== line.id);
+    const response = rest.length
+      ? await fetch(`/api/partner-factories/shipments/${shipment.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: shipment.date, note: shipment.note, lines: rest.map(item => lineBody(item)) }),
+      })
+      : await fetch(`/api/partner-factories/shipments/${shipment.id}`, { method: 'DELETE' });
+    if (!response.ok) return;
+    await refreshShipments();
+  };
+
   const setStatus = async (id: string, status: 'accepted' | 'declined') => {
     await fetch(`/api/partner-factories/shipments/${id}/${status === 'accepted' ? 'accept' : 'decline'}`, { method: 'POST' });
     await refreshShipments();
@@ -450,31 +547,58 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <div><span className="kpi-icon"><Banknote size={18}/></span><div><span>{t('zavod.sum')}</span><b>{money(amount)}</b></div></div>
     </div>
     <section className="card factory-sheet">
-      <div className="card-head"><h2>{t('partners.incoming')}</h2><div className="waybill-head-tools"><label className="waybill-filter"><span>{t('common.date')}</span><input className="input" type="date" value={day} onChange={e => setDay(e.target.value)} data-testid="input-shipment-date"/></label>{visible.length > 0 && <WaybillExport shipments={visible} filename={`${row.account?.code || row.name}-${day || 'all'}`} title={t('partners.incoming')} factory={row.name} code={row.account?.code || ''}/>}<span className="card-meta">{t('partners.shipments', { count: fmt(visible.length) })}</span></div></div>
-      {visible.length ? <div className="shipment-list">{visible.map(shipment => <article key={shipment.id} className="waybill" data-testid={`shipment-${shipment.id}`}>
-        <header>
-          <span className="waybill-mark"><Truck size={16}/></span>
-          <div><b>{shipment.number}</b><small>{date(shipment.date)} · {t('docs.items', { count: fmt(shipment.lines.length) })}</small></div>
-          <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
-          <strong className="waybill-sum">{money(shipment.amount)}</strong>
-        </header>
-        <div className="waybill-lines">{shipment.lines.map(line => { const units = line.pairs > 0 ? line.pairs : line.quantity; const colors = line.colors.filter(color => color.name && color.quantity > 0); return <article key={line.id} className="waybill-row"><div className="waybill-main"><b>{line.productCode || '—'}</b>{line.productName && <small>{line.productName}</small>}{line.size && <span>{line.size}</span>}</div><dl className="waybill-facts"><div><dt>{t('zavod.pairs')}</dt><dd>{fmt(line.pairs)}</dd></div><div><dt>{t('zavod.boxes')}</dt><dd>{fmt(line.boxes)}</dd></div><div><dt>{t('zavod.price')}</dt><dd>{line.price ? money(line.price) : '—'}</dd></div><div><dt>{t('zavod.sum')}</dt><dd>{money(units * line.price)}</dd></div></dl>{colors.length > 0 && <div className="color-pills">{colors.map(color => <i key={`${color.name}-${color.quantity}`}><b>{color.name}</b><span>{fmt(color.quantity)}</span></i>)}</div>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></article>; })}</div>
-        {shipment.note && <p className="waybill-note">{shipment.note}</p>}
-        {shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
-        {!shipment.moyskladId && shipment.lines.some(line => lineUnits(line) > 0 && !line.productId) && <p className="waybill-note">{t('partners.supplyNeed')}</p>}
-        <div className="waybill-actions">
-          <div className="waybill-tools">
-            <WaybillExport shipments={[shipment]} filename={`${row.account?.code || row.name}-${shipment.number}`} title={`${t('zavod.title')} ${shipment.number}`} factory={row.name} code={row.account?.code || ''}/>
-            {!shipment.moyskladId && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(shipment)}><Pencil size={14}/>{t('partners.edit')}</button>}
-            {!shipment.moyskladId && <button type="button" className="btn btn-ghost btn-sm factory-delete" onClick={() => setRemoving(shipment)}><Trash2 size={14}/>{t('partners.delete')}</button>}
-          </div>
-          <div className="waybill-decide">
-            {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
-            {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
-            {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" disabled={shipment.lines.some(line => lineUnits(line) > 0 && !line.productId)} onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
-          </div>
-        </div>
-      </article>)}</div> : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
+      <div className="card-head"><h2>{t('partners.incoming')}</h2><div className="waybill-head-tools"><label className="waybill-filter"><span>{t('common.date')}</span><input className="input" type="date" value={day} onChange={e => setDay(e.target.value)} data-testid="input-shipment-date"/></label>{visible.length > 0 && <WaybillExport shipments={visible} filename={`${row.account?.code || row.name}-${day || 'all'}`} title={t('partners.incoming')} factory={row.name} code={row.account?.code || ''}/>}</div></div>
+      {visible.length ? (
+        <div className="shipment-list">{visible.map(shipment => (
+          <article key={shipment.id} className="waybill" data-testid={`shipment-${shipment.id}`}>
+            <header>
+              <button type="button" className="waybill-open" onClick={() => setOpenShipment(openShipment === shipment.id ? null : shipment.id)}>
+                <span className="waybill-mark"><Truck size={16}/></span>
+                <div><b>{shipment.number}</b><small>{date(shipment.date)} · {t('docs.items', { count: fmt(shipment.lines.length) })}</small></div>
+                <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
+                <strong className="waybill-sum">{money(shipment.amount)}</strong>
+              </button>
+            </header>
+            {openShipment === shipment.id && (
+              <table className="waybill-table">
+                <thead><tr><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
+                <tbody>{shipment.lines.map(line => {
+                  const units = line.pairs > 0 ? line.pairs : line.quantity;
+                  const colors = line.colors.filter(color => color.name && color.quantity > 0);
+                  return <Fragment key={line.id}>
+                    <tr>
+                      <td><b>{line.productCode || '—'}</b>{colors.length > 0 && <small>{colors.map(color => `${color.name}/${fmt(color.quantity)}`).join(' · ')}</small>}</td>
+                      <td>{line.size || '—'}</td>
+                      <td className="num">{fmt(line.pairs)}</td>
+                      <td className="num">{fmt(line.boxes)}</td>
+                      <td className="num">{line.price ? money(line.price) : '—'}</td>
+                      <td className="num">{money(units * line.price)}</td>
+                      <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></td>
+                    </tr>
+                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={7}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
+                  </Fragment>;
+                })}</tbody>
+              </table>
+            )}
+            {openShipment === shipment.id && shipment.note && <p className="waybill-note">{shipment.note}</p>}
+            {openShipment === shipment.id && shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
+            {openShipment === shipment.id && (
+              <div className="waybill-actions">
+                <div className="waybill-tools">
+                  <WaybillExport shipments={[shipment]} filename={`${row.account?.code || row.name}-${shipment.number}`} title={`${t('zavod.title')} ${shipment.number}`} factory={row.name} code={row.account?.code || ''}/>
+                  {!shipment.moyskladId && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(shipment)}><Pencil size={14}/>{t('partners.edit')}</button>}
+                  {!shipment.moyskladId && <button type="button" className="btn btn-ghost btn-sm factory-delete" onClick={() => setRemoving(shipment)}><Trash2 size={14}/>{t('partners.delete')}</button>}
+                </div>
+                <div className="waybill-decide">
+                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
+                  {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
+                  {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" disabled={shipment.lines.some(line => lineUnits(line) > 0 && !line.productId)} onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
+                </div>
+              </div>
+            )}
+          </article>
+        ))}</div>
+      ) : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
     </section>
     {!!products.data?.items.length && <section className="card">
       <div className="card-head"><h2>{t('partners.catalog')}</h2><span className="card-meta">{fmt(products.data.total)}</span></div>
@@ -501,6 +625,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</button><button type="button" className="btn btn-danger" disabled={busy} onClick={() => void removeFactory()} data-testid="button-confirm-delete-partner"><Trash2 size={15}/>{busy ? t('common.saving') : t('partners.delete')}</button></div>
     </div></div>, document.body)}
     {editing && <WaybillEditor shipment={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await refreshShipments(); }}/>}
+    {lineEdit && <LineEditor shipment={lineEdit.shipment} line={lineEdit.line} onClose={() => setLineEdit(null)} onSave={async patch => { const ok = await saveLine(lineEdit.shipment, lineEdit.line, patch); if (ok) setLineEdit(null); return ok; }}/>}
     {removing && createPortal(<div className="backdrop" onClick={() => setRemoving(null)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="shipment-delete-title">
       <div className="modal-top"><div><p className="eyebrow">{removing.number}</p><h2 id="shipment-delete-title">{t('partners.deleteShipment')}</h2></div><button type="button" className="icon-btn" onClick={() => setRemoving(null)} aria-label={t('common.close')}><X size={18}/></button></div>
       <p>{t('partners.deleteShipmentBody', { number: removing.number })}</p>
@@ -508,6 +633,36 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={() => setRemoving(null)}>{t('common.cancel')}</button><button type="button" className="btn btn-danger" disabled={busy} onClick={() => void removeShipment()} data-testid="button-confirm-delete-shipment"><Trash2 size={15}/>{busy ? t('common.saving') : t('partners.delete')}</button></div>
     </div></div>, document.body)}
   </div>;
+}
+
+function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
+  const { t } = useI18n();
+  const [productCode, setProductCode] = useState(line.productCode);
+  const [size, setSize] = useState(line.size);
+  const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
+  const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
+  const [price, setPrice] = useState(line.price ? String(line.price) : '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!productCode.trim()) { setError(t('zavod.needProduct')); return; }
+    setBusy(true);
+    const ok = await onSave({ productCode: productCode.trim(), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
+    setBusy(false);
+    if (!ok) setError(t('partners.shipmentInvalid'));
+  };
+  return createPortal(<div className="backdrop" onClick={onClose}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="line-edit-title">
+    <div className="modal-top"><div><p className="eyebrow">{line.productCode}</p><h2 id="line-edit-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
+    <div className="form-grid">
+      <label className="field"><span>{t('zavod.product')}</span><input className="input" value={productCode} onChange={event => setProductCode(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.size')}</span><input className="input" value={size} onChange={event => setSize(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)}/></label>
+    </div>
+    {error && <p className="error-text">{error}</p>}
+    <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('partners.edit')}</button></div>
+  </div></div>, document.body);
 }
 
 function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onClose: () => void; onSaved: () => Promise<void> }) {

@@ -1,19 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LayoutDashboard, LogOut, Menu, Plus, Send, Trash2, UserRound, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
 type Line = { id: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
 type Shipment = { id: string; number: string; date: string; status: string; note?: string; pairs: number; boxes: number; amount: number; lines: Line[] };
-type DraftColor = { name: string; quantity: string };
-type Draft = { key: string; productId: string; productName: string; productCode: string; barcode: string; size: string; pairs: string; boxes: string; price: string; colors: DraftColor[] };
+type Draft = { key: string; productId: string; productName: string; productCode: string; barcode: string; size: string; pairs: string; boxes: string; price: string };
 type CatalogHit = { id: string; name: string; code: string | null; article: string | null; barcode: string | null };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
+const SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
 
 function blank(): Draft {
-  return { key: Math.random().toString(36).slice(2), productId: '', productName: '', productCode: '', barcode: '', size: '', pairs: '', boxes: '', price: '', colors: [{ name: '', quantity: '' }] };
+  return { key: Math.random().toString(36).slice(2), productId: '', productName: '', productCode: '', barcode: '', size: '', pairs: '', boxes: '', price: '' };
+}
+
+function started(line: Draft) {
+  return Boolean(line.productCode.trim() || line.size.trim() || line.pairs || line.boxes || line.price);
+}
+
+function withBlank(rows: Draft[]) {
+  const last = rows[rows.length - 1];
+  const sum = last ? unitsOf(last) * num(last.price) : 0;
+  if (!last || sum > 0) return [...rows, blank()];
+  return rows;
 }
 
 function sizeOf(name: string) {
@@ -24,6 +35,10 @@ function sizeOf(name: string) {
 function num(value: string) {
   const parsed = Number(String(value).replace(/\s/g, '').replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function digits(value: string) {
+  return value.replace(/\D/g, '');
 }
 
 function unitsOf(line: Draft) {
@@ -114,7 +129,9 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const [error, setError] = useState('');
   const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
-  const [section, setSection] = useState<'home' | 'waybill' | 'history' | 'profile'>('home');
+  const [section, setSection] = useState<'waybill' | 'history' | 'profile'>('waybill');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingStatus, setEditingStatus] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-factory-nav') === 'icons');
   useEffect(() => { localStorage.setItem('smart-ombor-factory-nav', rail ? 'icons' : 'full'); }, [rail]);
@@ -129,15 +146,44 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     return sum;
   }, { pairs: 0, boxes: 0, amount: 0 }), [lines]);
 
-  const patch = (key: string, next: Partial<Draft>) => setLines(rows => rows.map(row => row.key === key ? { ...row, ...next } : row));
+  const patch = (key: string, next: Partial<Draft>) => setLines(rows => withBlank(rows.map(row => row.key === key ? { ...row, ...next } : row)));
+
+  const resetForm = () => {
+    setEditingId(null);
+    setEditingStatus(null);
+    setDate(new Date().toISOString().slice(0, 10));
+    setNote('');
+    setLines([blank()]);
+  };
+
+  const beginRevise = (item: Shipment) => {
+    setEditingId(item.id);
+    setEditingStatus(item.status);
+    setDate(item.date.slice(0, 10));
+    setNote(item.note || '');
+    setLines(withBlank(item.lines.map(line => ({
+      key: line.id,
+      productId: line.productCode ? '' : '',
+      productName: line.productName || '',
+      productCode: line.productCode,
+      barcode: '',
+      size: line.size,
+      pairs: line.pairs ? String(line.pairs) : '',
+      boxes: line.boxes ? String(line.boxes) : '',
+      price: line.price ? String(line.price) : '',
+    }))));
+    setError('');
+    setSection('waybill');
+    setNavOpen(false);
+  };
 
   const submit = async () => {
-    const filled = lines.filter(line => line.productCode || line.size || line.pairs || line.boxes || line.price || line.colors.some(color => color.name || color.quantity));
+    const filled = lines.filter(started);
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
     if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needProduct')); return; }
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
-    if (filled.some(line => { const colors = line.colors.reduce((sum, color) => sum + (color.name.trim() ? num(color.quantity) : 0), 0); return colors > 0 && num(line.boxes) > 0 && colors !== num(line.boxes); })) { setError(t('zavod.colorMismatch')); return; }
     const payload = filled.map(line => ({
+      id: editingId ? line.key : undefined,
       factoryCode: account.code,
       sectionCode: '',
       productId: line.productId || null,
@@ -146,26 +192,25 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       model: '',
       size: line.size.trim(),
       pairs: num(line.pairs),
-      boxes: num(line.boxes) || line.colors.reduce((sum, color) => sum + (color.name.trim() ? num(color.quantity) : 0), 0),
+      boxes: num(line.boxes),
       quantity: 0,
       price: num(line.price),
-      colors: line.colors.filter(color => color.name.trim() && num(color.quantity) > 0).map(color => ({ name: color.name.trim(), quantity: num(color.quantity) })),
+      colors: [],
     }));
     setBusy(true); setError(''); setFlash('');
     try {
-      const response = await fetch('/api/factory/shipments', {
-        method: 'POST',
+      const response = await fetch(editingId ? `/api/factory/shipments/${editingId}` : '/api/factory/shipments', {
+        method: editingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ date, note, lines: payload }),
       });
       if (!response.ok) { setError(t('zavod.needQty')); return; }
       const body = await response.json();
-      setFlash(`${t('zavod.sent')} · ${body.number}`);
-      setLines([blank()]);
-      setNote('');
+      setFlash(`${editingStatus === 'declined' ? t('zavod.resend') : t('zavod.sent')} · ${body.number}`);
+      resetForm();
       setHistoryStatus('all');
       setQuery('');
-      setOpenId(body.id ?? null);
+      setOpenId(null);
       setSection('history');
       onSent();
     } finally {
@@ -173,17 +218,9 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     }
   };
 
-  const openHistory = (status: 'all' | 'sent' | 'accepted' | 'declined') => {
-    setHistoryStatus(status);
-    setSection('history');
-  };
   const statusLabel = (status: string) => status === 'accepted' ? t('zavod.accepted') : status === 'declined' ? t('zavod.declined') : t('zavod.waiting');
   const statusClass = (status: string) => status === 'accepted' ? 'badge-healthy' : status === 'declined' ? 'badge-rejected' : 'badge-in-transit';
   const waiting = shipments.filter(item => item.status === 'sent').length;
-  const accepted = shipments.filter(item => item.status === 'accepted').length;
-  const declined = shipments.filter(item => item.status === 'declined').length;
-  const sentAmount = shipments.reduce((sum, item) => sum + item.amount, 0);
-  const sentPairs = shipments.reduce((sum, item) => sum + item.pairs, 0);
   const needle = query.trim().toLowerCase();
   const shown = shipments.filter(item => {
     if (historyStatus !== 'all' && item.status !== historyStatus) return false;
@@ -191,8 +228,8 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     return item.number.toLowerCase().includes(needle) || item.lines.some(line => `${line.productCode} ${line.model} ${line.size}`.toLowerCase().includes(needle));
   });
 
-  const choose = (next: 'home' | 'waybill' | 'history' | 'profile') => { setSection(next); setNavOpen(false); };
-  const sectionTitle = section === 'waybill' ? t('zavod.nav.waybill') : section === 'history' ? t('zavod.nav.history') : section === 'profile' ? t('zavod.nav.profile') : t('zavod.nav.home');
+  const choose = (next: 'waybill' | 'history' | 'profile') => { setSection(next); setNavOpen(false); };
+  const sectionTitle = section === 'history' ? t('zavod.nav.history') : section === 'profile' ? t('zavod.nav.profile') : t('zavod.nav.waybill');
   return <div className={`app factory-shell ${navOpen ? 'nav-open' : ''} ${rail ? 'is-rail' : ''}`}>
     {navOpen && <button type="button" className="factory-scrim" aria-label={t('common.close')} onClick={() => setNavOpen(false)}/>}
     <aside className={`sidebar ${navOpen ? 'is-open' : ''}`}>
@@ -206,7 +243,6 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       </div>
       <nav className="nav" aria-label={t('zavod.kicker')}>
         <div className="nav-group"><p>{t('zavod.kicker')}</p></div>
-        <button type="button" className={`nav-item ${section === 'home' ? 'is-active' : ''}`} title={t('zavod.nav.home')} onClick={() => choose('home')}><LayoutDashboard size={17}/><span>{t('zavod.nav.home')}</span></button>
         <button type="button" className={`nav-item ${section === 'waybill' ? 'is-active' : ''}`} title={t('zavod.nav.waybill')} onClick={() => choose('waybill')}><FilePlus2 size={17}/><span>{t('zavod.nav.waybill')}</span></button>
         <button type="button" className={`nav-item ${section === 'history' ? 'is-active' : ''}`} title={t('zavod.nav.history')} onClick={() => choose('history')}><History size={17}/><span>{t('zavod.nav.history')}</span>{waiting > 0 && <i className="nav-badge">{fmt(waiting)}</i>}</button>
         <button type="button" className={`nav-item ${section === 'profile' ? 'is-active' : ''}`} title={t('zavod.nav.profile')} onClick={() => choose('profile')}><UserRound size={17}/><span>{t('zavod.nav.profile')}</span></button>
@@ -226,58 +262,31 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <div className="topbar-right"><LangMini lang={lang} setLang={setLang}/></div>
     </header>
     <div className="content cabinet">
-    {section === 'home' && <section className="cabinet-hero">
-      <div className="cabinet-identity">
-        <span className="cabinet-mark" aria-hidden="true">{account.name.trim().slice(0, 1).toUpperCase() || account.code.slice(0, 1)}</span>
-        <div>
-          <p className="eyebrow">{t('zavod.kicker')}</p>
-          <h1>{account.name}</h1>
-          <p className="cabinet-id"><span className="yx-code">{account.code}</span><span>{account.login}</span></p>
-        </div>
-      </div>
-      <div className="cabinet-kpis">
-        <button type="button" onClick={() => openHistory('all')}><span>{t('zavod.docs')}</span><b>{fmt(shipments.length)}</b></button>
-        <button type="button" onClick={() => openHistory('sent')}><span>{t('zavod.waiting')}</span><b>{fmt(waiting)}</b></button>
-        <button type="button" onClick={() => openHistory('accepted')}><span>{t('zavod.accepted')}</span><b>{fmt(accepted)}</b></button>
-        <button type="button" onClick={() => openHistory('declined')}><span>{t('zavod.declined')}</span><b>{fmt(declined)}</b></button>
-      </div>
-    </section>}
-    {section === 'home' && <section className="card factory-history">
-      <div className="card-head"><h2>{t('zavod.recent')}</h2><button type="button" className="btn btn-secondary btn-sm" onClick={() => openHistory('all')}>{t('zavod.nav.history')}</button></div>
-      {shipments.length ? <div className="shipment-list">{shipments.slice(0, 5).map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.lines.length)} {t('zavod.lines').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></header></article>)}</div> : <p className="muted">{t('zavod.emptyHistory')}</p>}
-      <p className="muted">{money(sentAmount)} · {fmt(sentPairs)} {t('zavod.pairs').toLowerCase()}</p>
-    </section>}
     <section className="yx" hidden={section !== 'waybill'}>
     <div className="yx-head">
       <div><p className="eyebrow">{t('zavod.newDoc')}</p><h2>{t('zavod.title')}</h2></div>
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
-    <div className="yx-lines">
+    <div className="yx-sheet">
+      <div className="yx-sheet-head"><span/><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
-        return <article className="yx-line" key={line.key}>
-          <header><b>{String(index + 1).padStart(2, '0')}</b><span className="yx-code">{account.code}</span>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
-          <div className="yx-grid">
-            <Field label={t('zavod.product')} className="span-12"><ProductPick token={token} line={line} onChange={next => patch(line.key, next)}/></Field>
-            <Field label={t('zavod.size')} className="span-3"><input className="input" value={line.size} onChange={e => patch(line.key, { size: e.target.value })}/></Field>
-            <Field label={t('zavod.pairs')} className="span-2"><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })}/></Field>
-            <Field label={t('zavod.boxes')} className="span-2"><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></Field>
-            <Field label={t('zavod.price')} className="span-2"><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })}/></Field>
-            <Field label={t('zavod.sum')} className="span-3"><input className="input yx-sum" value={sum ? money(sum) : '—'} readOnly/></Field>
-          </div>
-          <div className="yx-colors">
-            <span>{t('zavod.colors')}</span>
-            {line.colors.map((color, colorIndex) => <div className="yx-color" key={colorIndex}>
-              <input className="input" value={color.name} placeholder={`${t('zavod.colorName')} ${colorIndex + 1}`} onChange={e => patch(line.key, { colors: line.colors.map((item, i) => i === colorIndex ? { ...item, name: e.target.value } : item) })}/>
-              <input className="input" inputMode="decimal" value={color.quantity} placeholder={t('zavod.colorQty')} onChange={e => patch(line.key, { colors: line.colors.map((item, i) => i === colorIndex ? { ...item, quantity: e.target.value } : item) })}/>
-              {line.colors.length > 1 && <button type="button" className="icon-btn" aria-label={t('zavod.remove')} onClick={() => patch(line.key, { colors: line.colors.filter((_, i) => i !== colorIndex) })}><X size={14}/></button>}
-            </div>)}
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => patch(line.key, { colors: [...line.colors, { name: '', quantity: '' }] })}><Plus size={14}/>{t('zavod.addColor')}</button>
-          </div>
-        </article>;
+        return <div className="yx-sheet-row" key={line.key}>
+          <b>{String(index + 1).padStart(2, '0')}</b>
+          <ProductPick token={token} line={line} onChange={next => patch(line.key, next)}/>
+          <select className="input" aria-label={t('zavod.size')} value={SIZES.includes(line.size) ? line.size : line.size || ''} onChange={e => patch(line.key, { size: e.target.value })}>
+            <option value=""/>
+            {!SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}
+            {SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+          </select>
+          <input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })}/>
+          <input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/>
+          <input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })}/>
+          <input className="input yx-sum" aria-label={t('zavod.sum')} value={sum ? money(sum) : ''} readOnly/>
+          <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank()]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
+        </div>;
       })}
     </div>
-    <div className="yx-actions"><button type="button" className="btn btn-secondary" onClick={() => setLines(rows => [...rows, blank()])}><Plus size={15}/>{t('zavod.addRow')}</button></div>
     <label className="field"><span>{t('zavod.note')}</span><input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder={t('zavod.notePlaceholder')}/></label>
     <div className="yx-foot">
       <div className="yx-totals">
@@ -287,7 +296,8 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       </div>
       <div className="yx-send">
         {error && <p className="error-text">{error}</p>}
-        <button type="button" className="btn btn-primary btn-lg yx-submit" disabled={busy} onClick={() => void submit()} data-testid="button-factory-submit"><Send size={16}/>{busy ? t('zavod.sending') : t('zavod.submit')}</button>
+        {editingId && <button type="button" className="btn btn-ghost" onClick={resetForm}>{t('common.cancel')}</button>}
+        <button type="button" className="btn btn-primary btn-lg yx-submit" disabled={busy} onClick={() => void submit()} data-testid="button-factory-submit"><Send size={16}/>{busy ? t('zavod.sending') : editingStatus === 'declined' ? t('zavod.resend') : editingId ? t('partners.edit') : t('zavod.submit')}</button>
       </div>
     </div>
     </section>
@@ -300,7 +310,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpenId(openId === item.id ? null : item.id)}>{t('zavod.lines')}</button></header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.productName || line.model || '—'}</span><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.colors.filter(color => color.quantity > 0).map(color => `${color.name} ${fmt(color.quantity)}`).join(', ') || '—'}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.pairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(line.pairs * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
@@ -353,7 +363,7 @@ function ProductPick({ token, line, onChange }: { token: string; line: Draft; on
 
   return <div className="yx-pick" ref={box}>
     <div className="yx-pick-row">
-      <input className="input" value={line.productCode} onChange={event => onChange({ productCode: event.target.value, productId: '', productName: '', barcode: '' })}/>
+      <input className="input" inputMode="numeric" value={line.productCode} onChange={event => onChange({ productCode: digits(event.target.value), productId: '', productName: '', barcode: '' })}/>
       <button type="button" className="icon-btn yx-pick-btn" aria-label={t('zavod.pick')} aria-expanded={open} onClick={() => setOpen(value => !value)}><ChevronDown size={16}/></button>
     </div>
     {line.productName && <p className="yx-picked">{line.productName}{line.barcode ? ` · ${line.barcode}` : ''}</p>}

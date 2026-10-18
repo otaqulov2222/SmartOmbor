@@ -306,6 +306,16 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   return shipmentView(shipment);
 }
 
+export function reviseShipment(factoryId: string, id: string, input: { date?: string; note?: string; lines: Partial<ShipmentLine>[] }) {
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === id && item.factoryId === factoryId);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (shipment.moyskladId || shipment.status === "accepted") throw Object.assign(new Error("posted"), { status: 409 });
+  const updated = updateShipment(id, input);
+  if (shipment.status === "declined") return setShipmentStatus(id, "sent");
+  return updated;
+}
+
 export function updateShipment(id: string, input: { date?: string; note?: string; lines: Partial<ShipmentLine>[] }) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);

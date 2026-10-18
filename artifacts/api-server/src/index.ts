@@ -1,6 +1,7 @@
 import app from "./app";
+import { loadCatalog } from "./lib/catalog";
 import { logger } from "./lib/logger";
-import { sendPreview, startTelegramDigest } from "./lib/telegram";
+import { sendIdlePreview, sendPreview, startTelegramDigest } from "./lib/telegram";
 
 const rawPort = process.env["PORT"];
 
@@ -12,6 +13,10 @@ if (!rawPort) {
 
 if (process.argv.includes("--telegram-preview")) {
   sendPreview()
+    .then((ok) => process.exit(ok ? 0 : 1))
+    .catch(() => process.exit(1));
+} else if (process.argv.includes("--telegram-idle")) {
+  sendIdlePreview()
     .then((ok) => process.exit(ok ? 0 : 1))
     .catch(() => process.exit(1));
 } else {
@@ -28,6 +33,9 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  void loadCatalog().catch((error: unknown) => {
+    logger.warn({ err: error }, "Catalog cache was not warmed");
+  });
   startTelegramDigest();
 });
 }

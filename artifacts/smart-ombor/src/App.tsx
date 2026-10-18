@@ -5,9 +5,9 @@ import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, Boxes, ChartColumn,
+  Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, KeyRound, Languages, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -165,6 +165,7 @@ function LocalSignInNotice() {
 
 /* ---------- entry ---------- */
 const LOCAL_SESSION = 'smart-ombor-session';
+const RETURN_PATH = 'smart-ombor-return';
 const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst', 'accountant', 'worker'] as const;
 type LocalSession = { token: string; name: string; login: string; role: string };
 
@@ -212,7 +213,9 @@ function LocalLoginForm() {
       if (!response.ok) { setError(true); return; }
       const body = await response.json() as LocalSession;
       sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({ token: body.token, name: body.name, login: body.login, role: body.role }));
-      setLocation('/dashboard');
+      const back = sessionStorage.getItem(RETURN_PATH) || '';
+      sessionStorage.removeItem(RETURN_PATH);
+      setLocation(back.startsWith('/') && !back.startsWith('//') ? back : '/dashboard');
     } catch {
       setError(true);
     } finally {
@@ -382,7 +385,7 @@ function DashboardPage() {
   const [day, setDay] = useState(today);
   const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: AUTO_REFRESH_MS });
-  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1 });
+  const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1, refetchInterval: AUTO_REFRESH_MS });
   const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today } });
   const connected = !!status.data?.configured && !!status.data?.connected;
   const d = q.data;
@@ -439,12 +442,24 @@ function DashboardPage() {
 function ProductsPage() {
   const { t, fmt, money } = useI18n(); const unit = useUnit();
   const urlSearch = new URLSearchParams(useSearch()).get('search') || '';
+  const productId = new URLSearchParams(useSearch()).get('product') || '';
   const [search, setSearch] = useState(urlSearch); const [stockStatus, setStatus] = useState('all'); const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Product | null>(null);
   useEffect(() => { setSearch(urlSearch); setPage(1); }, [urlSearch]);
+  useEffect(() => {
+    if (!productId) return;
+    let stop = false;
+    void fetch(`/api/products/${encodeURIComponent(productId)}`).then(response => response.ok ? response.json() : null).then((data: Product | null) => {
+      if (stop || !data?.id) return;
+      setSelected(data);
+      setSearch(data.code || data.name);
+      setPage(1);
+    }).catch(() => undefined);
+    return () => { stop = true; };
+  }, [productId]);
   const params = useMemo(() => ({ search: search || undefined, stockStatus: stockStatus as 'all'|'low'|'available'|'out', page, pageSize: 25 }), [search, stockStatus, page]);
   const q = useListProducts(params); const cache = useQueryClient();
   const dash = useGetDashboard(); const sync = useSyncMoysklad();
-  const [selected, setSelected] = useState<Product | null>(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
   const [saving, setSaving] = useState(false);
@@ -1017,9 +1032,11 @@ function AccessPanel() {
   useEffect(() => { void load(); }, []);
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!login.trim() || password.length < 4) { setNote(t('auth.accessShort')); return; }
     setBusy(true); setNote('');
     const response = await fetch('/api/local-accounts', { method: 'POST', headers, body: JSON.stringify({ name, login, password, role }) });
     setBusy(false);
+    if (response.status === 401 || response.status === 403) { setNote(t('auth.invalid')); return; }
     if (response.status === 409) { setNote(t('auth.accessExists')); return; }
     if (!response.ok) { setNote(t('auth.accessShort')); return; }
     setRows(await response.json());
@@ -1037,72 +1054,19 @@ function AccessPanel() {
         <Field label={t('auth.password')} testId="field-access-password"><PasswordField value={password} onChange={setPassword} testId="input-access-password" autoComplete="new-password"/></Field>
         <Field label={t('auth.accessRole')} testId="field-access-role"><SelectInput value={role} onChange={setRole} testId="select-access-role">{accessRoles.map(item => <option key={item} value={item}>{roleLabel(item)}</option>)}</SelectInput></Field>
       </div>
-      <div className="form-actions"><Button testId="button-access-create" type="submit" disabled={busy || !login.trim() || password.length < 4}>{t('auth.accessCreate')}</Button></div>
+      <div className="form-actions"><Button testId="button-access-create" type="submit" disabled={busy}>{busy ? t('common.saving') : t('auth.accessCreate')}</Button></div>
     </form>
     {note && <Notice kind="error" title={note} testId="status-access-error"/>}
     <ul className="user-list">{rows.map(account => <li className="user-row" key={account.id} data-testid={`row-access-${account.id}`}><span className="avatar">{account.name.slice(0, 2).toUpperCase()}</span><span className="user-copy"><b>{account.name}</b><small>{account.login} · <span className="access-pass">{account.password}</span></small></span><span className="chip">{roleLabel(account.role)}</span>{account.login !== 'bordouzadmin' && account.login !== session?.login && <Button variant="danger" size="sm" testId={`button-access-delete-${account.id}`} onClick={() => { void remove(account.id); }}>{t('auth.accessDelete')}</Button>}</li>)}</ul>
   </Card>;
 }
 function SettingsPage() {
-  const { t, fmt, dateTime, lang, setLang } = useI18n(); const roleLabel = useRole(); const statusLabel = useStatusLabel();
-  const status = useGetMoyskladStatus(); const users = useListUsers(); const me = useGetCurrentUser(); const sync = useSyncMoysklad(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
-  const [token, setToken] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState('');
-  const connection = useQuery<{ source: 'saved' | 'environment' | 'none'; companyName: string | null; masked: string | null }>({ queryKey: ['moysklad-connection'], queryFn: async () => { const response = await fetch('/api/settings/connection'); if (!response.ok) throw new Error(t('common.loadFailedHint')); return response.json(); } });
+  const { t, fmt } = useI18n(); const roleLabel = useRole();
+  const users = useListUsers(); const me = useGetCurrentUser(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
   const admin = me.data?.role === 'super_admin' || me.data?.role === 'manager';
-  const connected = !!status.data?.configured && !!status.data?.connected;
-  const company = connection.data?.companyName || status.data?.companyName || '';
-  const refreshAll = () => { void cache.invalidateQueries(); };
-  const connect = async () => {
-    setBusy(true); setNote('');
-    try {
-      const response = await fetch('/api/settings/connection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: token.trim() }) });
-      if (!response.ok) throw new Error(t('settings.connectFailed'));
-      setToken('');
-      setNote(t('settings.accountReady'));
-      refreshAll();
-    } catch (error) {
-      setNote(error instanceof Error ? error.message : t('settings.connectFailed'));
-    } finally { setBusy(false); }
-  };
-  const disconnect = async () => {
-    setBusy(true); setNote('');
-    try {
-      const response = await fetch('/api/settings/connection', { method: 'DELETE' });
-      if (!response.ok) throw new Error(t('settings.connectFailed'));
-      refreshAll();
-    } catch (error) {
-      setNote(error instanceof Error ? error.message : t('settings.connectFailed'));
-    } finally { setBusy(false); }
-  };
   return <>
     <PageHead title={t('settings.title')}/>
-    <QueryError q={status} id="integration-settings"/>
-    <section className="card settings-account">
-      <div className="report-side-head"><span className="option-icon"><Boxes size={20}/></span><div><p className="eyebrow">{t('settings.integration')}</p><h2>{status.isLoading ? t('settings.integration.checking') : company || t('settings.integration.unconfigured')}</h2></div><Badge value={status.isLoading ? 'loading' : connected ? 'healthy' : 'out'}/></div>
-      <div className="settings-connect">
-        <label className="search settings-token"><KeyRound size={16}/><TextInput testId="input-moysklad-token" type="password" autoComplete="off" placeholder={t('settings.tokenPlaceholder')} value={token} onChange={event => setToken(event.target.value)} disabled={!admin || busy}/></label>
-        <Button testId="button-connect-moysklad" disabled={!admin || busy || token.trim().length < 20} onClick={() => { void connect(); }}>{busy ? t('settings.connecting') : t('settings.connect')}</Button>
-      </div>
-      <div className="facts">
-        <div><span>{t('settings.state')}</span><b>{connected ? t('settings.state.connected') : t('settings.state.unconfigured')}</b></div>
-        <div><span>{t('settings.masked')}</span><b>{connection.data?.masked || '—'}</b></div>
-        <div><span>{t('settings.lastSync')}</span><b>{dateTime(status.data?.lastSync)}</b></div>
-        <div><span>{t('settings.autoRefresh')}</span><b>{t('settings.autoRefresh.value')}</b></div>
-      </div>
-      <div className="form-actions">
-        <Button testId="button-sync-settings" disabled={!connected || sync.isPending || !admin} onClick={() => sync.mutate(undefined, { onSuccess: refreshAll })}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('settings.syncing') : t('settings.sync')}</Button>
-        {connection.data?.source === 'saved' && <Button variant="secondary" testId="button-disconnect-moysklad" disabled={!admin || busy} onClick={() => { void disconnect(); }}>{t('settings.disconnect')}</Button>}
-      </div>
-      {note && <Notice kind={note === t('settings.accountReady') ? 'success' : 'error'} title={note} testId="status-settings-connection"/>}
-      {sync.error && <Notice kind="error" title={t('settings.sync.failed')} testId="status-settings-sync-error">{sync.error instanceof Error ? sync.error.message : t('common.tryAgain')}</Notice>}
-      {sync.data && <Notice kind={sync.data.status === 'failed' ? 'error' : 'success'} title={statusLabel(sync.data.status)} testId="status-settings-sync-result">{sync.data.error || t('settings.sync.result', { products: fmt(sync.data.productCount), warehouses: fmt(sync.data.warehouseCount) })}</Notice>}
-    </section>
-    <div className="two-col settings-grid">
-      <Card title={t('settings.language')}><div className="lang-cards">{(['uz', 'ru'] as Lang[]).map(code => <button key={code} type="button" className={`option ${lang === code ? 'is-active' : ''}`} onClick={() => setLang(code)} data-testid={`settings-lang-${code}`}><span className="option-icon"><Languages size={18}/></span><span className="option-copy"><b>{code === 'uz' ? t('lang.uz') : t('lang.ru')}</b><small>{code.toUpperCase()}</small></span><span className="radio"/></button>)}</div></Card>
-      {!clerkPubKey && readLocalSession()?.role === 'super_admin' ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
-    </div>
+    {!clerkPubKey && readLocalSession()?.role === 'super_admin' ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
   </>;
 }
 
@@ -1135,7 +1099,11 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
   const [location] = useLocation();
   const body = <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>{children}</ErrorBoundary>;
   if (!clerkPubKey) {
-    if (!readLocalSession()) return <Redirect to="/"/>;
+    if (!readLocalSession()) {
+      const next = `${window.location.pathname}${window.location.search}`;
+      if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
+      return <Redirect to="/"/>;
+    }
     return <LocalShell title={title}>{body}</LocalShell>;
   }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
@@ -1144,8 +1112,14 @@ function ProtectedRoute({ titleKey, children }: { titleKey: TKey; children: Reac
   const [location] = useLocation(); const { t } = useI18n();
   return <RouteFrame key={location} title={t(titleKey)}>{children}</RouteFrame>;
 }
+function SignedInHome() {
+  const back = sessionStorage.getItem(RETURN_PATH) || '';
+  sessionStorage.removeItem(RETURN_PATH);
+  const next = back.startsWith('/') && !back.startsWith('//') ? back : '/dashboard';
+  return <Redirect to={next}/>;
+}
 function HomeRoute() {
-  return <><Show when="signed-in"><Redirect to="/dashboard"/></Show><Show when="signed-out"><EntryScreen><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></EntryScreen></Show></>;
+  return <><Show when="signed-in"><SignedInHome/></Show><Show when="signed-out"><EntryScreen><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></EntryScreen></Show></>;
 }
 function LocalHome() { return <EntryScreen><LocalLoginForm/></EntryScreen>; }
 const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> = [

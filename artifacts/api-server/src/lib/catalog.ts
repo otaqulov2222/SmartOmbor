@@ -303,17 +303,17 @@ async function build(): Promise<Catalog> {
       }),
     );
   }
-  if (supplierIds.size > 0) {
-    const directory = await supplierDirectory();
-    for (const [productId, supplierId] of supplierIds) {
-      const name = directory.get(supplierId);
-      const product = products.get(productId);
-      if (product && name) product.factory = name;
-    }
+  const imageHrefs = new Map<string, string>();
+  const [stock, directory] = await Promise.all([
+    moyskladAll<StockRow>("/report/stock/all"),
+    supplierIds.size > 0 ? supplierDirectory() : Promise.resolve(new Map<string, string>()),
+  ]);
+  for (const [productId, supplierId] of supplierIds) {
+    const name = directory.get(supplierId);
+    const product = products.get(productId);
+    if (product && name) product.factory = name;
   }
 
-  const imageHrefs = new Map<string, string>();
-  const stock = await moyskladAll<StockRow>("/report/stock/all");
   for (const row of stock.rows) {
     const id = idFromHref(row.meta?.href);
     if (!id) continue;
@@ -342,18 +342,21 @@ async function build(): Promise<Catalog> {
   }
 
   const salesCoverage = { days7: false, days30: false, days90: false };
-  const sales7 = await salesQuantities(7).catch((error: unknown) => {
-    logger.warn({ err: error }, "MoySklad 7-day sales skipped");
-    return null;
-  });
-  const sales30 = await salesQuantities(30).catch((error: unknown) => {
-    logger.warn({ err: error }, "MoySklad 30-day sales skipped");
-    return null;
-  });
-  const sales90 = await salesQuantities(90).catch((error: unknown) => {
-    logger.warn({ err: error }, "MoySklad 90-day sales skipped");
-    return null;
-  });
+  const [sales7, sales30, sales90, byStore] = await Promise.all([
+    salesQuantities(7).catch((error: unknown) => {
+      logger.warn({ err: error }, "MoySklad 7-day sales skipped");
+      return null;
+    }),
+    salesQuantities(30).catch((error: unknown) => {
+      logger.warn({ err: error }, "MoySklad 30-day sales skipped");
+      return null;
+    }),
+    salesQuantities(90).catch((error: unknown) => {
+      logger.warn({ err: error }, "MoySklad 90-day sales skipped");
+      return null;
+    }),
+    moyskladAll<ByStoreRow>("/report/stock/bystore"),
+  ]);
   if (sales7) salesCoverage.days7 = true;
   if (sales30) salesCoverage.days30 = true;
   if (sales90) salesCoverage.days90 = true;
@@ -368,7 +371,6 @@ async function build(): Promise<Catalog> {
     }
   }
 
-  const byStore = await moyskladAll<ByStoreRow>("/report/stock/bystore");
   const stockRows: CatalogStockRow[] = [];
   for (const row of byStore.rows) {
     const id = idFromHref(row.meta?.href);

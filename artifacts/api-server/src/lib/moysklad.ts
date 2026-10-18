@@ -62,49 +62,73 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
   return (await response.json()) as T;
 }
 
+const MAX_IN_FLIGHT = 4;
+let inFlight = 0;
+const waiters: Array<() => void> = [];
+
+function takeSlot(): Promise<void> {
+  if (inFlight < MAX_IN_FLIGHT) {
+    inFlight += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    waiters.push(() => {
+      inFlight += 1;
+      resolve();
+    });
+  });
+}
+
+function freeSlot() {
+  inFlight -= 1;
+  const next = waiters.shift();
+  if (next) next();
+}
+
 export async function moysklad<T>(path: string): Promise<T> {
   const token = moyskladToken();
   if (!token) {
     throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   }
 
-  const response = await fetch(`${BASE}${path}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json;charset=utf-8",
-      "Accept-Encoding": "gzip",
-    },
-  });
+  await takeSlot();
+  try {
+    const response = await fetch(`${BASE}${path}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json;charset=utf-8",
+        "Accept-Encoding": "gzip",
+      },
+    });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new MoySkladError(
-      `MoySklad ${response.status}: ${body.slice(0, 280)}`,
-      response.status,
-    );
+    if (!response.ok) {
+      const body = await response.text();
+      throw new MoySkladError(
+        `MoySklad ${response.status}: ${body.slice(0, 280)}`,
+        response.status,
+      );
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    freeSlot();
   }
-
-  return (await response.json()) as T;
 }
 
 export async function moyskladAll<T>(path: string): Promise<{ rows: T[]; size: number }> {
-  const rows: T[] = [];
-  let offset = 0;
   const limit = 1000;
-  let size = 0;
-
-  for (;;) {
-    const joiner = path.includes("?") ? "&" : "?";
-    const page = await moysklad<ListResponse<T>>(
-      `${path}${joiner}limit=${limit}&offset=${offset}`,
-    );
-    size = page.meta.size;
-    rows.push(...page.rows);
-    if (page.rows.length === 0 || rows.length >= size) break;
-    offset += limit;
-  }
-
+  const joiner = path.includes("?") ? "&" : "?";
+  const first = await moysklad<ListResponse<T>>(`${path}${joiner}limit=${limit}&offset=0`);
+  const size = first.meta.size;
+  const rows = [...first.rows];
+  if (rows.length === 0 || rows.length >= size) return { rows, size };
+  const offsets: number[] = [];
+  for (let offset = limit; offset < size; offset += limit) offsets.push(offset);
+  const rest = await Promise.all(
+    offsets.map((offset) => moysklad<ListResponse<T>>(`${path}${joiner}limit=${limit}&offset=${offset}`)),
+  );
+  for (const page of rest) rows.push(...page.rows);
   return { rows, size };
 }
 

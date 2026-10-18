@@ -198,39 +198,118 @@ type DaySnapshot = {
 };
 
 const dayCache = new Map<string, { savedAt: number; body: DaySnapshot }>();
+const dayInflight = new Map<string, Promise<DaySnapshot>>();
+const DAY_CACHE_FILE = dataFile("day-view.json");
+let dayDiskRead = false;
 
-router.get("/dashboard/day", async (req, res, next) => {
+function readDayDisk() {
+  if (dayDiskRead) return;
+  dayDiskRead = true;
   try {
-    const date = String(req.query.date ?? "");
-    const today = tashkentToday();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) {
-      res.status(400).json({ error: "date" });
-      return;
+    const parsed = JSON.parse(readFileSync(DAY_CACHE_FILE, "utf8")) as Record<string, { savedAt: number; body: DaySnapshot }>;
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (entry?.body?.date === key && typeof entry.savedAt === "number") dayCache.set(key, entry);
     }
-    const cached = dayCache.get(date);
-    const freshFor = date === today ? 2 * 60_000 : 10 * 60_000;
-    if (cached && Date.now() - cached.savedAt < freshFor) {
-      res.json(cached.body);
-      return;
+  } catch {
+    // The first visit builds the snapshot.
+  }
+}
+
+function writeDayDisk() {
+  try {
+    mkdirSync(path.dirname(DAY_CACHE_FILE), { recursive: true });
+    const tmp = `${DAY_CACHE_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(dayCache)));
+    renameSync(tmp, DAY_CACHE_FILE);
+  } catch {
+    // A missed snapshot only makes the next cold start slower.
+  }
+}
+
+async function salesByDay(from: string, to: string): Promise<Map<string, { amount: number; quantity: number }>> {
+  const buckets = new Map<string, { amount: number; quantity: number }>();
+  let cursor = from;
+  while (cursor <= to) {
+    buckets.set(cursor, { amount: 0, quantity: 0 });
+    cursor = shiftDay(cursor, 1);
+  }
+  try {
+    const plot = await moysklad<{ series?: Array<{ date?: string; sum?: number }> }>(
+      `/report/sales/plotseries?interval=day&momentFrom=${encodeURIComponent(`${from} 00:00:00`)}&momentTo=${encodeURIComponent(`${to} 23:59:59`)}`,
+    );
+    if (!Array.isArray(plot.series) || plot.series.length === 0) throw new Error("plot");
+    let matched = 0;
+    for (const point of plot.series) {
+      const key = String(point.date ?? "").slice(0, 10);
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      matched += 1;
+      bucket.amount = money(point.sum) ?? 0;
     }
+    if (matched === 0) throw new Error("plot");
+    return buckets;
+  } catch {
+    const filter = encodeURIComponent(`moment>=${from} 00:00:00;moment<=${to} 23:59:59`);
+    const demands = await moyskladAll<{ moment?: string; sum?: number; positions?: { meta?: { size?: number } } }>(
+      `/entity/demand?filter=${filter}`,
+    );
+    for (const row of demands.rows) {
+      const bucket = buckets.get((row.moment ?? "").slice(0, 10));
+      if (!bucket) continue;
+      bucket.amount += money(row.sum) ?? 0;
+      bucket.quantity += row.positions?.meta?.size ?? 0;
+    }
+    return buckets;
+  }
+}
+
+async function salesByDayFromDemands(from: string, to: string, store: string): Promise<Map<string, { amount: number; quantity: number }>> {
+  const buckets = new Map<string, { amount: number; quantity: number }>();
+  let cursor = from;
+  while (cursor <= to) {
+    buckets.set(cursor, { amount: 0, quantity: 0 });
+    cursor = shiftDay(cursor, 1);
+  }
+  const filter = encodeURIComponent(`moment>=${from} 00:00:00;moment<=${to} 23:59:59${store}`);
+  const demands = await moyskladAll<{ moment?: string; sum?: number; positions?: { meta?: { size?: number } } }>(
+    `/entity/demand?order=moment,desc&filter=${filter}`,
+  );
+  for (const row of demands.rows) {
+    const bucket = buckets.get((row.moment ?? "").slice(0, 10));
+    if (!bucket) continue;
+    bucket.amount += money(row.sum) ?? 0;
+    bucket.quantity += row.positions?.meta?.size ?? 0;
+  }
+  return buckets;
+}
+
+function loadDay(date: string): Promise<DaySnapshot> {
+  const running = dayInflight.get(date);
+  if (running) return running;
+  const job = buildDay(date)
+    .then((body) => {
+      dayCache.set(date, { savedAt: Date.now(), body });
+      writeDayDisk();
+      return body;
+    })
+    .finally(() => {
+      dayInflight.delete(date);
+    });
+  dayInflight.set(date, job);
+  return job;
+}
+
+async function buildDay(date: string): Promise<DaySnapshot> {
     const from = shiftDay(date, -6);
     const dayFilter = encodeURIComponent(`moment>=${date} 00:00:00;moment<=${date} 23:59:59`);
-    const weekFilter = encodeURIComponent(`moment>=${from} 00:00:00;moment<=${date} 23:59:59`);
     type Row = { id?: string; name?: string; moment?: string; sum?: number; applicable?: boolean; agent?: { name?: string }; store?: { name?: string }; sourceStore?: { name?: string }; targetStore?: { name?: string } };
-    const [demands, supplies, dayDemands, daySupplies, dayMoves] = await Promise.all([
-      moyskladAll<{ moment?: string; sum?: number }>(`/entity/demand?filter=${weekFilter}`).catch(() => null),
+    const [amounts, supplies, dayDemands, daySupplies, dayMoves] = await Promise.all([
+      salesByDay(from, date),
       moysklad<{ meta: { size: number } }>(`/entity/supply?limit=1&filter=${dayFilter}`),
       moysklad<{ rows: Row[] }>(`/entity/demand?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
       moysklad<{ rows: Row[] }>(`/entity/supply?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
       moysklad<{ rows: Row[] }>(`/entity/move?limit=8&order=moment,desc&filter=${dayFilter}&expand=sourceStore,targetStore`),
     ]);
-    const amounts = new Map<string, number>();
-    for (let index = 0; index < 7; index += 1) amounts.set(shiftDay(from, index), 0);
-    for (const row of demands?.rows ?? []) {
-      const key = (row.moment ?? "").slice(0, 10);
-      if (!amounts.has(key)) continue;
-      amounts.set(key, (amounts.get(key) ?? 0) + (money(row.sum) ?? 0));
-    }
     const asDoc = (row: Row, kind: DayDocument["kind"], source: string | null, target: string | null): DayDocument => ({
       id: row.id || `${kind}-${row.name}-${row.moment}`,
       kind,
@@ -245,15 +324,36 @@ router.get("/dashboard/day", async (req, res, next) => {
       ...dayDemands.rows.map((row) => asDoc(row, "sale", row.agent?.name || null, row.store?.name || null)),
       ...dayMoves.rows.map((row) => asDoc(row, "transfer", row.sourceStore?.name || null, row.targetStore?.name || null)),
     ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
-    const body: DaySnapshot = {
+    return {
       date,
-      sales: amounts.get(date) ?? 0,
+      sales: amounts.get(date)?.amount ?? 0,
       incoming: supplies.meta.size,
-      trend: [...amounts.entries()].map(([key, amount]) => ({ date: key, amount })),
+      trend: [...amounts.entries()].map(([key, value]) => ({ date: key, amount: value.amount })),
       documents,
     };
-    dayCache.set(date, { savedAt: Date.now(), body });
-    res.json(body);
+}
+
+router.get("/dashboard/day", async (req, res, next) => {
+  try {
+    const date = String(req.query.date ?? "");
+    const today = tashkentToday();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) {
+      res.status(400).json({ error: "date" });
+      return;
+    }
+    readDayDisk();
+    const cached = dayCache.get(date);
+    const freshFor = date === today ? 2 * 60_000 : 6 * 60 * 60_000;
+    if (cached && Date.now() - cached.savedAt < freshFor) {
+      res.json(cached.body);
+      return;
+    }
+    if (cached) {
+      res.json(cached.body);
+      void loadDay(date).catch(() => undefined);
+      return;
+    }
+    res.json(await loadDay(date));
   } catch (error) {
     next(error);
   }
@@ -691,6 +791,20 @@ router.get("/products/barcode/:barcode", async (req, res, next) => {
   }
 });
 
+router.get("/products/:id", async (req, res, next) => {
+  try {
+    const catalog = await loadCatalog();
+    const product = catalog.products.find((item) => item.id === String(req.params.id));
+    if (!product) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json(product);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/stock", async (req, res, next) => {
   try {
     const query = ListStockQueryParams.parse(req.query);
@@ -931,12 +1045,13 @@ async function computeSales(query: { period: "7d" | "30d" | "90d" | "365d"; ware
     const store = query.warehouseId
       ? `;store=https://api.moysklad.ru/api/remap/1.2/entity/store/${query.warehouseId}`
       : "";
-    const filter = encodeURIComponent(`moment>=${momentFrom};moment<=${momentTo}${store}`);
     const profitFilter = store ? `&filter=${encodeURIComponent(store.slice(1))}` : "";
-    const [demands, profit] = await Promise.all([
-      moyskladAll<{ moment?: string; sum?: number; positions?: { meta?: { size?: number } } }>(
-        `/entity/demand?order=moment,desc&filter=${filter}`,
-      ),
+    const fromKey = momentFrom.slice(0, 10);
+    const toKey = momentTo.slice(0, 10);
+    const [byDay, profit] = await Promise.all([
+      store
+        ? salesByDayFromDemands(fromKey, toKey, store)
+        : salesByDay(fromKey, toKey),
       moyskladAll<{
         assortment?: { meta?: { href?: string }; name?: string; code?: string; article?: string };
         sellQuantity?: number;
@@ -945,20 +1060,6 @@ async function computeSales(query: { period: "7d" | "30d" | "90d" | "365d"; ware
         `/report/profit/byproduct?momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}${profitFilter}`,
       ).catch(() => ({ rows: [], size: 0 })),
     ]);
-
-    const byDay = new Map<string, { amount: number; quantity: number }>();
-    for (let index = 0; index < days; index += 1) {
-      const date = new Date(from);
-      date.setDate(from.getDate() + index);
-      byDay.set(date.toISOString().slice(0, 10), { amount: 0, quantity: 0 });
-    }
-    for (const row of demands.rows) {
-      const date = (row.moment ?? "").slice(0, 10);
-      const bucket = byDay.get(date);
-      if (!bucket) continue;
-      bucket.amount += money(row.sum) ?? 0;
-      bucket.quantity += row.positions?.meta?.size ?? 0;
-    }
     const trend = [...byDay.entries()].map(([date, value]) => ({ date, ...value }));
     const totalAmount = trend.reduce((sum, point) => sum + point.amount, 0);
     const ranked = [...profit.rows].sort((a, b) => (b.sellQuantity ?? 0) - (a.sellQuantity ?? 0));
