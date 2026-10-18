@@ -881,11 +881,15 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .waybill-table th.num, .waybill-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .waybill-table td small { display: block; margin-top: .12rem; color: var(--muted); font-size: .75rem; }
-.waybill-colors { background: #fafbfc; }
-.color-edit { display: flex; flex-wrap: wrap; gap: .4rem .55rem; align-items: center; }
-.color-pair { display: flex; align-items: center; gap: .25rem; }
-.color-pair .input { width: 4.6rem; height: 2rem; position: relative; z-index: 1; }
-.color-pair .color-qty { width: 4.2rem; }
+.color-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
+.color-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .16rem .2rem .16rem .55rem; border-radius: 999px; background: #e8eeff; color: #1e3a8a; font-size: .8rem; font-weight: 750; letter-spacing: .02em; }
+.color-chip b { font-weight: 800; }
+.color-chip i { min-width: 1.35rem; padding: .08rem .38rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-size: .74rem; font-weight: 750; text-align: center; }
+.waybill-colors { background: #f4f7ff; padding: .7rem .85rem; }
+.color-edit { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
+.color-pair { display: flex; align-items: center; gap: .35rem; padding: .2rem .35rem .2rem .45rem; background: #fff; border: 1px solid #c9d4f5; border-radius: .75rem; }
+.color-pair .input { width: 6.4rem; height: 2.25rem; position: relative; z-index: 1; text-transform: uppercase; font-weight: 750; letter-spacing: .03em; }
+.color-pair .color-qty { width: 4.6rem; text-transform: none; font-weight: 650; }
 .color-warn, .color-ok { margin: 0; font-size: .8rem; flex: 1 1 16rem; }
 .color-warn { color: #b42318; }
 .color-ok { color: #047857; }
@@ -988,7 +992,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .yx-colors { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; padding-top: .15rem; border-top: 1px dashed var(--line); }
 .yx-colors > span { font-size: .75rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
 .yx-color { display: flex; gap: .35rem; align-items: center; }
-.yx-color .input { width: 7.5rem; height: 2.3rem; }
+.yx-color .input { width: 7.5rem; height: 2.3rem; text-transform: uppercase; font-weight: 750; }
+.yx-color .input:last-of-type { text-transform: none; font-weight: 650; }
 .yx-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
 .yx-totals > div { padding: .75rem .85rem; border-radius: var(--r-sm); background: var(--brand-soft); display: grid; gap: .15rem; }
 .yx-totals span { color: var(--brand-ink); font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }

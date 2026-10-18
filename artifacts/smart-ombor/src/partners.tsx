@@ -293,14 +293,34 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
 
 function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]) => Promise<boolean> }) {
   const { t, fmt } = useI18n();
-  const [rows, setRows] = useState(() => (line.colors ?? []).length ? (line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }]);
+  const [rows, setRows] = useState(() => {
+    const saved = (line.colors ?? []).filter(color => color.name && color.quantity > 0).map(color => ({ name: color.name.toLocaleUpperCase('ru-RU'), quantity: String(color.quantity) }));
+    return [...saved, { name: '', quantity: '' }];
+  });
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [checked, setChecked] = useState(false);
+  const nameRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const focusAt = useRef(rows.length - 1);
+  useEffect(() => {
+    const index = focusAt.current;
+    if (index < 0) return;
+    focusAt.current = -1;
+    nameRefs.current[index]?.focus();
+  });
   const edit = (index: number, field: 'name' | 'quantity', value: string) => {
     setChecked(false);
     setFailed(false);
-    setRows(list => list.map((item, i) => i === index ? { ...item, [field]: value } : item));
+    setRows(list => list.map((item, i) => i === index ? { ...item, [field]: field === 'name' ? value.toLocaleUpperCase('ru-RU') : value } : item));
+  };
+  const openNext = (index: number, quantity = rows[index]?.quantity ?? '') => {
+    const current = rows[index];
+    if (!current?.name.trim() || !(Number(quantity.replace(',', '.')) > 0)) return;
+    const blank = rows.findIndex((item, i) => i > index && !item.name.trim() && !item.quantity.trim());
+    if (blank >= 0) { nameRefs.current[blank]?.focus(); return; }
+    if (index < rows.length - 1) { nameRefs.current[index + 1]?.focus(); return; }
+    focusAt.current = rows.length;
+    setRows(list => [...list, { name: '', quantity: '' }]);
   };
   const filled = rows
     .map(row => ({ name: row.name.trim(), quantity: Math.max(0, Number(row.quantity.replace(',', '.')) || 0) }))
@@ -327,11 +347,11 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
   };
   return <div className="color-edit" onMouseDown={event => event.stopPropagation()}>
     {rows.map((row, index) => <div key={index} className="color-pair">
-      <input className="input" value={row.name} aria-label={t('zavod.colorName')} placeholder={t('zavod.colorName')} onChange={event => edit(index, 'name', event.target.value)}/>
+      <input className="input" ref={node => { nameRefs.current[index] = node; }} value={row.name} aria-label={t('zavod.colorName')} placeholder={t('zavod.colorName')} autoCapitalize="characters" onChange={event => edit(index, 'name', event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.parentElement?.querySelector<HTMLInputElement>('.color-qty')?.focus(); } }}/>
       <span>/</span>
-      <input className="input color-qty" inputMode="numeric" value={row.quantity} aria-label={t('zavod.boxes')} placeholder={t('zavod.boxes')} onChange={event => edit(index, 'quantity', event.target.value)}/>
+      <input className="input color-qty" inputMode="numeric" value={row.quantity} aria-label={t('zavod.boxes')} placeholder={t('zavod.boxes')} onChange={event => edit(index, 'quantity', event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} onBlur={event => { if ((event.relatedTarget as HTMLElement | null)?.closest('button')) return; openNext(index, event.currentTarget.value); }}/>
     </div>)}
-    <button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => { setChecked(false); setRows(list => [...list, { name: '', quantity: '' }]); }}><Plus size={14}/></button>
+    <button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => { setChecked(false); focusAt.current = rows.length; setRows(list => [...list, { name: '', quantity: '' }]); }}><Plus size={14}/></button>
     {checked && <p className={ready ? 'color-ok' : 'color-warn'}>{message}</p>}
     {failed && <p className="color-warn">{t('partners.shipmentInvalid')}</p>}
     <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('partners.colorSave')}</button>
@@ -595,7 +615,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
                   return <Fragment key={line.id}>
                     <tr>
-                      <td><b>{line.productCode || '—'}</b>{colors.length > 0 && <small>{colors.map(color => `${color.name}/${fmt(color.quantity)}`).join(' · ')}</small>}</td>
+                      <td><b>{line.productCode || '—'}</b>{colors.length > 0 && <span className="color-chips">{colors.map(color => <span className="color-chip" key={`${color.name}-${color.quantity}`}><b>{color.name.toLocaleUpperCase('ru-RU')}</b><i>{fmt(color.quantity)}</i></span>)}</span>}</td>
                       <td>{line.size || '—'}</td>
                       <td className="num">{fmt(line.pairs)}</td>
                       <td className="num">{fmt(line.boxes)}</td>
@@ -754,7 +774,7 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
       <div className="yx-colors">
         <span>{t('zavod.colors')}</span>
         {line.colors.map((color, colorIndex) => <div className="yx-color" key={colorIndex}>
-          <input className="input" value={color.name} placeholder={t('zavod.colorName')} onChange={e => patch(line.key, { colors: line.colors.map((item, i) => i === colorIndex ? { ...item, name: e.target.value } : item) })}/>
+          <input className="input" value={color.name} placeholder={t('zavod.colorName')} autoCapitalize="characters" onChange={e => patch(line.key, { colors: line.colors.map((item, i) => i === colorIndex ? { ...item, name: e.target.value.toLocaleUpperCase('ru-RU') } : item) })}/>
           <input className="input" inputMode="decimal" value={color.quantity} placeholder={t('zavod.colorQty')} onChange={e => patch(line.key, { colors: line.colors.map((item, i) => i === colorIndex ? { ...item, quantity: e.target.value } : item) })}/>
           {line.colors.length > 1 && <button type="button" className="icon-btn" aria-label={t('zavod.remove')} onClick={() => patch(line.key, { colors: line.colors.filter((_, i) => i !== colorIndex) })}><X size={14}/></button>}
         </div>)}

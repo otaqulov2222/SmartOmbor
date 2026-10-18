@@ -305,7 +305,7 @@ export function listShipments(factoryId?: string) {
 function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLine {
   const colors = Array.isArray(raw.colors)
     ? raw.colors
-        .map((color) => ({ name: String(color?.name ?? "").trim(), quantity: Math.max(0, Number(color?.quantity) || 0) }))
+        .map((color) => ({ name: String(color?.name ?? "").trim().toLocaleUpperCase("ru-RU"), quantity: Math.max(0, Number(color?.quantity) || 0) }))
         .filter((color) => color.name && color.quantity > 0)
     : [];
   const pairs = Math.max(0, Number(raw.pairs) || 0);
