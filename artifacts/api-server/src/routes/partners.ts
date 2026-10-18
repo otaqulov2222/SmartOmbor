@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { applyReceiptStock, findProductsByBarcode, findProductsByLabel, loadCatalog } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, findProductsByBarcode, findProductsByLabel, loadCatalog } from "../lib/catalog";
 import { moysklad, moyskladSend, MoySkladError } from "../lib/moysklad";
 import { recordAudit } from "../lib/audit";
 import {
@@ -261,16 +261,12 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     const account = getAccount(shipment.factoryId);
-    const positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
-    if (!positions.length || positions.some((item) => !item.line.productId)) {
+    let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
+    if (!positions.length) {
       res.status(400).json({ error: "unlinked" });
       return;
     }
     const catalog = await loadCatalog();
-    if (positions.some((item) => !catalog.products.some((product) => product.id === item.line.productId))) {
-      res.status(400).json({ error: "product" });
-      return;
-    }
     const storeId = String(req.body?.storeId ?? "").trim();
     const store = catalog.warehouses.find((item) => item.id === storeId) || (catalog.warehouses.length === 1 ? catalog.warehouses[0] : null);
     if (!store) {
@@ -299,6 +295,51 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     }
     if (!agentMeta || !currency || !company) {
       res.status(400).json({ error: agentMeta ? "currency" : "agent" });
+      return;
+    }
+    for (const item of positions) {
+      if (item.line.productId) continue;
+      const name = [item.line.productCode, item.line.model, item.line.size].filter(Boolean).join(" ").trim();
+      if (name.length < 2) {
+        res.status(400).json({ error: "unlinked" });
+        return;
+      }
+      const product = await moyskladSend<{ id: string; name: string; code?: string }>("/entity/product", {
+        name,
+        ...(item.line.productCode ? { code: item.line.productCode } : {}),
+      });
+      linkShipmentLine(shipment.id, item.line.id, { id: product.id, name: product.name });
+      addCatalogProduct({
+        id: product.id,
+        name: product.name,
+        code: product.code || item.line.productCode || null,
+        article: null,
+        barcodes: [],
+        factory: account?.name || null,
+        category: null,
+        unit: "шт",
+        packType: null,
+        packSize: 1,
+        imageUrl: null,
+        stock: 0,
+        available: 0,
+        cost: item.line.price || null,
+        salePrice: item.line.price || null,
+        lastSale: null,
+        lastReceipt: null,
+        sales7: 0,
+        sales30: 0,
+        sales60: 0,
+        sales90: 0,
+        daysCover: null,
+        stockStatus: "out",
+        inTransit: 0,
+      });
+    }
+    const fresh = listShipments().find((item) => item.id === shipment.id) || shipment;
+    positions = fresh.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
+    if (positions.some((item) => !item.line.productId)) {
+      res.status(400).json({ error: "unlinked" });
       return;
     }
     const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {

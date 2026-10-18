@@ -592,7 +592,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                 <div className="waybill-decide">
                   {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
                   {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
-                  {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" disabled={shipment.lines.some(line => lineUnits(line) > 0 && !line.productId)} onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
+                  {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
                 </div>
               </div>
             )}
