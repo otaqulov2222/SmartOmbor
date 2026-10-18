@@ -48,6 +48,15 @@ function unitsOf(line: Draft) {
   return pack || boxes;
 }
 
+function piecesOf(line: Line) {
+  const pack = line.pairs > 0 ? line.pairs : 0;
+  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
+  if (line.quantity > 0) return line.quantity;
+  return pack;
+}
+
 export function FactoryPortal() {
   const { t, lang, setLang, fmt, money, date } = useI18n();
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || '');
@@ -313,7 +322,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(line.pairs * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(piecesOf(line) * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>

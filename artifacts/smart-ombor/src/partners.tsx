@@ -607,7 +607,6 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
               <table className="waybill-table">
                 <thead><tr><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
                 <tbody>{(shipment.lines ?? []).map(line => {
-                  const units = line.pairs > 0 ? line.pairs : line.quantity;
                   const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
                   return <Fragment key={line.id}>
                     <tr>
@@ -616,7 +615,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                       <td className="num">{fmt(line.pairs)}</td>
                       <td className="num">{fmt(line.boxes)}</td>
                       <td className="num">{line.price ? money(line.price) : '—'}</td>
-                      <td className="num">{money(units * line.price)}</td>
+                      <td className="num">{money(lineUnits(line) * line.price)}</td>
                       <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></td>
                     </tr>
                     {colorFor === line.id && <tr><td className="waybill-colors" colSpan={7}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
