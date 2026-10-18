@@ -54,7 +54,7 @@ function draftFrom(line: Line): DraftLine {
     boxes: line.boxes ? String(line.boxes) : '',
     quantity: line.quantity ? String(line.quantity) : '',
     price: line.price ? String(line.price) : '',
-    colors: line.colors.length ? line.colors.map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }],
+    colors: (line.colors ?? []).length ? (line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }],
   };
 }
 
@@ -69,7 +69,7 @@ function asNumber(value: string) {
 function lineUnits(line: Line) {
   if (line.pairs > 0) return line.pairs;
   if (line.quantity > 0) return line.quantity;
-  return line.colors.reduce((sum, color) => sum + color.quantity, 0);
+  return (line.colors ?? []).reduce((sum, color) => sum + color.quantity, 0);
 }
 
 function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
@@ -113,7 +113,7 @@ function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
-  const colors = line.colors.filter(color => color.name && color.quantity > 0);
+  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
   return colors.length ? colors.map(color => `${color.name} · ${fmt(color.quantity)}`).join(', ') : '';
 }
 
@@ -204,7 +204,7 @@ export function PartnersPage() {
     const needle = q.trim().toLowerCase();
     return (list.data?.items ?? []).filter(row => !needle || row.name.toLowerCase().includes(needle) || (row.account?.code || '').toLowerCase().includes(needle) || (row.account?.login || '').includes(needle));
   }, [list.data, q]);
-  const current = list.data?.items.find(row => row.name === selected) ?? null;
+  const current = (list.data?.items ?? []).find(row => row.name === selected) ?? null;
 
   if (selected && current) {
     return <PartnerDetail row={current} onBack={() => setLocation('/partners')} />;
@@ -270,7 +270,7 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
 
 function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]) => Promise<boolean> }) {
   const { t, fmt } = useI18n();
-  const [rows, setRows] = useState(() => line.colors.length ? line.colors.map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }]);
+  const [rows, setRows] = useState(() => (line.colors ?? []).length ? (line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [checked, setChecked] = useState(false);
@@ -348,10 +348,6 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     setAgentHits([]);
   }, [posting, row.account?.counterpartyId, row.account?.counterpartyName]);
   useEffect(() => {
-    const firstStore = warehouses.data?.[0]?.id;
-    if (posting && firstStore) setStoreId(current => current || firstStore);
-  }, [posting, warehouses.data]);
-  useEffect(() => {
     const text = agentQuery.trim();
     if (text.length < 2) { setAgentHits([]); return; }
     const timer = window.setTimeout(() => {
@@ -377,6 +373,10 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   });
   const products = useListProducts({ factory: row.name, page: 1, pageSize: 12 });
   const warehouses = useListWarehouses();
+  useEffect(() => {
+    const firstStore = warehouses.data?.[0]?.id;
+    if (posting && firstStore) setStoreId(current => current || firstStore);
+  }, [posting, warehouses.data]);
   const shipments = detail.data?.shipments ?? [];
 
   const saveAccess = async () => {
@@ -518,7 +518,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
-  const visible = useMemo(() => shipments.filter(shipment => !day || shipment.date.slice(0, 10) === day), [shipments, day]);
+  const visible = useMemo(() => shipments.filter(shipment => !day || String(shipment.date ?? '').slice(0, 10) === day), [shipments, day]);
   const pairs = visible.reduce((sum, shipment) => sum + shipment.pairs, 0);
   const amount = visible.reduce((sum, shipment) => sum + shipment.amount, 0);
   const passwordShown = detail.data?.account.password || row.account?.password || '';
@@ -558,7 +558,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             <header>
               <button type="button" className="waybill-open" onClick={() => setOpenShipment(openShipment === shipment.id ? null : shipment.id)}>
                 <span className="waybill-mark"><Truck size={16}/></span>
-                <div><b>{shipment.number}</b><small>{date(shipment.date)} · {t('docs.items', { count: fmt(shipment.lines.length) })}</small></div>
+                <div><b>{shipment.number}</b><small>{date(shipment.date)} · {t('docs.items', { count: fmt((shipment.lines ?? []).length) })}</small></div>
                 <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
                 <strong className="waybill-sum">{money(shipment.amount)}</strong>
               </button>
@@ -566,9 +566,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             {openShipment === shipment.id && (
               <table className="waybill-table">
                 <thead><tr><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
-                <tbody>{shipment.lines.map(line => {
+                <tbody>{(shipment.lines ?? []).map(line => {
                   const units = line.pairs > 0 ? line.pairs : line.quantity;
-                  const colors = line.colors.filter(color => color.name && color.quantity > 0);
+                  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
                   return <Fragment key={line.id}>
                     <tr>
                       <td><b>{line.productCode || '—'}</b>{colors.length > 0 && <small>{colors.map(color => `${color.name}/${fmt(color.quantity)}`).join(' · ')}</small>}</td>
@@ -604,9 +604,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         ))}</div>
       ) : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
     </section>
-    {!!products.data?.items.length && <section className="card">
-      <div className="card-head"><h2>{t('partners.catalog')}</h2><span className="card-meta">{fmt(products.data.total)}</span></div>
-      <ul className="partner-products">{products.data.items.map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
+    {(products.data?.items?.length ?? 0) > 0 && <section className="card">
+      <div className="card-head"><h2>{t('partners.catalog')}</h2><span className="card-meta">{fmt(products.data?.total ?? products.data?.items?.length ?? 0)}</span></div>
+      <ul className="partner-products">{(products.data?.items ?? []).map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
       <Link href="/factories" className="link">{t('nav.factories')}</Link>
     </section>}
     {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.filter(line => lineUnits(line) > 0).length), units: fmt(posting.lines.reduce((sum, line) => sum + lineUnits(line), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).map(line => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = new Set(mixed).size > 1; return <li key={line.id}><b>{line.productName}</b><small>{t('partners.supplyUnits', { units: fmt(lineUnits(line)) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{fmt(lineUnits(line))}</span></li>; })}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
@@ -671,7 +671,7 @@ function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line;
 
 function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onClose: () => void; onSaved: () => Promise<void> }) {
   const { t } = useI18n();
-  const [date, setDate] = useState(shipment.date.slice(0, 10));
+  const [date, setDate] = useState(String(shipment.date ?? '').slice(0, 10));
   const [note, setNote] = useState(shipment.note);
   const [lines, setLines] = useState<DraftLine[]>(() => shipment.lines.map(draftFrom));
   const [error, setError] = useState('');

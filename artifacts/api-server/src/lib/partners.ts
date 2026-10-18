@@ -234,7 +234,8 @@ export function accountFromToken(token: string) {
 function billableUnits(line: Pick<ShipmentLine, 'pairs' | 'quantity' | 'colors'>) {
   if (line.pairs > 0) return line.pairs;
   if (line.quantity > 0) return line.quantity;
-  return line.colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
+  const colors = Array.isArray(line.colors) ? line.colors : [];
+  return colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
 }
 
 function lineAmount(line: ShipmentLine) {
@@ -242,10 +243,11 @@ function lineAmount(line: ShipmentLine) {
 }
 
 export function shipmentView(shipment: Shipment) {
-  const pairs = shipment.lines.reduce((sum, line) => sum + line.pairs, 0);
-  const boxes = shipment.lines.reduce((sum, line) => sum + line.boxes, 0);
-  const amount = shipment.lines.reduce((sum, line) => sum + lineAmount(line), 0);
-  return { ...shipment, pairs, boxes, amount };
+  const lines = Array.isArray(shipment.lines) ? shipment.lines : [];
+  const pairs = lines.reduce((sum, line) => sum + (line.pairs || 0), 0);
+  const boxes = lines.reduce((sum, line) => sum + (line.boxes || 0), 0);
+  const amount = lines.reduce((sum, line) => sum + lineAmount(line), 0);
+  return { ...shipment, lines, pairs, boxes, amount };
 }
 
 export function listShipments(factoryId?: string) {

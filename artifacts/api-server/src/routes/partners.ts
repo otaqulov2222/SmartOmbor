@@ -188,7 +188,8 @@ router.get("/partner-factories/:id", async (req, res, next) => {
 function lineUnits(line: { pairs: number; quantity: number; colors: Array<{ quantity: number }> }) {
   if (line.pairs > 0) return line.pairs;
   if (line.quantity > 0) return line.quantity;
-  return line.colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
+  const colors = Array.isArray(line.colors) ? line.colors : [];
+  return colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
 }
 
 router.get("/counterparties", async (req, res, next) => {
