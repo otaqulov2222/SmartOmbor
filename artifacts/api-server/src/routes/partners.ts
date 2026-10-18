@@ -216,7 +216,7 @@ router.get("/partner-factories/shipments/:id/matches", async (req, res, next) =>
     const catalog = await loadCatalog();
     const account = getAccount(shipment.factoryId);
     const lines = shipment.lines.map((line) => {
-      const matched = account ? matchWaybillProduct(catalog, { factoryCode: account.code, factoryName: account.catalogName || account.name, productCode: line.productCode, size: line.size }) : null;
+      const matched = account ? matchWaybillProduct(catalog, { factoryCode: line.factoryCode || account.code, factoryName: account.catalogName || account.name, groupCode: line.sectionCode, productCode: line.productCode, size: line.size }) : null;
       const text = [line.productCode, line.model, line.size].filter(Boolean).join(" ");
       const found = new Map<string, { id: string; name: string; code: string | null; stock: number }>();
       if (matched) {

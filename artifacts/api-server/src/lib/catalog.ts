@@ -679,14 +679,16 @@ export function productBelongsToFactory(product: { name: string; factory: string
 
 export function matchWaybillProduct(
   catalog: Catalog,
-  input: { factoryCode: string; factoryName: string; productCode: string; size: string },
+  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },
 ): { id: string; name: string } | null {
   const code = input.productCode.trim();
   const size = input.size.trim();
+  const group = input.groupCode?.trim() || "";
   if (code.length < 3) return null;
   const bases = catalog.products.filter((product) => {
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
     if (!wholeToken(product.name, code)) return false;
+    if (group.length >= 3 && !wholeToken(product.name, group)) return false;
     if (size && !product.name.includes(size)) return false;
     return !/\([^)]*\)\s*$/.test(product.name);
   });

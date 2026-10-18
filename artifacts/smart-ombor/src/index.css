@@ -904,8 +904,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-facts dd { margin: .12rem 0 0; font-size: 1rem; font-weight: 750; font-variant-numeric: tabular-nums; }
 .waybill-row .waybill-link { padding-top: .15rem; }
 .waybill-line-tools { display: flex; justify-content: flex-end; gap: .35rem; }
-.yx-sheet { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: #fff; }
-.yx-sheet-head, .yx-sheet-row { display: grid; grid-template-columns: 2.4rem minmax(9rem, 1.5fr) minmax(4.5rem, .7fr) minmax(4.2rem, .55fr) minmax(4.2rem, .55fr) minmax(5rem, .7fr) minmax(6.5rem, .85fr) 2.2rem; gap: .4rem; align-items: center; padding: .45rem .55rem; }
+.yx-sheet { border: 1px solid var(--line); border-radius: var(--r-md); overflow-x: auto; background: #fff; }
+.yx-sheet-head, .yx-sheet-row { display: grid; grid-template-columns: 2.2rem 4.8rem minmax(5.6rem, .7fr) minmax(7.2rem, .9fr) minmax(6.4rem, .8fr) minmax(5.6rem, .7fr) minmax(5rem, .6fr) minmax(4.4rem, .5fr) minmax(5.4rem, .65fr) minmax(6.8rem, .8fr) 2.2rem; gap: .4rem; align-items: center; min-width: 68rem; padding: .45rem .55rem; }
+.yx-brand { color: var(--brand-ink); font-size: .92rem; letter-spacing: -.02em; }
 .yx-sheet-head { background: #f4f7fb; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .03em; }
 .yx-sheet-row + .yx-sheet-row { border-top: 1px solid var(--line); }
 .yx-sheet-row > b { width: 1.8rem; height: 1.8rem; display: grid; place-items: center; border-radius: .45rem; background: var(--brand-soft); color: var(--brand-ink); font-size: .78rem; }
@@ -1002,9 +1003,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 6; }
   .yx-totals, .cabinet-kpis { grid-template-columns: 1fr 1fr; }
   .yx-history-lines li { grid-template-columns: 1fr 1fr; }
-  .yx-sheet-head { display: none; }
-  .yx-sheet-row { grid-template-columns: 1fr 1fr; }
-  .yx-sheet-row > b, .yx-sheet-row .yx-pick { grid-column: 1 / -1; }
+  .yx-sheet-head, .yx-sheet-row { min-width: 68rem; }
 }
 @media (max-width: 560px) {
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 12; }

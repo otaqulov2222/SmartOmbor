@@ -161,13 +161,14 @@ export async function buildSupplyPositions(
     const parts = receiptParts(line);
     if (!parts.length) continue;
     const catalogMatch = matchWaybillProduct(scope.catalog, {
-      factoryCode: scope.factoryCode,
+      factoryCode: line.factoryCode || scope.factoryCode,
       factoryName: scope.factoryName,
+      groupCode: line.sectionCode,
       productCode: line.productCode,
       size: line.size,
     });
     const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
-    const name = ["Bordo", scope.factoryCode, line.productCode, line.model, line.size].filter(Boolean).join(" ").trim();
+    const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
     if (!parent && (line.productCode.trim().length < 3 || name.length < 2)) return null;
     resolved.push({ line, parent, name });
   }

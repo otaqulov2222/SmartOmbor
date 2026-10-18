@@ -1,23 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
-type Line = { id: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
+type Line = { id: string; factoryCode: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
 type Shipment = { id: string; number: string; date: string; status: string; note?: string; pairs: number; boxes: number; amount: number; lines: Line[] };
-type Draft = { key: string; productId: string; productName: string; productCode: string; barcode: string; size: string; pairs: string; boxes: string; price: string };
-type CatalogHit = { id: string; name: string; code: string | null; article: string | null; barcode: string | null };
+type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; size: string; pairs: string; boxes: string; price: string };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
 const SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
 
 function blank(): Draft {
-  return { key: Math.random().toString(36).slice(2), productId: '', productName: '', productCode: '', barcode: '', size: '', pairs: '', boxes: '', price: '' };
+  return { key: Math.random().toString(36).slice(2), factoryCode: '', groupCode: '', productCode: '', size: '', pairs: '', boxes: '', price: '' };
 }
 
 function started(line: Draft) {
-  return Boolean(line.productCode.trim() || line.size.trim() || line.pairs || line.boxes || line.price);
+  return Boolean(line.factoryCode.trim() || line.groupCode.trim() || line.productCode.trim() || line.size.trim() || line.pairs || line.boxes || line.price);
 }
 
 function withBlank(rows: Draft[]) {
@@ -25,11 +24,6 @@ function withBlank(rows: Draft[]) {
   const sum = last ? unitsOf(last) * num(last.price) : 0;
   if (!last || sum > 0) return [...rows, blank()];
   return rows;
-}
-
-function sizeOf(name: string) {
-  const match = name.match(/(\d{2}\s*[-–]\s*\d{2})\s*(?:\([^)]*\))?\s*$/);
-  return match ? match[1].replace(/\s/g, '') : '';
 }
 
 function num(value: string) {
@@ -175,10 +169,9 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     setNote(item.note || '');
     setLines(withBlank(item.lines.map(line => ({
       key: line.id,
-      productId: line.productCode ? '' : '',
-      productName: line.productName || '',
+      factoryCode: line.factoryCode || account.code,
+      groupCode: line.sectionCode || '',
       productCode: line.productCode,
-      barcode: '',
       size: line.size,
       pairs: line.pairs ? String(line.pairs) : '',
       boxes: line.boxes ? String(line.boxes) : '',
@@ -192,14 +185,14 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const submit = async () => {
     const filled = lines.filter(started);
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
-    if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needProduct')); return; }
+    if (filled.some(line => !line.factoryCode.trim() || !line.groupCode.trim() || !line.productCode.trim())) { setError(t('zavod.needProduct')); return; }
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
     const payload = filled.map(line => ({
       id: editingId ? line.key : undefined,
-      factoryCode: account.code,
-      sectionCode: '',
-      productId: line.productId || null,
-      productName: line.productName || null,
+      factoryCode: line.factoryCode.trim(),
+      sectionCode: line.groupCode.trim(),
+      productId: null,
+      productName: null,
       productCode: line.productCode.trim(),
       model: '',
       size: line.size.trim(),
@@ -280,12 +273,15 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
     <div className="yx-sheet">
-      <div className="yx-sheet-head"><span/><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
+      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.groupCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
         return <div className="yx-sheet-row" key={line.key}>
           <b>{String(index + 1).padStart(2, '0')}</b>
-          <ProductPick token={token} line={line} onChange={next => patch(line.key, next)}/>
+          <strong className="yx-brand">{t('zavod.brand')}</strong>
+          <input className="input" aria-label={t('zavod.factoryCode')} inputMode="numeric" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: digits(e.target.value) })}/>
+          <input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={line.groupCode} onChange={e => patch(line.key, { groupCode: digits(e.target.value) })}/>
+          <input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })}/>
           <select className="input" aria-label={t('zavod.size')} value={SIZES.includes(line.size) ? line.size : line.size || ''} onChange={e => patch(line.key, { size: e.target.value })}>
             <option value=""/>
             {!SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}
@@ -322,7 +318,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{line.productCode || '—'}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(piecesOf(line) * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{['Bordo', line.factoryCode, line.sectionCode, line.productCode].filter(Boolean).join(' ')}</b><span>{line.size || '—'}</span><span>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span>{line.price ? money(line.price) : '—'}</span><span>{money(piecesOf(line) * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
@@ -338,53 +334,3 @@ function Field({ label, children, className = '' }: { label: string; children: R
   return <div className={`field ${className}`}><span>{label}</span>{children}</div>;
 }
 
-function ProductPick({ token, line, onChange }: { token: string; line: Draft; onChange: (next: Partial<Draft>) => void }) {
-  const { t } = useI18n();
-  const box = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [pickQuery, setPickQuery] = useState('');
-  const [hits, setHits] = useState<CatalogHit[]>([]);
-  const [looking, setLooking] = useState(false);
-  const query = pickQuery.trim();
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (event: MouseEvent) => { if (!box.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || query.length < 2) { setHits([]); setLooking(false); return; }
-    const control = new AbortController();
-    const timer = window.setTimeout(() => {
-      setLooking(true);
-      fetch(`/api/factory/products?q=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` }, signal: control.signal })
-        .then(response => response.ok ? response.json() : { items: [] })
-        .then(body => setHits(Array.isArray(body.items) ? body.items : []))
-        .catch(error => { if (error?.name !== 'AbortError') setHits([]); })
-        .finally(() => { if (!control.signal.aborted) setLooking(false); });
-    }, 180);
-    return () => { window.clearTimeout(timer); control.abort(); };
-  }, [open, query, token]);
-
-  const choose = (item: CatalogHit) => {
-    const typed = line.productCode.trim();
-    const picked = query.replace(/\D/g, '');
-    const keep = typed && item.name.includes(typed) ? typed : picked && item.name.includes(picked) ? picked : typed;
-    onChange({ productId: '', productName: '', productCode: keep, barcode: '', size: sizeOf(item.name) || line.size });
-    setOpen(false);
-  };
-
-  return <div className="yx-pick" ref={box}>
-    <div className="yx-pick-row">
-      <input className="input" inputMode="numeric" value={line.productCode} onChange={event => onChange({ productCode: digits(event.target.value), productId: '', productName: '', barcode: '' })}/>
-      <button type="button" className="icon-btn yx-pick-btn" aria-label={t('zavod.pick')} aria-expanded={open} onClick={() => setOpen(value => !value)}><ChevronDown size={16}/></button>
-    </div>
-    {line.productName && <p className="yx-picked">{line.productName}{line.barcode ? ` · ${line.barcode}` : ''}</p>}
-    {open && <div className="yx-pick-list" role="listbox">
-      <input className="input" value={pickQuery} onChange={event => setPickQuery(event.target.value)} placeholder={t('zavod.search')} autoFocus/>
-      {query.length < 2 ? <p>{t('zavod.pickHint')}</p> : looking ? <p>{t('common.loading')}</p> : hits.length ? hits.map(item => <button type="button" key={item.id} onClick={() => choose(item)}><b>{item.code || item.article || '—'}</b><span>{item.name}{item.barcode ? ` · ${item.barcode}` : ''}</span></button>) : <p>{t('zavod.noMatch')}</p>}
-    </div>}
-  </div>;
-}
