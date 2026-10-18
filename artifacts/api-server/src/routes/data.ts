@@ -424,7 +424,8 @@ router.post("/products", async (req, res, next) => {
       Premium: som(req.body?.pricePremium),
       Standard: som(req.body?.priceStandard),
     };
-    if (name.length < 2 || Object.values(prices).some((price) => Number.isNaN(price))) {
+    const cost = som(req.body?.cost);
+    if (name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
       res.status(400).json({ error: "rejected" });
       return;
     }
@@ -457,7 +458,7 @@ router.post("/products", async (req, res, next) => {
       }
     }
     const quoted = (Object.entries(prices) as Array<[string, number | null]>).filter((entry): entry is [string, number] => entry[1] != null);
-    if (quoted.length > 0) {
+    if (quoted.length > 0 || cost != null) {
       const [priceTypes, currencies] = await Promise.all([
         moysklad<Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>>("/context/companysettings/pricetype"),
         moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
@@ -471,7 +472,8 @@ router.post("/products", async (req, res, next) => {
         res.status(400).json({ error: "rejected" });
         return;
       }
-      payload.salePrices = salePrices;
+      if (salePrices.length > 0) payload.salePrices = salePrices;
+      if (cost != null) payload.buyPrice = { value: Math.round(cost * 100), currency: { meta: currency } };
     }
     const created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
     addCatalogProduct({
@@ -488,7 +490,7 @@ router.post("/products", async (req, res, next) => {
       imageUrl: null,
       stock: 0,
       available: 0,
-      cost: null,
+      cost,
       salePrice: prices.Exclusive ?? prices.Premium ?? prices.Standard,
       lastSale: null,
       lastReceipt: null,

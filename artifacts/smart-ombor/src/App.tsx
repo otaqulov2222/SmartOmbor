@@ -6,7 +6,7 @@ import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
-  CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList,
+  CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck, ClipboardList,
   Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   UserRound, Users, Wallet, Warehouse, X,
@@ -280,8 +280,10 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
-        {primaryHrefs.map(href => navItem(href))}
-        <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more"><MoreHorizontal size={18} strokeWidth={1.9}/><span>{t('nav.more')}</span><ChevronDown size={16} className="nav-more-chevron"/></button>
+        <div className="nav-primary">
+          {primaryHrefs.map(href => navItem(href))}
+          <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
+        </div>
         {moreOpen && <div className="nav-more-panel">{moreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
       <div className="sidebar-bottom">
@@ -442,6 +444,79 @@ function DashboardPage() {
 }
 
 /* ---------- products ---------- */
+const PRODUCT_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'] as const;
+
+function moneyDigits(value: string) {
+  return value.replace(/[^\d]/g, '');
+}
+
+function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (name: string) => void }) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '', cost: '', size: '' });
+  const [saving, setSaving] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [folderId, setFolderId] = useState('');
+  const [supplierQuery, setSupplierQuery] = useState('');
+  const [supplierHits, setSupplierHits] = useState<Array<{ id: string; name: string }>>([]);
+  const [supplierId, setSupplierId] = useState('');
+  const [supplierName, setSupplierName] = useState('');
+  useEffect(() => {
+    void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
+  }, []);
+  useEffect(() => {
+    const text = supplierQuery.trim();
+    if (text.length < 2) { setSupplierHits([]); return; }
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/products/suppliers?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => setSupplierHits(Array.isArray(data.items) ? data.items.slice(0, 6) : [])).catch(() => setSupplierHits([]));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [supplierQuery]);
+  const saveProduct = async () => {
+    let name = draft.name.trim();
+    if (name.length < 2) return;
+    if (draft.size && !name.includes(draft.size)) name = `${name} ${draft.size}`;
+    const amount = (value: string) => value.trim() ? Number(value) : null;
+    const priceExclusive = amount(draft.priceExclusive);
+    const pricePremium = amount(draft.pricePremium);
+    const priceStandard = amount(draft.priceStandard);
+    const cost = amount(draft.cost);
+    if ([priceExclusive, pricePremium, priceStandard, cost].some(price => price != null && (!Number.isFinite(price) || price < 0))) {
+      setAddError(t('products.addFailed'));
+      return;
+    }
+    setSaving(true);
+    setAddError('');
+    try {
+      const response = await fetch('/api/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, code: draft.code.trim(), article: draft.article.trim(), priceExclusive, pricePremium, priceStandard, cost, barcode: draft.barcode.trim(), folderId, supplierId }) });
+      if (!response.ok) throw new Error(t('products.addFailed'));
+      onSaved(name);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : t('products.addFailed'));
+    } finally { setSaving(false); }
+  };
+  const setText = (key: 'name' | 'code' | 'article' | 'barcode') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: event.target.value }));
+  const setMoney = (key: 'priceExclusive' | 'pricePremium' | 'priceStandard' | 'cost') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: moneyDigits(event.target.value) }));
+  return createPortal(<div className="backdrop" onClick={() => { if (!saving) onClose(); }}><form className="modal product-add" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title">
+    <div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div>
+    <div className="form-grid">
+      <label className="field span-2">{t('products.field.name')}<TextInput testId="input-product-name" value={draft.name} onChange={setText('name')} autoFocus required/></label>
+      <label className="field">{t('products.field.code')}<TextInput testId="input-product-code" value={draft.code} onChange={setText('code')}/></label>
+      <label className="field">{t('products.field.article')}<TextInput testId="input-product-article" value={draft.article} onChange={setText('article')}/></label>
+      <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+      <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')}/></label>
+      <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={setMoney('cost')}/></label>
+      <label className="field">{t('products.field.priceExclusive')}<TextInput testId="input-product-price-exclusive" inputMode="numeric" value={draft.priceExclusive} onChange={setMoney('priceExclusive')}/></label>
+      <label className="field">{t('products.field.pricePremium')}<TextInput testId="input-product-price-premium" inputMode="numeric" value={draft.pricePremium} onChange={setMoney('pricePremium')}/></label>
+      <label className="field">{t('products.field.priceStandard')}<TextInput testId="input-product-price-standard" inputMode="numeric" value={draft.priceStandard} onChange={setMoney('priceStandard')}/></label>
+      <label className="field">{t('products.field.folder')}<select className="input" value={folderId} onChange={event => setFolderId(event.target.value)} data-testid="select-product-folder"><option value="">{t('products.folderEmpty')}</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <label className="field">{t('products.field.supplier')}<input className="input" value={supplierName || supplierQuery} placeholder={t('products.supplierSearch')} onChange={event => { setSupplierId(''); setSupplierName(''); setSupplierQuery(event.target.value); }} data-testid="input-product-supplier"/>{supplierHits.length > 0 && <ul className="suggest">{supplierHits.map(item => <li key={item.id}><button type="button" onClick={() => { setSupplierId(item.id); setSupplierName(item.name); setSupplierHits([]); }}>{item.name}</button></li>)}</ul>}</label>
+    </div>
+    {addError && <p className="error-text" data-testid="status-product-add-error">{addError}</p>}
+    <div className="form-actions"><Button testId="button-save-product" type="submit" disabled={saving || draft.name.trim().length < 2}>{saving ? t('products.saving') : t('products.saved')}</Button><Button variant="secondary" testId="button-cancel-product" disabled={saving} onClick={onClose}>{t('common.cancel')}</Button></div>
+  </form></div>, document.body);
+}
+
 function ProductsPage() {
   const { t, fmt, money } = useI18n(); const unit = useUnit();
   const urlQuery = new URLSearchParams(useSearch() || window.location.search);
@@ -465,57 +540,7 @@ function ProductsPage() {
   const q = useListProducts(params); const cache = useQueryClient();
   const dash = useGetDashboard(); const sync = useSyncMoysklad();
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
-  const [saving, setSaving] = useState(false);
-  const [addError, setAddError] = useState('');
-  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
-  const [folderId, setFolderId] = useState('');
-  const [supplierQuery, setSupplierQuery] = useState('');
-  const [supplierHits, setSupplierHits] = useState<Array<{ id: string; name: string }>>([]);
-  const [supplierId, setSupplierId] = useState('');
-  const [supplierName, setSupplierName] = useState('');
-  useEffect(() => {
-    if (!adding) return;
-    void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
-  }, [adding]);
-  useEffect(() => {
-    const text = supplierQuery.trim();
-    if (text.length < 2) { setSupplierHits([]); return; }
-    const timer = window.setTimeout(() => {
-      void fetch(`/api/products/suppliers?search=${encodeURIComponent(text)}`).then(response => response.json()).then(data => setSupplierHits(Array.isArray(data.items) ? data.items : [])).catch(() => setSupplierHits([]));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [supplierQuery]);
   const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
-  const saveProduct = async () => {
-    const name = draft.name.trim();
-    if (name.length < 2) return;
-    const amount = (value: string) => value.trim() ? Number(value.replace(/\s/g, '').replace(',', '.')) : null;
-    const priceExclusive = amount(draft.priceExclusive);
-    const pricePremium = amount(draft.pricePremium);
-    const priceStandard = amount(draft.priceStandard);
-    if ([priceExclusive, pricePremium, priceStandard].some(price => price != null && (!Number.isFinite(price) || price < 0))) {
-      setAddError(t('products.addFailed'));
-      return;
-    }
-    setSaving(true);
-    setAddError('');
-    try {
-      const response = await fetch('/api/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, code: draft.code.trim(), article: draft.article.trim(), priceExclusive, pricePremium, priceStandard, barcode: draft.barcode.trim(), folderId, supplierId }) });
-      if (!response.ok) throw new Error(t('products.addFailed'));
-      setAdding(false);
-      setDraft({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '' });
-      setFolderId('');
-      setSupplierId('');
-      setSupplierName('');
-      setSupplierQuery('');
-      setSearch(name);
-      setPage(1);
-      void cache.invalidateQueries();
-    } catch (error) {
-      setAddError(error instanceof Error ? error.message : t('products.addFailed'));
-    } finally { setSaving(false); }
-  };
   return <>
     <PageHead title={t('products.title')}/>
     {dash.data && <div className="product-kpis">
@@ -524,12 +549,12 @@ function ProductsPage() {
       <div><span>{t('status.non_moving')}</span><b>{fmt(dash.data.nonMovingCount)}</b></div>
       <div><span>{t('dash.kpi.value')}</span><b>{money(dash.data.stockValue)}</b></div>
     </div>}
-    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button testId="button-add-product" onClick={() => { setAddError(''); setAdding(true); }}><Plus size={15}/>{t('products.add')}</Button><Button variant="secondary" testId="button-products-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
+    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button testId="button-add-product" onClick={() => setAdding(true)}><Plus size={15}/>{t('products.add')}</Button><Button variant="secondary" testId="button-products-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
     <QueryError q={q} id="products"/>
     <Card className="table-card" title={t('products.catalog')} meta={q.data ? t('products.results', { count: fmt(q.data.total) }) : ''}>
       {q.isLoading ? <LoadingRows/> : q.data?.items.length ? <><ProductTable products={q.data.items} onOpen={setSelected}/><div className="pager"><span>{t('products.range', { total: fmt(q.data.total), from: fmt(Math.min((page - 1) * q.data.pageSize + 1, q.data.total)), to: fmt(Math.min(page * q.data.pageSize, q.data.total)) })}</span><div className="pager-nav"><button className="icon-btn" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label={t('common.prevPage')} data-testid="button-products-prev"><ChevronLeft size={17}/></button><span>{page}</span><button className="icon-btn" disabled={page * q.data.pageSize >= q.data.total} onClick={() => setPage(page + 1)} aria-label={t('common.nextPage')} data-testid="button-products-next"><ChevronRight size={17}/></button></div></div></> : <EmptyState title={search ? t('products.empty.search') : t('products.empty.title')} body={search ? t('products.empty.searchBody') : t('products.empty.body')}/>}
     </Card>
-    {adding && createPortal(<div className="backdrop" onClick={() => { if (!saving) setAdding(false); }}><form className="modal" onClick={e => e.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title"><div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={() => setAdding(false)} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div><label className="field">{t('products.field.name')}<TextInput testId="input-product-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} autoFocus required/></label><label className="field">{t('products.field.code')}<TextInput testId="input-product-code" value={draft.code} onChange={event => setDraft(current => ({ ...current, code: event.target.value }))}/></label><label className="field">{t('products.field.article')}<TextInput testId="input-product-article" value={draft.article} onChange={event => setDraft(current => ({ ...current, article: event.target.value }))}/></label><label className="field">{t('products.field.priceExclusive')}<TextInput testId="input-product-price-exclusive" inputMode="decimal" value={draft.priceExclusive} onChange={event => setDraft(current => ({ ...current, priceExclusive: event.target.value }))}/></label><label className="field">{t('products.field.pricePremium')}<TextInput testId="input-product-price-premium" inputMode="decimal" value={draft.pricePremium} onChange={event => setDraft(current => ({ ...current, pricePremium: event.target.value }))}/></label><label className="field">{t('products.field.priceStandard')}<TextInput testId="input-product-price-standard" inputMode="decimal" value={draft.priceStandard} onChange={event => setDraft(current => ({ ...current, priceStandard: event.target.value }))}/></label><label className="field">{t('products.field.folder')}<select className="input" value={folderId} onChange={event => setFolderId(event.target.value)}><option value="">{t('products.folderEmpty')}</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label><label className="field">{t('products.field.supplier')}<input className="input" value={supplierName || supplierQuery} placeholder={t('products.supplierSearch')} onChange={event => { setSupplierId(''); setSupplierName(''); setSupplierQuery(event.target.value); }} />{supplierHits.map(item => <button key={item.id} type="button" className="btn btn-secondary btn-sm" onClick={() => { setSupplierId(item.id); setSupplierName(item.name); setSupplierHits([]); }}>{item.name}</button>)}</label><label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" value={draft.barcode} onChange={event => setDraft(current => ({ ...current, barcode: event.target.value }))}/></label>{addError && <p className="error-text" data-testid="status-product-add-error">{addError}</p>}<div className="form-actions"><Button testId="button-save-product" type="submit" disabled={saving || draft.name.trim().length < 2}>{saving ? t('products.saving') : t('products.saved')}</Button><Button variant="secondary" testId="button-cancel-product" disabled={saving} onClick={() => setAdding(false)}>{t('common.cancel')}</Button></div></form></div>, document.body)}
+    {adding && <ProductAddDialog onClose={() => setAdding(false)} onSaved={name => { setAdding(false); setSearch(name); setPage(1); void cache.invalidateQueries(); }}/>}
     {selected && createPortal(<div className="backdrop" onClick={() => setSelected(null)}><div className="modal product-modal" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="product-detail-title"><div className="modal-top"><div><p className="eyebrow">{t('products.detail')}</p><h2 id="product-detail-title">{selected.name}</h2></div><button className="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')} data-testid="button-close-product"><X size={18}/></button></div>
       <div className="product-sheet">{selected.imageUrl ? <img src={selected.imageUrl} alt=""/> : <span className="product-sheet-empty"><Package size={28}/></span>}<div><Badge value={selected.stockStatus}/><p className="muted">{[selected.code, selected.article].filter(Boolean).join(' · ') || t('common.noCode')}</p></div></div>
       <div className="detail-grid">
@@ -1020,6 +1045,7 @@ function ReportsPage() {
 type AccessAccount = { id: string; name: string; login: string; password: string; role: string };
 function AccessPanel() {
   const { t, fmt } = useI18n(); const roleLabel = useRole();
+  const [, setLocation] = useLocation();
   const session = readLocalSession();
   const [rows, setRows] = useState<AccessAccount[]>([]);
   const [name, setName] = useState('');
@@ -1028,6 +1054,8 @@ function AccessPanel() {
   const [role, setRole] = useState('worker');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(false);
   const headers = { authorization: `Bearer ${session?.token || ''}`, 'content-type': 'application/json' };
   const load = async () => {
     const response = await fetch('/api/local-accounts', { headers });
@@ -1040,7 +1068,13 @@ function AccessPanel() {
     setBusy(true); setNote('');
     const response = await fetch('/api/local-accounts', { method: 'POST', headers, body: JSON.stringify({ name, login, password, role }) });
     setBusy(false);
-    if (response.status === 401 || response.status === 403) { setNote(t('auth.invalid')); return; }
+    if (response.status === 401) {
+      sessionStorage.removeItem(LOCAL_SESSION);
+      setNote(t('auth.sessionExpired'));
+      window.setTimeout(() => setLocation('/'), 900);
+      return;
+    }
+    if (response.status === 403) { setNote(t('auth.invalid')); return; }
     if (response.status === 409) { setNote(t('auth.accessExists')); return; }
     if (!response.ok) { setNote(t('auth.accessShort')); return; }
     setRows(await response.json());
@@ -1057,11 +1091,30 @@ function AccessPanel() {
         <Field label={t('auth.login')} testId="field-access-login"><TextInput testId="input-access-login" value={login} onChange={event => setLogin(event.target.value)} autoComplete="off"/></Field>
         <Field label={t('auth.password')} testId="field-access-password"><PasswordField value={password} onChange={setPassword} testId="input-access-password" autoComplete="new-password"/></Field>
         <Field label={t('auth.accessRole')} testId="field-access-role"><SelectInput value={role} onChange={setRole} testId="select-access-role">{accessRoles.map(item => <option key={item} value={item}>{roleLabel(item)}</option>)}</SelectInput></Field>
+        <div className="form-actions span-2 access-create"><Button testId="button-access-create" type="submit" disabled={busy}>{busy ? t('common.saving') : t('auth.accessCreate')}</Button></div>
       </div>
-      <div className="form-actions"><Button testId="button-access-create" type="submit" disabled={busy}>{busy ? t('common.saving') : t('auth.accessCreate')}</Button></div>
     </form>
     {note && <Notice kind="error" title={note} testId="status-access-error"/>}
-    <ul className="user-list">{rows.map(account => <li className="user-row" key={account.id} data-testid={`row-access-${account.id}`}><span className="avatar">{account.name.slice(0, 2).toUpperCase()}</span><span className="user-copy"><b>{account.name}</b><small>{account.login} · <span className="access-pass">{account.password}</span></small></span><span className="chip">{roleLabel(account.role)}</span>{account.login !== 'bordouzadmin' && account.login !== session?.login && <Button variant="danger" size="sm" testId={`button-access-delete-${account.id}`} onClick={() => { void remove(account.id); }}>{t('auth.accessDelete')}</Button>}</li>)}</ul>
+    <ul className="user-list">{rows.map(account => {
+      const open = openId === account.id;
+      return <li className={`access-item ${open ? 'is-open' : ''}`} key={account.id} data-testid={`row-access-${account.id}`}>
+        <div className="user-row">
+          <button type="button" className="access-main" aria-expanded={open} onClick={() => { setOpenId(open ? null : account.id); setReveal(true); }} data-testid={`button-access-open-${account.id}`}>
+            <span className="avatar">{account.name.slice(0, 2).toUpperCase()}</span>
+            <span className="user-copy"><b>{account.name}</b><small>{account.login}</small></span>
+            <ChevronRight size={16} className="chev"/>
+          </button>
+          <span className="chip">{roleLabel(account.role)}</span>
+          {account.login !== 'bordouzadmin' && account.login !== session?.login && <Button variant="danger" size="sm" testId={`button-access-delete-${account.id}`} onClick={() => { void remove(account.id); }}>{t('auth.accessDelete')}</Button>}
+        </div>
+        {open && <dl className="access-detail">
+          <div><dt>{t('auth.accessName')}</dt><dd>{account.name}</dd></div>
+          <div><dt>{t('auth.login')}</dt><dd>{account.login}</dd></div>
+          <div><dt>{t('auth.password')}</dt><dd className="access-pass-line"><span className="access-pass">{reveal ? account.password : '•'.repeat(Math.max(account.password.length, 4))}</span><button type="button" className="icon-btn" aria-label={reveal ? t('auth.hidePassword') : t('auth.showPassword')} onClick={() => setReveal(value => !value)} data-testid={`button-access-reveal-${account.id}`}>{reveal ? <EyeOff size={16}/> : <Eye size={16}/>}</button></dd></div>
+          <div><dt>{t('auth.accessRole')}</dt><dd>{roleLabel(account.role)}</dd></div>
+        </dl>}
+      </li>;
+    })}</ul>
   </Card>;
 }
 function SettingsPage() {

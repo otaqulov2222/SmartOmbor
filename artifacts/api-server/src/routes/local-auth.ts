@@ -9,7 +9,7 @@ const FILE = dataFile("accounts.json");
 const ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "branch_manager", "analyst", "accountant", "worker"] as const;
 
 type Account = { id: string; name: string; login: string; password: string; role: (typeof ROLES)[number] };
-type Store = { secret: string; accounts: Account[] };
+type Store = { secret: string; accounts: Account[]; sessions: Record<string, string> };
 
 const sessions = new Map<string, string>();
 
@@ -29,13 +29,16 @@ function write(store: Store) {
 function read(): Store {
   try {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
-    if (parsed.secret && Array.isArray(parsed.accounts)) return { secret: parsed.secret, accounts: parsed.accounts };
+    if (parsed.secret && Array.isArray(parsed.accounts)) {
+      return { secret: parsed.secret, accounts: parsed.accounts, sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {} };
+    }
   } catch {
     /* first run */
   }
   const store: Store = {
     secret: randomBytes(24).toString("base64url"),
     accounts: [{ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" }],
+    sessions: {},
   };
   write(store);
   return store;
@@ -51,6 +54,26 @@ function ensureAdmin(store: Store) {
   }
   store.accounts.unshift({ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" });
 }
+
+function remember(token: string, login: string) {
+  sessions.set(token, login);
+  const store = read();
+  store.sessions[token] = login;
+  write(store);
+}
+
+function forgetLogin(login: string) {
+  const store = read();
+  for (const [token, owner] of sessions) {
+    if (owner !== login) continue;
+    sessions.delete(token);
+    delete store.sessions[token];
+  }
+  write(store);
+}
+
+const loaded = read();
+for (const [token, login] of Object.entries(loaded.sessions)) sessions.set(token, login);
 
 function actor(req: Request): Account | null {
   const header = req.header("authorization") || "";
@@ -85,7 +108,7 @@ router.post("/local-login", (req, res) => {
     return;
   }
   const token = randomBytes(24).toString("base64url");
-  sessions.set(token, account.login);
+  remember(token, account.login);
   res.json({ token, name: account.name, login: account.login, role: account.role });
 });
 
@@ -125,7 +148,7 @@ router.delete("/local-accounts/:id", (req, res) => {
   }
   store.accounts = store.accounts.filter((account) => account.id !== target.id);
   write(store);
-  for (const [token, login] of sessions) if (login === target.login) sessions.delete(token);
+  forgetLogin(target.login);
   res.json(store.accounts.map(({ id, name, login, password, role }) => ({ id, name, login, password, role })));
 });
 
