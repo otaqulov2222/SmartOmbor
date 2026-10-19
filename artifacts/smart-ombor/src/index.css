@@ -914,8 +914,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .yx-sheet { border: 1px solid var(--line); border-radius: var(--r-md); overflow-x: auto; background: #fff; }
 .yx-sheet-head, .yx-sheet-row { display: grid; grid-template-columns: 2.2rem 4.8rem minmax(5.6rem, .7fr) minmax(7.2rem, .9fr) minmax(6.4rem, .8fr) minmax(5.6rem, .7fr) minmax(5rem, .6fr) minmax(4.4rem, .5fr) minmax(5.4rem, .65fr) minmax(6.8rem, .8fr) 2.2rem; gap: .4rem; align-items: center; min-width: 68rem; padding: .45rem .55rem; }
 .yx-brand { color: var(--brand-ink); font-size: .92rem; letter-spacing: -.02em; }
-.factory-sheet { width: max-content; max-width: 100%; }
-.factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { grid-template-columns: 2.4rem 5.4rem 7rem 7.6rem 5.4rem 8rem 9.4rem 2.2rem; width: max-content; min-width: 0; gap: .5rem; justify-content: start; }
+.factory-sheet { width: 100%; }
+.factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { grid-template-columns: 2.4rem 5.4rem 7.2rem minmax(7rem, 1fr) minmax(5.5rem, 1fr) minmax(7.5rem, 1fr) minmax(8.5rem, 1.15fr) 2.2rem; width: 100%; min-width: 52rem; gap: .65rem; }
 .yx-sheet-head { background: #f4f7fb; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .03em; }
 .yx-sheet-row + .yx-sheet-row { border-top: 1px solid var(--line); }
 .yx-sheet-row > b { width: 1.8rem; height: 1.8rem; display: grid; place-items: center; border-radius: .45rem; background: var(--brand-soft); color: var(--brand-ink); font-size: .78rem; }
@@ -1013,7 +1013,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .yx-totals, .cabinet-kpis { grid-template-columns: 1fr 1fr; }
   .yx-history-lines li { grid-template-columns: 1fr 1fr; }
   .yx-sheet-head, .yx-sheet-row { min-width: 68rem; }
-  .factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { min-width: 0; width: max-content; }
+  .factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { min-width: 52rem; width: 100%; }
 }
 @media (max-width: 560px) {
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 12; }
