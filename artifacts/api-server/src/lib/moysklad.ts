@@ -65,7 +65,7 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
   return (await response.json()) as T;
 }
 
-const MAX_IN_FLIGHT = 4;
+const MAX_IN_FLIGHT = 2;
 let inFlight = 0;
 const waiters: Array<() => void> = [];
 
@@ -88,35 +88,49 @@ function freeSlot() {
   if (next) next();
 }
 
+function networkFailure(error: unknown): boolean {
+  if (!(error instanceof Error) || error instanceof MoySkladError) return false;
+  const cause = error.cause as { code?: string } | undefined;
+  return error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
+}
+
 export async function moysklad<T>(path: string): Promise<T> {
   const token = moyskladToken();
   if (!token) {
     throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   }
 
-  await takeSlot();
-  try {
-    const response = await fetch(`${BASE}${path}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json;charset=utf-8",
-        "Accept-Encoding": "gzip",
-      },
-    });
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await takeSlot();
+    try {
+      const response = await fetch(`${BASE}${path}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json;charset=utf-8",
+          "Accept-Encoding": "gzip",
+        },
+      });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new MoySkladError(
-        `MoySklad ${response.status}: ${body.slice(0, 280)}`,
-        response.status,
-      );
+      if (!response.ok) {
+        const body = await response.text();
+        throw new MoySkladError(
+          `MoySklad ${response.status}: ${body.slice(0, 280)}`,
+          response.status,
+        );
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      last = error;
+      if (!networkFailure(error) || attempt === 2) throw error;
+    } finally {
+      freeSlot();
     }
-
-    return (await response.json()) as T;
-  } finally {
-    freeSlot();
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
   }
+  throw last;
 }
 
 export async function moyskladAll<T>(path: string): Promise<{ rows: T[]; size: number }> {

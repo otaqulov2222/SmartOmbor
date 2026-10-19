@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Banknote, Boxes, Check, ChevronRight, Copy, Download, Eye, EyeOff, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
+import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Download, Eye, EyeOff, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { useListProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
@@ -398,6 +398,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [day, setDay] = useState(todayKey);
   const [openShipment, setOpenShipment] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const [colorFor, setColorFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Shipment | null>(null);
   const [removing, setRemoving] = useState<Shipment | null>(null);
@@ -424,6 +425,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [agentQuery]);
+  useEffect(() => { setCatalogOpen(false); }, [row.name]);
   useEffect(() => {
     setName(row.name);
     setCode(row.account?.code || '');
@@ -667,10 +669,16 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         ))}</div>
       ) : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
     </section>
-    {(products.data?.items?.length ?? 0) > 0 && <section className="card">
-      <div className="card-head"><h2>{t('partners.catalog')}</h2><span className="card-meta">{fmt(products.data?.total ?? products.data?.items?.length ?? 0)}</span></div>
-      <ul className="partner-products">{(products.data?.items ?? []).map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
-      <Link href="/factories" className="link">{t('nav.factories')}</Link>
+    {(products.data?.total ?? products.data?.items?.length ?? 0) > 0 && <section className={`card partner-catalog ${catalogOpen ? 'is-open' : ''}`}>
+      <button type="button" className="partner-catalog-toggle" aria-expanded={catalogOpen} onClick={() => setCatalogOpen(open => !open)}>
+        <h2>{t('partners.catalog')}</h2>
+        <span className="card-meta">{fmt(products.data?.total ?? products.data?.items?.length ?? 0)}</span>
+        {catalogOpen ? <ChevronDown size={18}/> : <ChevronUp size={18}/>}
+      </button>
+      {catalogOpen && <>
+        <ul className="partner-products">{(products.data?.items ?? []).map(product => <li key={product.id}><b>{product.name}</b><small>{product.code || product.article || '—'}</small><span>{fmt(product.stock)}</span></li>)}</ul>
+        <Link href="/factories" className="link">{t('nav.factories')}</Link>
+      </>}
     </section>}
     {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => setPosting(null)} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = false; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">

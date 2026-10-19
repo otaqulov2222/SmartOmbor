@@ -835,6 +835,11 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .portal-link { display: grid; gap: .4rem; justify-items: start; padding: .75rem; border-radius: var(--r-sm); background: var(--surface-2); }
 .portal-link code { font-size: .82rem; color: var(--brand-ink); word-break: break-all; }
 .secret { font-family: ui-monospace, monospace; font-size: 1.05rem; letter-spacing: .04em; margin-top: .2rem; }
+.partner-catalog { gap: 0; }
+.partner-catalog.is-open { gap: .85rem; }
+.partner-catalog-toggle { display: flex; align-items: center; gap: .75rem; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.partner-catalog-toggle h2 { font-size: .98rem; font-weight: 700; }
+.partner-catalog-toggle .card-meta { margin-right: auto; }
 .partner-products { display: grid; gap: .35rem; }
 .partner-products li { display: grid; grid-template-columns: 1fr auto; gap: .15rem .8rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
 .partner-products small { grid-column: 1; color: var(--muted); font-size: .75rem; }
