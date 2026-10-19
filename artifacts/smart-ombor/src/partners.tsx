@@ -150,62 +150,13 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
     <td><input className="input" aria-label={t('zavod.factoryCode')} value={factoryCode} onChange={event => setFactoryCode(event.target.value.replace(/[^0-9A-Za-z]/g, ''))} onBlur={() => commit()}/></td>
     <td><input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
     <td><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
-    <td><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); commit({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td className="waybill-size"><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); commit({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
     <td><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => commit()}/></td>
     <td><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => commit()}/></td>
-    <td><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td className="waybill-type"><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
     <td className="num">{money(preview * asNumber(price))}</td>
   </>;
-}
-
-function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
-  const { t } = useI18n();
-  const [query, setQuery] = useState(line.productCode || '');
-  const [open, setOpen] = useState(false);
-  const [hits, setHits] = useState<Array<{ id: string; name: string; code: string | null; stock: number }>>([]);
-  const [looking, setLooking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const matches = useQuery({
-    queryKey: ['shipment-matches', shipmentId],
-    queryFn: async () => {
-      const response = await fetch(`/api/partner-factories/shipments/${shipmentId}/matches`);
-      if (!response.ok) throw new Error('matches');
-      return response.json() as Promise<{ lines: Array<{ id: string; products: Array<{ id: string; name: string; code: string | null; stock: number }> }> }>;
-    },
-  });
-  useEffect(() => {
-    const text = query.trim();
-    if (text.length < 2) { setHits([]); setLooking(false); return; }
-    const timer = window.setTimeout(() => {
-      setLooking(true);
-      void fetch(`/api/products?search=${encodeURIComponent(text)}&page=1&pageSize=6`).then(response => response.json()).then(data => {
-        const items = Array.isArray(data.items) ? data.items as Array<{ id: string; name: string; code: string | null; stock: number }> : [];
-        setHits(items.map(item => ({ id: item.id, name: item.name, code: item.code, stock: item.stock })));
-      }).catch(() => setHits([])).finally(() => setLooking(false));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [query]);
-  const link = async (productId: string | null) => {
-    setBusy(true);
-    await fetch(`/api/partner-factories/shipments/${shipmentId}/lines/${line.id}/link`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ productId }) });
-    await onChanged();
-    setBusy(false);
-  };
-  const label = linkedLabel(line);
-  if (locked) return label ? <p className="waybill-link"><b>{label}</b></p> : null;
-  if (line.productId) return <div className="waybill-link">{label && <span>{label}</span>}<button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void link(null)}>{t('partners.unlink')}</button></div>;
-  const options = matches.data?.lines.find(item => item.id === line.id)?.products ?? [];
-  const list = hits.length ? hits : options;
-  return <div className="waybill-link">{!open && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>{t('partners.link')}</button>}{open && <input className="input" value={query} placeholder={t('partners.link')} autoFocus onChange={event => setQuery(event.target.value)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} />}{open && list.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" disabled={busy} onMouseDown={event => event.preventDefault()} onClick={() => void link(item.id)}>{item.name}</button>)}{open && !looking && query.trim().length >= 2 && !list.length && <small>{t('partners.noMatch')}</small>}</div>;
-}
-
-function linkedLabel(line: Line) {
-  const name = (line.productName || '').replace(/\s+/g, ' ').trim();
-  const code = (line.productCode || '').trim();
-  if (!name || (code && !new RegExp(`(^|\\D)${code.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}(\\D|$)`).test(name))) return '';
-  if (line.size && !name.includes(line.size)) return '';
-  return name;
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
@@ -689,7 +640,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   return <Fragment key={line.id}>
                     <tr>
                       <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} onSave={patch => saveLine(shipment, line, patch)}/>
-                      <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></td>
+                      <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}</td>
                     </tr>
                     {colorFor === line.id && <tr><td className="waybill-colors" colSpan={11}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;

@@ -877,8 +877,13 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
 .waybill-lines { display: grid; }
 .waybill-scroll { overflow-x: auto; }
-.waybill-table { width: 100%; min-width: 72rem; border-collapse: collapse; font-size: .84rem; }
-.waybill-table .input { height: 2.15rem; min-width: 0; padding: 0 .45rem; }
+.waybill-table { width: 100%; min-width: 64rem; border-collapse: collapse; font-size: .84rem; }
+.waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
+.waybill-table .waybill-size { min-width: 6.8rem; }
+.waybill-table .waybill-size .input { min-width: 6.8rem; }
+.waybill-table .waybill-type { min-width: 9rem; }
+.waybill-table .waybill-type .input { min-width: 9rem; }
+.waybill-table .waybill-line-tools { width: 6.6rem; white-space: nowrap; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .waybill-table th.num, .waybill-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
