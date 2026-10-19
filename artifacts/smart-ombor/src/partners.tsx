@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Download, Eye, EyeOff, Factory, FileSpreadsheet, FileText, KeyRound, Pencil, Plus, Search, Trash2, Truck, X } from 'lucide-react';
 import { Link, useLocation, useSearch } from 'wouter';
-import { useListProducts, useListWarehouses } from '@workspace/api-client-react';
+import { listProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
 import { downloadXlsx, type Sheet } from '@/lib/xlsx';
 
@@ -440,7 +440,17 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       return response.json();
     },
   });
-  const products = useListProducts({ factory: row.name, page: 1, pageSize: 12 });
+  const products = useQuery({
+    queryKey: ['partner-catalog', row.name, catalogOpen],
+    queryFn: async () => {
+      const pageSize = 100;
+      const first = await listProducts({ factory: row.name, page: 1, pageSize: catalogOpen ? pageSize : 1 });
+      if (!catalogOpen || first.total <= first.items.length) return first;
+      const pages = Math.ceil(first.total / pageSize);
+      const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, index) => listProducts({ factory: row.name, page: index + 2, pageSize })));
+      return { ...first, items: [first.items, ...rest.map((page) => page.items)].flat() };
+    },
+  });
   const warehouses = useListWarehouses();
   useEffect(() => {
     const firstStore = warehouses.data?.[0]?.id;
