@@ -677,6 +677,19 @@ export function productBelongsToFactory(product: { name: string; factory: string
   return code.length >= 3 && wholeToken(`${product.factory || ""} ${product.name}`.toLowerCase(), code);
 }
 
+export function matchProductFolder<T extends { name: string }>(folders: T[], groupCode: string): T | null {
+  const code = groupCode.trim();
+  if (code.length < 3) return null;
+  const hits = folders.filter((folder) => wholeToken(folder.name, code));
+  const exact = hits.filter((folder) => folder.name.trim().endsWith(code));
+  const pool = exact.length ? exact : hits;
+  if (pool.length === 1) return pool[0];
+  if (pool.length < 2) return null;
+  const shortest = Math.min(...pool.map((folder) => folder.name.length));
+  const names = pool.filter((folder) => folder.name.length === shortest);
+  return names.length === 1 ? names[0] : null;
+}
+
 export function matchWaybillProduct(
   catalog: Catalog,
   input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },

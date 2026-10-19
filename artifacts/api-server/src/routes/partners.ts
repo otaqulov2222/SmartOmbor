@@ -320,7 +320,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         article: product.article || null,
         barcodes: [],
         factory: account?.name || null,
-        category: null,
+        category: product.folderName || null,
         unit: "шт",
         packType: null,
         packSize: 1,
