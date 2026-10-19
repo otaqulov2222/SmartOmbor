@@ -421,10 +421,12 @@ async function tick() {
     }
     const now = tashkentParts();
     const linked = Boolean(state.chatId || hasTopics);
-    if (linked && now.hour === NOON && state.sentNoonOn !== now.stamp) {
+    const missedEarlier = now.hour > NOON && state.sentNoonOn != null && state.sentNoonOn !== now.stamp;
+    if (linked && now.hour >= NOON && state.sentNoonOn !== now.stamp && (now.hour === NOON || missedEarlier)) {
       await loadCatalog();
-      await sendDigest(state);
-      state.sentNoonOn = now.stamp;
+      const sent = await sendDigest(state);
+      if (sent) state.sentNoonOn = now.stamp;
+      logger.info({ day: now.stamp, sent }, "Daily Telegram digest");
     }
     writeState(state);
   } catch (error) {
