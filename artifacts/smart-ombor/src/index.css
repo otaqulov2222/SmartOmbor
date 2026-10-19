@@ -886,7 +886,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table .waybill-line-tools { width: 6.6rem; white-space: nowrap; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
-.waybill-table th.num, .waybill-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.waybill-table th.num, .waybill-table td.num, .waybill-table .input { text-align: left; font-variant-numeric: tabular-nums; }
 .waybill-table td small { display: block; margin-top: .12rem; color: var(--muted); font-size: .75rem; }
 .color-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
 .color-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .16rem .2rem .16rem .55rem; border-radius: 999px; background: #e8eeff; color: #1e3a8a; font-size: .8rem; font-weight: 750; letter-spacing: .02em; }
