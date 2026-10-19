@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { dataFile } from "./data-dir";
 import { idleDays, loadCatalog, peekCatalog } from "./catalog";
@@ -220,7 +220,7 @@ export function digestParts() {
     const next = `${current}\n\n${card}`;
     if (next.length > 3800) {
       parts.push(current);
-      current = card;
+      current = `<b>Buyurtma, davomi</b>\n\n${card}`;
     } else current = next;
   }
   parts.push(current);
@@ -237,7 +237,7 @@ export function digestParts() {
       const next = `${idleText}\n\n${card}`;
       if (next.length > 3800) {
         parts.push(idleText);
-        idleText = card;
+        idleText = `<b>Turib qolgan, davomi</b>\n\n${card}`;
       } else idleText = next;
     }
     parts.push(idleText);
@@ -296,16 +296,27 @@ async function sendParts(chatId: number, parts: string[], threadId: number | nul
 async function sendDigest(state: TelegramState) {
   const { orders, idle } = orderAndIdleParts();
   const group = state.groupId;
-  const jobs: Promise<boolean>[] = [];
-  if (group && state.orderThreadId) jobs.push(sendParts(group, orders, state.orderThreadId, DOWNLOADS));
-  if (group && state.idleThreadId) jobs.push(sendParts(group, idle, state.idleThreadId, IDLE_DOWNLOADS));
+  const jobs: Array<Promise<boolean>> = [];
+  if (group && state.orderThreadId && orders.length) jobs.push(sendParts(group, orders, state.orderThreadId, DOWNLOADS));
+  if (group && state.idleThreadId && idle.length) jobs.push(sendParts(group, idle, state.idleThreadId, IDLE_DOWNLOADS));
   if (!group && state.chatId) {
-    jobs.push(sendParts(state.chatId, orders, null, DOWNLOADS));
-    jobs.push(sendParts(state.chatId, idle, null, IDLE_DOWNLOADS));
+    if (orders.length) jobs.push(sendParts(state.chatId, orders, null, DOWNLOADS));
+    if (idle.length) jobs.push(sendParts(state.chatId, idle, null, IDLE_DOWNLOADS));
   }
+  logger.info({ orders: orders.length, idle: idle.length }, "Telegram digest parts");
   if (!jobs.length) return false;
   const results = await Promise.all(jobs);
   return results.every(Boolean);
+}
+
+function claimDigest(stamp: string) {
+  const file = dataFile(`digest-${stamp}.lock`);
+  try {
+    writeFileSync(file, String(process.pid), { flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nXabar har kuni soat <b>11:00</b> da keladi. Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.";
@@ -422,10 +433,14 @@ async function tick() {
     const now = tashkentParts();
     const linked = Boolean(state.chatId || hasTopics);
     const missedEarlier = now.hour > NOON && state.sentNoonOn != null && state.sentNoonOn !== now.stamp;
-    if (linked && now.hour >= NOON && state.sentNoonOn !== now.stamp && (now.hour === NOON || missedEarlier)) {
+    const due = linked && now.hour >= NOON && state.sentNoonOn !== now.stamp && (now.hour === NOON || missedEarlier);
+    if (due && claimDigest(now.stamp)) {
       await loadCatalog();
       const sent = await sendDigest(state);
       if (sent) state.sentNoonOn = now.stamp;
+      else {
+        try { unlinkSync(dataFile(`digest-${now.stamp}.lock`)); } catch { /* retry next tick */ }
+      }
       logger.info({ day: now.stamp, sent }, "Daily Telegram digest");
     }
     writeState(state);
@@ -453,7 +468,7 @@ export async function sendIdlePreview() {
 }
 
 export function startTelegramDigest() {
-  if (!token()) return;
+  if (process.env.TELEGRAM_DIGEST !== "vps" || !token()) return;
   void tick();
   const timer = setInterval(() => { void tick(); }, 15_000);
   timer.unref?.();
