@@ -9,7 +9,7 @@ import { orderBasis, orderRecommendations, productTraits } from "./recommendatio
 import { recommendationPdf, recommendationRows, recommendationXlsx } from "./reco-export";
 
 const STATE_FILE = dataFile("telegram.json");
-const NOON = 12;
+const NOON = 11;
 const SITE = "https://smartombor.onrender.com";
 
 interface TelegramState {
@@ -308,7 +308,7 @@ async function sendDigest(state: TelegramState) {
   return results.every(Boolean);
 }
 
-const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nXabar har kuni soat <b>12:00</b> da keladi. Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.";
+const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nXabar har kuni soat <b>11:00</b> da keladi. Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.";
 
 async function sendFile(chatId: number, body: Buffer, filename: string, mime: string, caption: string, threadId?: number | null) {
   const key = token();
