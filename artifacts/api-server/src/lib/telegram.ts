@@ -10,7 +10,7 @@ import { recommendationPdf, recommendationRows, recommendationXlsx } from "./rec
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
-const SITE = "https://smartombor.onrender.com";
+const SITE = "https://bordoombor.uz";
 
 interface TelegramState {
   chatId: number | null;
