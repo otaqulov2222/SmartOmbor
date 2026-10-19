@@ -4,25 +4,24 @@ import { useI18n, type Lang } from '@/i18n';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
-type Line = { id: string; factoryCode: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[] };
+type Line = { id: string; factoryCode: string; sectionCode: string; productCode: string; productName?: string | null; model: string; size: string; pairs: number; boxes: number; quantity: number; price: number; priceType?: string; colors: ColorLine[] };
 type Shipment = { id: string; number: string; date: string; status: string; note?: string; pairs: number; boxes: number; amount: number; lines: Line[] };
-type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; size: string; pairs: string; boxes: string; price: string };
+type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; model: string; size: string; pairs: string; boxes: string; price: string; priceType: string; colors: ColorLine[] };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
-const SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
 
-function blank(): Draft {
-  return { key: Math.random().toString(36).slice(2), factoryCode: '', groupCode: '', productCode: '', size: '', pairs: '', boxes: '', price: '' };
+function blank(factoryCode: string): Draft {
+  return { key: Math.random().toString(36).slice(2), factoryCode, groupCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', price: '', priceType: '', colors: [] };
 }
 
 function started(line: Draft) {
-  return Boolean(line.factoryCode.trim() || line.groupCode.trim() || line.productCode.trim() || line.size.trim() || line.pairs || line.boxes || line.price);
+  return Boolean(line.pairs || line.boxes || line.price);
 }
 
 function withBlank(rows: Draft[]) {
   const last = rows[rows.length - 1];
   const sum = last ? unitsOf(last) * num(last.price) : 0;
-  if (!last || sum > 0) return [...rows, blank()];
+  if (!last || sum > 0) return [...rows, blank(last?.factoryCode || '')];
   return rows;
 }
 
@@ -131,7 +130,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const { t } = useI18n();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
-  const [lines, setLines] = useState<Draft[]>(() => [blank()]);
+  const [lines, setLines] = useState<Draft[]>(() => [blank(account.code)]);
   const [error, setError] = useState('');
   const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
@@ -159,7 +158,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     setEditingStatus(null);
     setDate(new Date().toISOString().slice(0, 10));
     setNote('');
-    setLines([blank()]);
+    setLines([blank(account.code)]);
   };
 
   const beginRevise = (item: Shipment) => {
@@ -172,7 +171,10 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       factoryCode: line.factoryCode || account.code,
       groupCode: line.sectionCode || '',
       productCode: line.productCode,
+      model: line.model || '',
       size: line.size,
+      priceType: line.priceType || '',
+      colors: line.colors ?? [],
       pairs: line.pairs ? String(line.pairs) : '',
       boxes: line.boxes ? String(line.boxes) : '',
       price: line.price ? String(line.price) : '',
@@ -185,22 +187,23 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const submit = async () => {
     const filled = lines.filter(started);
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
-    if (filled.some(line => !line.factoryCode.trim() || !line.groupCode.trim() || !line.productCode.trim())) { setError(t('zavod.needProduct')); return; }
+    if (filled.some(line => num(line.pairs) <= 0 || num(line.boxes) <= 0 || num(line.price) <= 0)) { setError(t('zavod.needQty')); return; }
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
     const payload = filled.map(line => ({
       id: editingId ? line.key : undefined,
-      factoryCode: line.factoryCode.trim(),
+      factoryCode: account.code,
       sectionCode: line.groupCode.trim(),
       productId: null,
       productName: null,
       productCode: line.productCode.trim(),
-      model: '',
+      model: line.model,
       size: line.size.trim(),
       pairs: num(line.pairs),
       boxes: num(line.boxes),
       quantity: 0,
       price: num(line.price),
-      colors: [],
+      priceType: line.priceType,
+      colors: line.colors,
     }));
     setBusy(true); setError(''); setFlash('');
     try {
@@ -272,26 +275,19 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <div><p className="eyebrow">{t('zavod.newDoc')}</p><h2>{t('zavod.title')}</h2></div>
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
-    <div className="yx-sheet">
-      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.groupCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
+    <div className="yx-sheet factory-sheet">
+      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
-        return <div className="yx-sheet-row" key={line.key}>
+        return <div className="yx-sheet-row factory-row" key={line.key}>
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
-          <input className="input" aria-label={t('zavod.factoryCode')} inputMode="numeric" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: digits(e.target.value) })}/>
-          <input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={line.groupCode} onChange={e => patch(line.key, { groupCode: digits(e.target.value) })}/>
-          <input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })}/>
-          <select className="input" aria-label={t('zavod.size')} value={SIZES.includes(line.size) ? line.size : line.size || ''} onChange={e => patch(line.key, { size: e.target.value })}>
-            <option value=""/>
-            {!SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}
-            {SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-          </select>
+          <strong className="yx-brand">{account.code}</strong>
           <input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })}/>
           <input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/>
           <input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })}/>
           <input className="input yx-sum" aria-label={t('zavod.sum')} value={sum ? money(sum) : ''} readOnly/>
-          <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank()]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
+          <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank(account.code)]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
         </div>;
       })}
     </div>

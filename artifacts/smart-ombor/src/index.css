@@ -876,7 +876,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill footer .btn { width: auto; }
 .waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
 .waybill-lines { display: grid; }
-.waybill-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.waybill-scroll { overflow-x: auto; }
+.waybill-table { width: 100%; min-width: 72rem; border-collapse: collapse; font-size: .84rem; }
+.waybill-table .input { height: 2.15rem; min-width: 0; padding: 0 .45rem; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .waybill-table th.num, .waybill-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -907,6 +909,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .yx-sheet { border: 1px solid var(--line); border-radius: var(--r-md); overflow-x: auto; background: #fff; }
 .yx-sheet-head, .yx-sheet-row { display: grid; grid-template-columns: 2.2rem 4.8rem minmax(5.6rem, .7fr) minmax(7.2rem, .9fr) minmax(6.4rem, .8fr) minmax(5.6rem, .7fr) minmax(5rem, .6fr) minmax(4.4rem, .5fr) minmax(5.4rem, .65fr) minmax(6.8rem, .8fr) 2.2rem; gap: .4rem; align-items: center; min-width: 68rem; padding: .45rem .55rem; }
 .yx-brand { color: var(--brand-ink); font-size: .92rem; letter-spacing: -.02em; }
+.factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { grid-template-columns: 2.2rem 4.8rem minmax(6rem, .8fr) minmax(5.2rem, .7fr) minmax(4.6rem, .55fr) minmax(5.6rem, .7fr) minmax(7rem, .85fr) 2.2rem; min-width: 46rem; }
 .yx-sheet-head { background: #f4f7fb; color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .03em; }
 .yx-sheet-row + .yx-sheet-row { border-top: 1px solid var(--line); }
 .yx-sheet-row > b { width: 1.8rem; height: 1.8rem; display: grid; place-items: center; border-radius: .45rem; background: var(--brand-soft); color: var(--brand-ink); font-size: .78rem; }
@@ -1004,6 +1007,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .yx-totals, .cabinet-kpis { grid-template-columns: 1fr 1fr; }
   .yx-history-lines li { grid-template-columns: 1fr 1fr; }
   .yx-sheet-head, .yx-sheet-row { min-width: 68rem; }
+  .factory-sheet .yx-sheet-head, .factory-sheet .yx-sheet-row { min-width: 46rem; }
 }
 @media (max-width: 560px) {
   .yx-grid .span-3, .yx-grid .span-2 { grid-column: span 12; }

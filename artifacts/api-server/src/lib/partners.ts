@@ -18,6 +18,7 @@ export type ShipmentLine = {
   boxes: number;
   quantity: number;
   price: number;
+  priceType: string;
   colors: ColorLine[];
   note: string;
   productId: string | null;
@@ -322,6 +323,7 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     boxes: Math.max(0, Number(raw.boxes) || 0),
     quantity,
     price: Math.max(0, Number(raw.price) || 0),
+    priceType: ["Exclusive", "Premium", "Standard"].includes(String(raw.priceType ?? "")) ? String(raw.priceType) : "",
     colors,
     note: String(raw.note ?? "").trim(),
     productId: raw.productId ? String(raw.productId) : null,
@@ -333,7 +335,7 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   const store = load();
   const account = store.accounts.find((item) => item.id === factoryId);
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
-  const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.productCode && (line.pairs > 0 || line.boxes > 0 || line.quantity > 0));
+  const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   const seq = store.shipments.filter((item) => item.factoryId === factoryId).length + 1;
   const shipment: Shipment = {
@@ -372,14 +374,15 @@ export function updateShipment(id: string, input: { date?: string; note?: string
   const lines = (input.lines ?? []).map((line) => {
     const next = cleanLine(line, account.code);
     const previous = shipment.lines.find((item) => item.id === line.id);
+    if (previous) next.id = previous.id;
     if (!previous?.productId) return next;
-    const same = previous.productCode === next.productCode && previous.model === next.model && previous.size === next.size;
+    const same = previous.factoryCode === next.factoryCode && previous.sectionCode === next.sectionCode && previous.productCode === next.productCode && previous.model === next.model && previous.size === next.size;
     if (!same) return next;
     next.id = previous.id;
     next.productId = previous.productId;
     next.productName = previous.productName;
     return next;
-  }).filter((line) => line.productCode);
+  }).filter((line) => line.productCode || line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   if (input.date) shipment.date = String(input.date).slice(0, 10);

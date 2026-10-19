@@ -11,9 +11,11 @@ type Account = { id: string; name: string; code: string; catalogName: string; lo
 type ColorLine = { name: string; quantity: number };
 type Line = {
   id: string; factoryCode: string; sectionCode: string; productCode: string; model: string; size: string;
-  pairs: number; boxes: number; quantity: number; price: number; colors: ColorLine[]; note: string;
+  pairs: number; boxes: number; quantity: number; price: number; priceType?: string; colors: ColorLine[]; note: string;
   productId?: string | null; productName?: string | null;
 };
+const PRICE_TYPES = ['Exclusive', 'Standard', 'Premium'] as const;
+const LINE_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
 function todayKey() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -32,6 +34,7 @@ function portalUrl() {
 
 type DraftLine = {
   key: string;
+  factoryCode: string;
   sectionCode: string;
   productCode: string;
   model: string;
@@ -40,12 +43,14 @@ type DraftLine = {
   boxes: string;
   quantity: string;
   price: string;
+  priceType: string;
   colors: { name: string; quantity: string }[];
 };
 
 function draftFrom(line: Line): DraftLine {
   return {
     key: line.id,
+    factoryCode: line.factoryCode,
     sectionCode: line.sectionCode,
     productCode: line.productCode,
     model: line.model,
@@ -54,12 +59,13 @@ function draftFrom(line: Line): DraftLine {
     boxes: line.boxes ? String(line.boxes) : '',
     quantity: line.quantity ? String(line.quantity) : '',
     price: line.price ? String(line.price) : '',
+    priceType: line.priceType || '',
     colors: (line.colors ?? []).length ? (line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }],
   };
 }
 
 function blankDraft(): DraftLine {
-  return { key: Math.random().toString(36).slice(2), sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', colors: [{ name: '', quantity: '' }] };
+  return { key: Math.random().toString(36).slice(2), factoryCode: '', sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', priceType: '', colors: [{ name: '', quantity: '' }] };
 }
 
 function asNumber(value: string) {
@@ -84,6 +90,73 @@ function receiptParts(line: Line) {
   if (total <= 0) return [];
   if (!colors.length) return [{ color: null, quantity: total }];
   return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity }));
+}
+
+function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
+  const { t, fmt, money } = useI18n();
+  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+  const [factoryCode, setFactoryCode] = useState(line.factoryCode || '');
+  const [sectionCode, setSectionCode] = useState(line.sectionCode || '');
+  const [productCode, setProductCode] = useState(line.productCode || '');
+  const [size, setSize] = useState(line.size || '');
+  const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
+  const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
+  const [price, setPrice] = useState(line.price ? String(line.price) : '');
+  const [priceType, setPriceType] = useState(line.priceType || '');
+  useEffect(() => {
+    setFactoryCode(line.factoryCode || '');
+    setSectionCode(line.sectionCode || '');
+    setProductCode(line.productCode || '');
+    setSize(line.size || '');
+    setPairs(line.pairs ? String(line.pairs) : '');
+    setBoxes(line.boxes ? String(line.boxes) : '');
+    setPrice(line.price ? String(line.price) : '');
+    setPriceType(line.priceType || '');
+  }, [line]);
+  const chips = colors.length > 0 ? <span className="color-chips">{colors.map(color => <span className="color-chip" key={`${color.name}-${color.quantity}`}><b>{color.name.toLocaleUpperCase('ru-RU')}</b><i>{fmt(color.quantity)}</i></span>)}</span> : null;
+  const preview = lineUnits({ ...line, pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
+  const commit = (next?: Partial<Line>) => {
+    const patch: Partial<Line> = {
+      factoryCode: factoryCode.trim(),
+      sectionCode: sectionCode.trim(),
+      productCode: productCode.trim(),
+      size,
+      pairs: asNumber(pairs),
+      boxes: asNumber(boxes),
+      price: asNumber(price),
+      priceType,
+      ...next,
+    };
+    const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && (patch.priceType || '') === (line.priceType || '');
+    if (unchanged) return;
+    void onSave(patch);
+  };
+  if (locked) {
+    return <>
+      <td><b>Bordo</b>{chips}</td>
+      <td>{line.factoryCode || '—'}</td>
+      <td>{line.sectionCode || '—'}</td>
+      <td><b>{line.productCode || '—'}</b></td>
+      <td>{line.size || '—'}</td>
+      <td className="num">{fmt(line.pairs)}</td>
+      <td className="num">{fmt(line.boxes)}</td>
+      <td className="num">{line.price ? money(line.price) : '—'}</td>
+      <td>{line.priceType || '—'}</td>
+      <td className="num">{money(lineUnits(line) * line.price)}</td>
+    </>;
+  }
+  return <>
+    <td><b>Bordo</b>{chips}</td>
+    <td><input className="input" aria-label={t('zavod.factoryCode')} value={factoryCode} onChange={event => setFactoryCode(event.target.value.replace(/[^0-9A-Za-z]/g, ''))} onBlur={() => commit()}/></td>
+    <td><input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
+    <td><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
+    <td><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); commit({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => commit()}/></td>
+    <td><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
+    <td><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => commit()}/></td>
+    <td><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td className="num">{money(preview * asNumber(price))}</td>
+  </>;
 }
 
 function LineLink({ shipmentId, line, locked, onChanged }: { shipmentId: string; line: Line; locked: boolean; onChanged: () => Promise<void> }) {
@@ -160,17 +233,21 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
-  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.product'), t('zavod.size'), t('zavod.pairs'), t('zavod.boxes'), t('zavod.price'), t('zavod.colors'), t('zavod.sum')];
+  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.brand'), t('zavod.factoryCode'), t('zavod.groupCode'), t('zavod.product'), t('zavod.size'), t('zavod.pairs'), t('zavod.boxes'), t('zavod.price'), t('zavod.priceType'), t('zavod.colors'), t('zavod.sum')];
   const excel = () => {
     const rows = shipments.flatMap(shipment => shipment.lines.map(line => [
       shipment.number,
       date(shipment.date),
       statusLabel(shipment.status, t),
+      'Bordo',
+      line.factoryCode,
+      line.sectionCode,
       line.productCode,
       line.size,
       line.pairs,
       line.boxes,
       line.price,
+      line.priceType || '',
       colorText(line, fmt),
       lineUnits(line) * line.price,
     ]));
@@ -180,8 +257,8 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   };
   const pdf = () => {
     const blocks = shipments.map(shipment => {
-      const body = shipment.lines.map(line => `<tr><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
-      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
+      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(line.priceType || '—')}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
+      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.brand'))}</th><th>${htmlEscape(t('zavod.factoryCode'))}</th><th>${htmlEscape(t('zavod.groupCode'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.priceType'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
     }).join('');
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"/><title>${htmlEscape(title)}</title><style>
       *{box-sizing:border-box} body{margin:0;font:12px/1.45 Inter,Segoe UI,sans-serif;color:#0f1b2d}
@@ -489,10 +566,11 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const lineBody = (line: Line, patch?: Partial<Line>) => {
-    const touchesIdentity = patch != null && (patch.productCode !== undefined || patch.size !== undefined);
+    const touchesIdentity = patch != null && (patch.productCode !== undefined || patch.size !== undefined || patch.sectionCode !== undefined || patch.factoryCode !== undefined);
     return {
       id: line.id,
-      sectionCode: line.sectionCode,
+      factoryCode: patch?.factoryCode ?? line.factoryCode,
+      sectionCode: patch?.sectionCode ?? line.sectionCode,
       productCode: patch?.productCode ?? line.productCode,
       model: line.model,
       size: patch?.size ?? line.size,
@@ -500,6 +578,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       boxes: patch?.boxes ?? line.boxes,
       quantity: line.quantity,
       price: patch?.price ?? line.price,
+      priceType: patch?.priceType ?? line.priceType ?? '',
       colors: patch?.colors ?? line.colors,
       productId: touchesIdentity ? null : line.productId,
       productName: touchesIdentity ? null : line.productName,
@@ -604,24 +683,18 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
               </button>
             </header>
             {openShipment === shipment.id && (
-              <table className="waybill-table">
-                <thead><tr><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
+              <div className="waybill-scroll"><table className="waybill-table">
+                <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
                 <tbody>{(shipment.lines ?? []).map(line => {
-                  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
                   return <Fragment key={line.id}>
                     <tr>
-                      <td><b>{line.productCode || '—'}</b>{colors.length > 0 && <span className="color-chips">{colors.map(color => <span className="color-chip" key={`${color.name}-${color.quantity}`}><b>{color.name.toLocaleUpperCase('ru-RU')}</b><i>{fmt(color.quantity)}</i></span>)}</span>}</td>
-                      <td>{line.size || '—'}</td>
-                      <td className="num">{fmt(line.pairs)}</td>
-                      <td className="num">{fmt(line.boxes)}</td>
-                      <td className="num">{line.price ? money(line.price) : '—'}</td>
-                      <td className="num">{money(lineUnits(line) * line.price)}</td>
+                      <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} onSave={patch => saveLine(shipment, line, patch)}/>
                       <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}<LineLink shipmentId={shipment.id} line={line} locked={Boolean(shipment.moyskladId)} onChanged={refreshShipments}/></td>
                     </tr>
-                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={7}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
+                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={11}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;
                 })}</tbody>
-              </table>
+              </table></div>
             )}
             {openShipment === shipment.id && shipment.note && <p className="waybill-note">{shipment.note}</p>}
             {openShipment === shipment.id && shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
@@ -679,29 +752,41 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
 }
 
 function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
-  const { t } = useI18n();
+  const { t, money } = useI18n();
+  const [factoryCode, setFactoryCode] = useState(line.factoryCode);
+  const [sectionCode, setSectionCode] = useState(line.sectionCode);
   const [productCode, setProductCode] = useState(line.productCode);
   const [size, setSize] = useState(line.size);
   const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
   const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
   const [price, setPrice] = useState(line.price ? String(line.price) : '');
+  const [priceType, setPriceType] = useState(line.priceType || '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const pack = asNumber(pairs);
+  const colorBoxes = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
+  const pieces = pack > 0 && colorBoxes.length ? colorBoxes.reduce((sum, color) => sum + color.quantity * pack, 0) : pack > 0 && asNumber(boxes) > 0 ? pack * asNumber(boxes) : pack;
+  const sum = pieces * asNumber(price);
   const save = async () => {
-    if (!productCode.trim()) { setError(t('zavod.needProduct')); return; }
+    if (!productCode.trim() || !sectionCode.trim() || !size.trim()) { setError(t('zavod.needProduct')); return; }
+    if (!priceType) { setError(t('zavod.priceType')); return; }
     setBusy(true);
-    const ok = await onSave({ productCode: productCode.trim(), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
+    const ok = await onSave({ factoryCode: factoryCode.trim(), sectionCode: sectionCode.trim(), productCode: productCode.trim(), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), priceType });
     setBusy(false);
     if (!ok) setError(t('partners.shipmentInvalid'));
   };
   return createPortal(<div className="backdrop" onClick={onClose}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="line-edit-title">
-    <div className="modal-top"><div><p className="eyebrow">{line.productCode}</p><h2 id="line-edit-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
+    <div className="modal-top"><div><p className="eyebrow">Bordo</p><h2 id="line-edit-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
     <div className="form-grid">
-      <label className="field"><span>{t('zavod.product')}</span><input className="input" value={productCode} onChange={event => setProductCode(event.target.value)}/></label>
-      <label className="field"><span>{t('zavod.size')}</span><input className="input" value={size} onChange={event => setSize(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" value={factoryCode} onChange={event => setFactoryCode(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))}/></label>
+      <label className="field"><span>{t('zavod.product')}</span><input className="input" inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))}/></label>
+      <label className="field"><span>{t('zavod.size')}</span><select className="input" value={size} onChange={event => setSize(event.target.value)}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)}/></label>
+      <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={priceType} onChange={event => setPriceType(event.target.value)}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label className="field"><span>{t('zavod.sum')}</span><input className="input" value={sum ? money(sum) : ''} readOnly/></label>
     </div>
     {error && <p className="error-text">{error}</p>}
     <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('partners.edit')}</button></div>
@@ -717,8 +802,8 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
   const [busy, setBusy] = useState(false);
   const patch = (key: string, next: Partial<DraftLine>) => setLines(rows => rows.map(row => row.key === key ? { ...row, ...next } : row));
   const save = async () => {
-    const filled = lines.filter(line => line.productCode.trim() || line.sectionCode || line.model || line.size || line.pairs || line.boxes || line.quantity);
-    if (!filled.length || filled.some(line => !line.productCode.trim())) {
+    const filled = lines.filter(line => line.productCode.trim() || line.sectionCode || line.model || line.size || line.pairs || line.boxes || line.quantity || line.price);
+    if (!filled.length || filled.some(line => asNumber(line.pairs) <= 0 && asNumber(line.boxes) <= 0 && asNumber(line.quantity) <= 0)) {
       setError(t('partners.shipmentInvalid'));
       return;
     }
@@ -731,7 +816,8 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
           date,
           note,
           lines: filled.map(line => ({
-            sectionCode: line.sectionCode,
+            factoryCode: line.factoryCode.trim(),
+            sectionCode: line.sectionCode.trim(),
             id: line.key,
             productCode: line.productCode.trim(),
             model: line.model,
@@ -740,6 +826,7 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
             boxes: asNumber(line.boxes),
             quantity: asNumber(line.quantity),
             price: asNumber(line.price),
+            priceType: line.priceType,
             colors: line.colors.filter(color => color.name.trim() && asNumber(color.quantity) > 0).map(color => ({ name: color.name.trim(), quantity: asNumber(color.quantity) })),
           })),
         }),
@@ -759,12 +846,14 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
     {lines.map((line, index) => <article className="waybill-line" key={line.key}>
       <header><b>{String(index + 1).padStart(2, '0')}</b>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
       <div className="form-grid">
-        <label className="field"><span>{t('zavod.product')}</span><input className="input" value={line.productCode} onChange={e => patch(line.key, { productCode: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.model')}</span><input className="input" value={line.model} onChange={e => patch(line.key, { model: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.size')}</span><input className="input" value={line.size} onChange={e => patch(line.key, { size: e.target.value })}/></label>
+        <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: e.target.value.replace(/[^0-9A-Za-z]/g, '') })}/></label>
+        <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" inputMode="numeric" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: e.target.value.replace(/\D/g, '') })}/></label>
+        <label className="field"><span>{t('zavod.product')}</span><input className="input" inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: e.target.value.replace(/\D/g, '') })}/></label>
+        <label className="field"><span>{t('zavod.size')}</span><select className="input" value={line.size} onChange={e => patch(line.key, { size: e.target.value })}><option value=""/>{!LINE_SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })}/></label>
+        <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={line.priceType} onChange={e => patch(line.key, { priceType: e.target.value })}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       </div>
       <div className="yx-colors">
         <span>{t('zavod.colors')}</span>
