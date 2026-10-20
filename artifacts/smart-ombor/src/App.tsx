@@ -413,7 +413,7 @@ function DashboardPage() {
     <QueryError q={q} id="dashboard"/>
     {status.isError && <Notice kind="error" title={t('dash.notice.statusFailed')} testId="status-integration-error"/>}
     {!status.isLoading && !connected && !status.isError && <Notice kind={status.data?.configured ? 'error' : 'info'} title={status.data?.configured ? t('dash.notice.disconnected') : t('dash.notice.unconfigured')} testId="status-integration-unconfigured">{status.data?.error || t('dash.notice.unconfiguredBody')} <Link href="/settings" className="notice-link" data-testid="link-settings-integration">{t('nav.settings')} <ArrowRight size={14}/></Link></Notice>}
-    {sync.isError && <Notice kind="error" title={t('dash.sync.failed')} testId="status-sync-error">{sync.error instanceof Error ? sync.error.message : t('common.tryAgain')}</Notice>}
+    {sync.isError && <Notice kind="error" title={t('dash.sync.failed')} testId="status-sync-error">{(() => { const raw = sync.error instanceof Error ? sync.error.message : ''; return /503|502|504|band|unavailable|javob bermadi/i.test(raw) ? t('dash.sync.busy') : (raw || t('common.tryAgain')); })()}</Notice>}
     {q.isLoading ? <LoadingRows count={3}/> : d ? <>
       <section className="kpis" aria-label={t('dash.title')}>
         <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Box size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>

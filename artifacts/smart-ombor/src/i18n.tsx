@@ -255,6 +255,7 @@ const uz = {
   'dash.notice.unconfiguredBody': 'Ma’lumot integratsiya sozlangandan keyin ko‘rinadi.',
   'dash.notice.statusFailed': 'MoySklad holatini aniqlab bo‘lmadi',
   'dash.sync.failed': 'Yangilash bajarilmadi',
+  'dash.sync.busy': 'MoySklad hozir band. Bir ozdan keyin qayta urinib ko‘ring.',
 
   // products
   'products.title': 'Mahsulotlar',
@@ -1237,6 +1238,7 @@ const ru: Record<TKey, string> = {
   'dash.notice.unconfiguredBody': 'Данные появятся после настройки интеграции.',
   'dash.notice.statusFailed': 'Не удалось определить состояние МойСклад',
   'dash.sync.failed': 'Обновление не выполнено',
+  'dash.sync.busy': 'МойСклад сейчас занят. Попробуйте чуть позже.',
 
   'products.title': 'Товары',
   'products.add': 'Добавить товар',

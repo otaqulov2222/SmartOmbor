@@ -94,6 +94,27 @@ function networkFailure(error: unknown): boolean {
   return error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
 }
 
+function temporaryMoySklad(error: unknown): boolean {
+  return error instanceof MoySkladError && (error.status === 502 || error.status === 503 || error.status === 504);
+}
+
+function shortMoySkladMessage(status: number, body: string): string {
+  if (status === 502 || status === 503 || status === 504) return "MoySklad vaqtincha javob bermadi";
+  const trimmed = body.replace(/\s+/g, " ").trim();
+  if (!trimmed || /<html|<!doctype/i.test(trimmed)) return `MoySklad ${status}`;
+  try {
+    const parsed = JSON.parse(body) as { errors?: Array<{ code?: number; error?: string }> };
+    const code = parsed.errors?.[0]?.code;
+    const text = parsed.errors?.[0]?.error;
+    if (code === 1061) return "MoySklad API ruxsati yo‘q";
+    if (code === 1016) return "MoySkladda ruxsat yetarli emas";
+    if (text) return text.slice(0, 160);
+  } catch {
+    /* plain text */
+  }
+  return `MoySklad ${status}: ${trimmed.slice(0, 160)}`;
+}
+
 export async function moysklad<T>(path: string): Promise<T> {
   const token = moyskladToken();
   if (!token) {
@@ -115,16 +136,14 @@ export async function moysklad<T>(path: string): Promise<T> {
 
       if (!response.ok) {
         const body = await response.text();
-        throw new MoySkladError(
-          `MoySklad ${response.status}: ${body.slice(0, 280)}`,
-          response.status,
-        );
+        throw new MoySkladError(shortMoySkladMessage(response.status, body), response.status);
       }
 
       return (await response.json()) as T;
     } catch (error) {
       last = error;
-      if (!networkFailure(error) || attempt === 2) throw error;
+      const retry = networkFailure(error) || temporaryMoySklad(error);
+      if (!retry || attempt === 2) throw error;
     } finally {
       freeSlot();
     }
