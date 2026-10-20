@@ -32,7 +32,7 @@ import { recordAudit } from "../lib/audit";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
 const router: IRouter = Router();
-const SYNC_COOLDOWN_MS = 10 * 60 * 1000;
+const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
 function numericQuery(query: Request["query"], keys: string[]) {
   const next: Record<string, unknown> = { ...query };

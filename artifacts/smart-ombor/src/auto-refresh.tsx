@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-export const AUTO_REFRESH_MS = 10 * 60 * 1000;
+export const AUTO_REFRESH_MS = 5 * 60 * 1000;
 export const AUTO_REFRESH_KEY = ['auto-refresh'] as const;
 
 export type AutoRefreshState = { pending: boolean; last: string | null; nextAt: number };
