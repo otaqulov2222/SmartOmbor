@@ -19,6 +19,7 @@ type ProductRow = {
   meta: Meta;
   salePrices?: Price[];
   folderName?: string;
+  barcodes?: string[];
 };
 
 type VariantRow = {
@@ -127,14 +128,26 @@ async function variantsOf(productId: string) {
   return page.rows.filter((row) => row.id);
 }
 
-async function ensureVariant(product: ProductRow, color: string, known: VariantRow[]) {
+async function ensureVariant(
+  product: ProductRow,
+  color: string,
+  known: VariantRow[],
+  catalog: Catalog,
+  used: Set<string>,
+) {
   const found = known.find((row) => sameColor(variantColor(row), color));
-  if (found?.id) return found;
+  if (found?.id) {
+    await ensureBarcodes("variant", found.id, catalog, used);
+    return found;
+  }
   const rang = await colorCharacteristic();
   const prices = (product.salePrices ?? []).filter((price) => price.priceType?.meta && price.value != null);
+  const barcode = nextInternalEan13(catalog, used);
+  used.add(barcode);
   const body = {
     product: { meta: product.meta },
     characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+    barcodes: [{ ean13: barcode }],
     ...(prices.length ? { salePrices: prices.map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } })) } : {}),
   };
   let created: VariantRow;
@@ -142,8 +155,9 @@ async function ensureVariant(product: ProductRow, color: string, known: VariantR
     created = await moyskladSend<VariantRow>("/entity/variant", body);
   } catch (error) {
     if (!prices.length || !(error instanceof MoySkladError)) throw error;
-    created = await moyskladSend<VariantRow>("/entity/variant", { product: body.product, characteristics: body.characteristics });
+    created = await moyskladSend<VariantRow>("/entity/variant", { product: body.product, characteristics: body.characteristics, barcodes: body.barcodes });
   }
+  if (created.id) await ensureBarcodes("variant", created.id, catalog, used);
   known.push({ ...created, characteristics: [{ name: "rang", value: color }] });
   return created;
 }
@@ -192,20 +206,75 @@ function priceBody(rows: Price[]) {
     .map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } }));
 }
 
-async function placeUnfiled(productId: string, folder: FolderRow) {
+function barcodeValues(rows?: Array<Record<string, string>> | string[]): string[] {
+  if (!rows?.length) return [];
+  if (typeof rows[0] === "string") return (rows as string[]).filter(Boolean);
+  return (rows as Array<Record<string, string>>).flatMap((item) => Object.values(item)).filter((value) => value.length > 0);
+}
+
+function ean13Check(digits12: string): string {
+  let sum = 0;
+  for (let i = 0; i < 12; i += 1) sum += Number(digits12[i]) * (i % 2 === 0 ? 1 : 3);
+  return String((10 - (sum % 10)) % 10);
+}
+
+function nextInternalEan13(catalog: Catalog, used: Set<string>): string {
+  let max = 0;
+  for (const product of catalog.products) {
+    for (const code of product.barcodes) {
+      if (!/^200\d{10}$/.test(code)) continue;
+      const serial = Number(code.slice(3, 12));
+      if (Number.isFinite(serial) && serial > max) max = serial;
+    }
+  }
+  for (const code of used) {
+    if (!/^200\d{10}$/.test(code)) continue;
+    const serial = Number(code.slice(3, 12));
+    if (Number.isFinite(serial) && serial > max) max = serial;
+  }
+  for (let serial = max + 1; serial < max + 10000; serial += 1) {
+    const body = `200${String(serial).padStart(9, "0")}`;
+    const code = `${body}${ean13Check(body)}`;
+    if (!used.has(code)) return code;
+  }
+  throw new MoySkladError("Shtrix-kod yaratilmadi", 500);
+}
+
+async function placeInFolder(productId: string, folder: FolderRow) {
   const current = await moysklad<{ productFolder?: { meta?: { href?: string } } }>(`/entity/product/${encodeURIComponent(productId)}?expand=productFolder`);
+  if (current.productFolder?.meta?.href === folder.meta.href) return;
   if (current.productFolder?.meta?.href) return;
   await moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, { productFolder: { meta: folder.meta } }, "PUT");
+}
+
+async function ensureBarcodes(
+  kind: "product" | "variant",
+  id: string,
+  catalog: Catalog,
+  used: Set<string>,
+): Promise<string[]> {
+  const path = kind === "product" ? `/entity/product/${encodeURIComponent(id)}` : `/entity/variant/${encodeURIComponent(id)}`;
+  const current = await moysklad<{ barcodes?: Array<Record<string, string>> }>(path);
+  const existing = barcodeValues(current.barcodes);
+  if (existing.length) {
+    for (const code of existing) used.add(code);
+    return existing;
+  }
+  const code = nextInternalEan13(catalog, used);
+  used.add(code);
+  await moyskladSend(path, { barcodes: [{ ean13: code }] }, "PUT");
+  return [code];
 }
 
 export async function buildSupplyPositions(
   lines: ShipmentLine[],
   currencyMeta: Meta,
-  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog; supplierMeta?: Meta | null },
 ): Promise<Planned | null> {
   const parents = new Map<string, ProductRow>();
   const variantCache = new Map<string, VariantRow[]>();
   const packCache = new Map<string, GoodsPack | null>();
+  const usedBarcodes = new Set<string>();
   const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string; folder: FolderRow | null }> = [];
   const created: ProductRow[] = [];
   const folders = await productFolders();
@@ -231,24 +300,32 @@ export async function buildSupplyPositions(
 
   for (const item of resolved) {
     if (item.parent) {
-      if (item.folder) await placeUnfiled(item.parent.id, item.folder);
+      if (item.folder) await placeInFolder(item.parent.id, item.folder);
+      item.parent.barcodes = await ensureBarcodes("product", item.parent.id, scope.catalog, usedBarcodes);
       parents.set(item.parent.id, item.parent);
       continue;
     }
     const code = item.line.productCode.trim();
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
     const listed = item.line.price > 0 && SALE_TYPES.includes(item.line.priceType) ? await listedPrices(undefined, item.line.priceType, item.line.price, currencyMeta) : null;
-    const product = await moyskladSend<ProductRow & { packs?: GoodsPack[] }>("/entity/product", {
+    const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
+    usedBarcodes.add(barcode);
+    const product = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", {
       name: item.name,
       uom: { meta: uomMeta(PIECE_UOM) },
+      barcodes: [{ ean13: barcode }],
       ...(listed ? { salePrices: priceBody(listed) } : {}),
       ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
+      ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
       ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
       ...(code.length >= 8 ? { code } : {}),
+      ...(code ? { article: code } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
     if (listed) product.salePrices = listed;
     if (item.folder) product.folderName = item.folder.name;
+    product.barcodes = barcodeValues(product.barcodes);
+    if (!product.barcodes.length) product.barcodes = await ensureBarcodes("product", product.id, scope.catalog, usedBarcodes);
     const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
     if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
     item.parent = product;
@@ -295,7 +372,7 @@ export async function buildSupplyPositions(
         });
         continue;
       }
-      const variant = await ensureVariant(product, part.color, known ?? []);
+      const variant = await ensureVariant(product, part.color, known ?? [], scope.catalog, usedBarcodes);
       if (item.line.price > 0 && SALE_TYPES.includes(item.line.priceType) && variant.id) {
         let current = product.salePrices;
         try {

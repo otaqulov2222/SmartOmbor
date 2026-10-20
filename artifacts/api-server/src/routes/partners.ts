@@ -306,6 +306,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       factoryCode: account?.code || "",
       factoryName: account?.catalogName || account?.name || "",
       catalog,
+      supplierMeta: agentMeta,
     });
     if (!planned || !planned.positions.length) {
       res.status(400).json({ error: "unlinked" });
@@ -318,7 +319,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         name: product.name || "",
         code: product.code || null,
         article: product.article || null,
-        barcodes: [],
+        barcodes: product.barcodes ?? [],
         factory: account?.name || null,
         category: product.folderName || null,
         unit: "шт",
