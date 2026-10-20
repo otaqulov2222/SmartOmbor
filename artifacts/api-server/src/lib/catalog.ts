@@ -400,19 +400,23 @@ async function build(): Promise<Catalog> {
   const today = new Date();
   const day = today.toISOString().slice(0, 10);
   const filter = encodeURIComponent(`moment>=${day} 00:00:00;moment<=${day} 23:59:59`);
+  const skipDenied = (label: string) => (error: unknown) => {
+    logger.warn({ err: error }, `MoySklad ${label} skipped`);
+    return null;
+  };
   const [demands, supplies, moves, suppliesRecent, movesRecent, inventories] = await Promise.all([
     moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/demand?limit=100&filter=${filter}`),
     moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/supply?limit=100&filter=${filter}`),
-    moysklad<{ meta: { size: number } }>("/entity/move?limit=1&filter=applicable=false"),
+    moysklad<{ meta: { size: number } }>("/entity/move?limit=1&filter=applicable=false").catch(skipDenied("moves")),
     moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc&expand=agent"),
-    moysklad<{ rows: DocRow[] }>("/entity/move?limit=100&order=moment,desc"),
-    moysklad<{ rows: DocRow[] }>("/entity/inventory?limit=100&order=moment,desc"),
+    moysklad<{ rows: DocRow[] }>("/entity/move?limit=100&order=moment,desc").catch(skipDenied("move-list")),
+    moysklad<{ rows: DocRow[] }>("/entity/inventory?limit=100&order=moment,desc").catch(skipDenied("inventory")),
   ]);
 
   const documents: CatalogDocument[] = [
     ...suppliesRecent.rows.map((row) => toDocument(row, "receipt", warehouseById)),
-    ...movesRecent.rows.map((row) => toDocument(row, "transfer", warehouseById)),
-    ...inventories.rows.map((row) => toDocument(row, "inventory", warehouseById)),
+    ...(movesRecent?.rows ?? []).map((row) => toDocument(row, "transfer", warehouseById)),
+    ...(inventories?.rows ?? []).map((row) => toDocument(row, "inventory", warehouseById)),
   ].sort((a, b) => b.date.localeCompare(a.date));
 
   const catalog: Catalog = {
@@ -425,7 +429,7 @@ async function build(): Promise<Catalog> {
     documents,
     salesToday: demands.rows.reduce((sum, row) => sum + (money(row.sum) ?? 0), 0),
     incomingToday: supplies.meta.size,
-    pendingTransfers: moves.meta.size,
+    pendingTransfers: moves?.meta.size ?? 0,
     error: null,
     imageHrefs,
     salesCoverage,

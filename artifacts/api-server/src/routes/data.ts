@@ -329,7 +329,7 @@ async function buildDay(date: string): Promise<DaySnapshot> {
       moysklad<{ meta: { size: number } }>(`/entity/supply?limit=1&filter=${dayFilter}`),
       moysklad<{ rows: Row[] }>(`/entity/demand?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
       moysklad<{ rows: Row[] }>(`/entity/supply?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
-      moysklad<{ rows: Row[] }>(`/entity/move?limit=8&order=moment,desc&filter=${dayFilter}&expand=sourceStore,targetStore`),
+      moysklad<{ rows: Row[] }>(`/entity/move?limit=8&order=moment,desc&filter=${dayFilter}&expand=sourceStore,targetStore`).catch(() => ({ rows: [] as Row[] })),
     ]);
     const asDoc = (row: Row, kind: DayDocument["kind"], source: string | null, target: string | null): DayDocument => ({
       id: row.id || `${kind}-${row.name}-${row.moment}`,
@@ -343,7 +343,7 @@ async function buildDay(date: string): Promise<DaySnapshot> {
     const documents = [
       ...daySupplies.rows.map((row) => asDoc(row, "receipt", row.agent?.name || null, row.store?.name || null)),
       ...dayDemands.rows.map((row) => asDoc(row, "sale", row.agent?.name || null, row.store?.name || null)),
-      ...dayMoves.rows.map((row) => asDoc(row, "transfer", row.sourceStore?.name || null, row.targetStore?.name || null)),
+      ...(dayMoves?.rows ?? []).map((row) => asDoc(row, "transfer", row.sourceStore?.name || null, row.targetStore?.name || null)),
     ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
     return {
       date,
