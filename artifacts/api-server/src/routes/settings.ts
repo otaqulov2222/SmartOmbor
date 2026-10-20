@@ -2,14 +2,17 @@ import { Router, type IRouter } from "express";
 import { loadCatalog, resetCatalog } from "../lib/catalog";
 import { clearConnection, connectionView, probeMoySklad, saveConnection } from "../lib/connection";
 import { recordAudit } from "../lib/audit";
+import { requireLocalAdmin } from "./local-auth";
 
 const router: IRouter = Router();
 
-router.get("/settings/connection", (_req, res) => {
+router.get("/settings/connection", (req, res) => {
+  if (!requireLocalAdmin(req, res)) return;
   res.json(connectionView());
 });
 
 router.post("/settings/connection", async (req, res) => {
+  if (!requireLocalAdmin(req, res)) return;
   const token = String(req.body?.token ?? "").trim();
   if (token.length < 20) {
     res.status(400).json({ error: "rejected" });
@@ -23,12 +26,14 @@ router.post("/settings/connection", async (req, res) => {
     void recordAudit({ action: "connection.saved", entityType: "moysklad", details: companyName });
     const view = connectionView();
     res.json({ ...view, companyName });
-  } catch {
-    res.status(400).json({ error: "rejected" });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "rejected";
+    res.status(400).json({ error: reason === "api-denied" || reason === "forbidden" ? reason : "rejected" });
   }
 });
 
-router.delete("/settings/connection", (_req, res) => {
+router.delete("/settings/connection", (req, res) => {
+  if (!requireLocalAdmin(req, res)) return;
   clearConnection();
   resetCatalog();
   void loadCatalog(true).catch(() => undefined);

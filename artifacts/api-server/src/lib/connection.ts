@@ -52,7 +52,18 @@ export async function probeMoySklad(token: string): Promise<string> {
     },
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) throw new Error("rejected");
+  if (!response.ok) {
+    let detail = "rejected";
+    try {
+      const body = await response.json() as { errors?: Array<{ code?: number; error?: string }> };
+      const code = body.errors?.[0]?.code;
+      if (code === 1061) detail = "api-denied";
+      else if (code === 1016) detail = "forbidden";
+    } catch {
+      /* keep rejected */
+    }
+    throw new Error(detail);
+  }
   const body = await response.json() as { rows?: Array<{ name?: string }> };
   return body.rows?.[0]?.name?.trim() || "MoySklad";
 }

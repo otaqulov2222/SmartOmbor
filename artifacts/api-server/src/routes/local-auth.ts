@@ -83,7 +83,7 @@ function actor(req: Request): Account | null {
   return read().accounts.find((account) => account.login === login) ?? null;
 }
 
-function requireAdmin(req: Request, res: Response): Account | null {
+export function requireLocalAdmin(req: Request, res: Response): Account | null {
   const current = actor(req);
   if (!current) {
     res.status(401).json({ error: "invalid" });
@@ -94,6 +94,10 @@ function requireAdmin(req: Request, res: Response): Account | null {
     return null;
   }
   return current;
+}
+
+function requireAdmin(req: Request, res: Response): Account | null {
+  return requireLocalAdmin(req, res);
 }
 
 router.post("/local-login", (req, res) => {

@@ -624,9 +624,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .report-side-copy { margin: 0; color: var(--ink-2); }
 .report-hub .preview .form-actions { margin-top: auto; }
 .report-hub .preview .btn { width: 100%; }
-.settings-account { padding: 0 1.2rem 1.15rem; gap: 1rem; }
-.settings-account .report-side-head { margin-bottom: .15rem; }
-.settings-account .report-side-head .badge { margin-left: auto; }
+.settings-account { display: grid; gap: 1rem; }
+.settings-account .integration-copy { display: grid; gap: .25rem; min-width: 0; }
+.settings-account .integration-copy p { margin: 0; color: var(--muted); font-size: .9rem; }
 .settings-connect { display: flex; gap: .6rem; align-items: center; }
 .settings-token { flex: 1; max-width: none; }
 .settings-grid { align-items: start; }

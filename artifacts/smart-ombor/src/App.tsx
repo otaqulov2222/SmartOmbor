@@ -1117,13 +1117,101 @@ function AccessPanel() {
     })}</ul>
   </Card>;
 }
+type ConnectionView = { source: 'saved' | 'environment' | 'none'; companyName: string | null; masked: string | null; savedAt: string | null };
+function MoySkladPanel() {
+  const { t, dateTime } = useI18n();
+  const session = readLocalSession();
+  const cache = useQueryClient();
+  const status = useGetMoyskladStatus();
+  const connection = useQuery<ConnectionView>({
+    queryKey: ['settings-connection'],
+    enabled: !!session?.token,
+    queryFn: async () => {
+      const response = await fetch('/api/settings/connection', { headers: { authorization: `Bearer ${session!.token}` } });
+      if (response.status === 401) throw new Error('auth');
+      if (!response.ok) throw new Error('load');
+      return response.json();
+    },
+  });
+  const [token, setToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+  const connected = !!status.data?.configured && !!status.data?.connected;
+  const company = status.data?.companyName || connection.data?.companyName;
+  const headers = { authorization: `Bearer ${session?.token || ''}`, 'content-type': 'application/json' };
+  const refresh = async () => {
+    await Promise.all([
+      connection.refetch(),
+      cache.invalidateQueries({ queryKey: getGetMoyskladStatusQueryKey() }),
+      cache.invalidateQueries({ queryKey: getGetDashboardQueryKey() }),
+    ]);
+  };
+  const connect = async () => {
+    const value = token.trim();
+    if (value.length < 20) { setNote({ kind: 'error', text: t('settings.connectFailed') }); return; }
+    setBusy(true); setNote(null);
+    const response = await fetch('/api/settings/connection', { method: 'POST', headers, body: JSON.stringify({ token: value }) });
+    setBusy(false);
+    if (response.status === 401) { sessionStorage.removeItem(LOCAL_SESSION); setNote({ kind: 'error', text: t('auth.sessionExpired') }); return; }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      const key = body.error === 'api-denied' ? 'settings.connectApiDenied' : body.error === 'forbidden' ? 'settings.connectForbidden' : 'settings.connectFailed';
+      setNote({ kind: 'error', text: t(key) });
+      return;
+    }
+    setToken('');
+    setNote({ kind: 'success', text: t('settings.accountReady') });
+    await refresh();
+  };
+  const disconnect = async () => {
+    setBusy(true); setNote(null);
+    const response = await fetch('/api/settings/connection', { method: 'DELETE', headers });
+    setBusy(false);
+    if (!response.ok) { setNote({ kind: 'error', text: t('settings.connectFailed') }); return; }
+    setNote(null);
+    await refresh();
+  };
+  const stateLabel = !status.data?.configured && connection.data?.source === 'none'
+    ? t('settings.state.unconfigured')
+    : connected ? t('settings.state.connected') : t('settings.state.disconnected');
+  return <Card title={t('settings.integration')} meta={t('settings.integration.meta')} className="settings-account" action={status.isFetching ? <span className="muted">{t('settings.integration.checking')}</span> : undefined}>
+    <div className="integration">
+      <span className={`seal ${connected ? 'seal-on' : ''}`}>{connected ? <ShieldCheck size={22}/> : <CircleAlert size={22}/>}</span>
+      <div className="integration-copy">
+        <h3>{company || t('settings.integration.unconfigured')}</h3>
+        <p>{connected ? t('settings.integration.ok') : (status.data?.error || t('settings.integration.hint'))}</p>
+      </div>
+    </div>
+    <div className="facts">
+      <div><span>{t('settings.state')}</span><b data-testid="settings-ms-state">{stateLabel}</b></div>
+      <div><span>{t('settings.masked')}</span><b>{connection.data?.masked || '—'}</b></div>
+      <div><span>{t('settings.lastSync')}</span><b>{status.data?.lastSync ? dateTime(status.data.lastSync) : '—'}</b></div>
+    </div>
+    <div className="form-grid">
+      <Field label={t('settings.token')} testId="field-ms-token">
+        <span className="secret">
+          <input className="input" type={showToken ? 'text' : 'password'} value={token} onChange={event => setToken(event.target.value)} placeholder={t('settings.tokenPlaceholder')} autoComplete="off" data-testid="input-ms-token"/>
+          <button type="button" className="secret-eye" aria-label={showToken ? t('auth.hidePassword') : t('auth.showPassword')} onClick={() => setShowToken(open => !open)}>{showToken ? <EyeOff size={18}/> : <Eye size={18}/>}</button>
+        </span>
+      </Field>
+      <div className="form-actions span-2">
+        <Button testId="button-ms-connect" disabled={busy || token.trim().length < 20} onClick={() => void connect()}>{busy ? t('settings.connecting') : t('settings.connect')}</Button>
+        {connection.data?.source === 'saved' && <Button testId="button-ms-disconnect" variant="secondary" disabled={busy} onClick={() => void disconnect()}>{t('settings.disconnect')}</Button>}
+      </div>
+    </div>
+    {note && <Notice kind={note.kind === 'success' ? 'success' : 'error'} title={note.text} testId="status-ms-connection"/>}
+  </Card>;
+}
 function SettingsPage() {
   const { t, fmt } = useI18n(); const roleLabel = useRole();
   const users = useListUsers(); const me = useGetCurrentUser(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
   const admin = me.data?.role === 'super_admin' || me.data?.role === 'manager';
+  const localAdmin = !clerkPubKey && readLocalSession()?.role === 'super_admin';
   return <>
     <PageHead title={t('settings.title')}/>
-    {!clerkPubKey && readLocalSession()?.role === 'super_admin' ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
+    {localAdmin && <MoySkladPanel/>}
+    {localAdmin ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
   </>;
 }
 
