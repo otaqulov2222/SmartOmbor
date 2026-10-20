@@ -126,7 +126,7 @@ router.post("/moysklad/sync", async (_req, res) => {
           finishedAt: current.loadedAt,
           productCount: current.productCount,
           warehouseCount: current.warehouses.length,
-          error: null,
+          error: "already-fresh",
         }),
       );
       return;
