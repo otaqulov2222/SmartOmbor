@@ -519,7 +519,16 @@ export function resetCatalog() {
 export async function loadCatalog(force = false): Promise<Catalog> {
   if (!cache) cache = recall();
   if (!force && cache) return cache;
-  return pending ?? startBuild();
+  try {
+    return await (pending ?? startBuild());
+  } catch (error) {
+    if (!cache) cache = recall();
+    if (cache) {
+      logger.warn({ err: error }, "MoySklad refresh failed; keeping saved catalog");
+      return cache;
+    }
+    throw error;
+  }
 }
 
 let supplierFill: Promise<Catalog> | null = null;

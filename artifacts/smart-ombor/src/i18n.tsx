@@ -256,6 +256,7 @@ const uz = {
   'dash.notice.statusFailed': 'MoySklad holatini aniqlab bo‘lmadi',
   'dash.sync.failed': 'Yangilash bajarilmadi',
   'dash.sync.busy': 'MoySklad hozir band. Bir ozdan keyin qayta urinib ko‘ring.',
+  'dash.sync.kept': 'MoySklad vaqtincha javob bermadi. Oxirgi saqlangan katalog qoldi.',
 
   // products
   'products.title': 'Mahsulotlar',
@@ -1239,6 +1240,7 @@ const ru: Record<TKey, string> = {
   'dash.notice.statusFailed': 'Не удалось определить состояние МойСклад',
   'dash.sync.failed': 'Обновление не выполнено',
   'dash.sync.busy': 'МойСклад сейчас занят. Попробуйте чуть позже.',
+  'dash.sync.kept': 'МойСклад временно не ответил. Оставлен последний сохранённый каталог.',
 
   'products.title': 'Товары',
   'products.add': 'Добавить товар',

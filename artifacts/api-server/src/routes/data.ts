@@ -117,8 +117,24 @@ router.post("/moysklad/sync", async (_req, res) => {
     const current = await loadCatalog(false);
     const age = Date.now() - Date.parse(current.loadedAt);
     const fresh = age >= 0 && age < SYNC_COOLDOWN_MS;
-    const catalog = fresh ? current : await loadCatalog(true);
-    if (!fresh) void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
+    if (fresh) {
+      res.json(
+        SyncMoyskladResponse.parse({
+          id: crypto.randomUUID(),
+          status: "completed",
+          startedAt,
+          finishedAt: current.loadedAt,
+          productCount: current.productCount,
+          warehouseCount: current.warehouses.length,
+          error: null,
+        }),
+      );
+      return;
+    }
+    const before = current.loadedAt;
+    const catalog = await loadCatalog(true);
+    const kept = catalog.loadedAt === before;
+    if (!kept) void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
     res.json(
       SyncMoyskladResponse.parse({
         id: crypto.randomUUID(),
@@ -127,11 +143,26 @@ router.post("/moysklad/sync", async (_req, res) => {
         finishedAt: catalog.loadedAt,
         productCount: catalog.productCount,
         warehouseCount: catalog.warehouses.length,
-        error: null,
+        error: kept ? "kept-cache" : null,
       }),
     );
   } catch (error) {
     const problem = fail(error);
+    const cached = peekCatalog();
+    if (cached) {
+      res.json(
+        SyncMoyskladResponse.parse({
+          id: crypto.randomUUID(),
+          status: "completed",
+          startedAt,
+          finishedAt: cached.loadedAt,
+          productCount: cached.productCount,
+          warehouseCount: cached.warehouses.length,
+          error: "kept-cache",
+        }),
+      );
+      return;
+    }
     res.status(problem.status).json(
       SyncMoyskladResponse.parse({
         id: crypto.randomUUID(),
