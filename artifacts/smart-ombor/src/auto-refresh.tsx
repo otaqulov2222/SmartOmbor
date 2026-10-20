@@ -25,6 +25,7 @@ export function AutoRefresh() {
       inflight.current = true;
       stamp(true, cache.getQueryData<AutoRefreshState>(AUTO_REFRESH_KEY)?.last ?? null);
       try {
+        await fetch('/api/moysklad/sync', { method: 'POST' }).catch(() => undefined);
         await cache.invalidateQueries({ predicate: q => q.queryKey[0] !== AUTO_REFRESH_KEY[0] });
       } finally {
         stamp(false, new Date().toISOString());
