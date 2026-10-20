@@ -83,25 +83,29 @@ router.get("/moysklad/status", async (_req, res) => {
   }
 
   try {
-    const catalog = await loadCatalog();
+    const [organization, catalog] = await Promise.all([
+      moysklad<{ rows?: Array<{ name?: string }> }>("/entity/organization?limit=1"),
+      loadCatalog(),
+    ]);
     res.json(
       GetMoyskladStatusResponse.parse({
         configured: true,
         connected: true,
-        companyName: catalog.companyName,
+        companyName: organization.rows?.[0]?.name ?? catalog.companyName,
         lastSync: catalog.loadedAt,
         error: catalog.error,
       }),
     );
   } catch (error) {
     const problem = fail(error);
+    const catalog = peekCatalog();
     res.json(
       GetMoyskladStatusResponse.parse({
         configured: true,
         connected: false,
-        companyName: null,
-        lastSync: catalogLoadedAt(),
-        error: problem.message,
+        companyName: catalog?.companyName ?? null,
+        lastSync: catalog?.loadedAt ?? catalogLoadedAt(),
+        error: problem.status === 403 ? "MoySklad API ruxsati yo‘q" : problem.message,
       }),
     );
   }
@@ -283,6 +287,16 @@ async function salesByDayFromDemands(from: string, to: string, store: string): P
   return buckets;
 }
 
+function emptyDay(date: string): DaySnapshot {
+  const trend: Array<{ date: string; amount: number }> = [];
+  let cursor = shiftDay(date, -6);
+  while (cursor <= date) {
+    trend.push({ date: cursor, amount: 0 });
+    cursor = shiftDay(cursor, 1);
+  }
+  return { date, sales: 0, incoming: 0, trend, documents: [] };
+}
+
 function loadDay(date: string): Promise<DaySnapshot> {
   const running = dayInflight.get(date);
   if (running) return running;
@@ -290,6 +304,13 @@ function loadDay(date: string): Promise<DaySnapshot> {
     .then((body) => {
       dayCache.set(date, { savedAt: Date.now(), body });
       writeDayDisk();
+      return body;
+    })
+    .catch(() => {
+      const cached = dayCache.get(date);
+      if (cached) return cached.body;
+      const body = emptyDay(date);
+      dayCache.set(date, { savedAt: 0, body });
       return body;
     })
     .finally(() => {
@@ -1110,6 +1131,17 @@ async function computeSales(query: { period: "7d" | "30d" | "90d" | "365d"; ware
     });
 }
 
+function emptySales(query: { period: "7d" | "30d" | "90d" | "365d" }): SalesBody {
+  return GetSalesAnalyticsResponse.parse({
+    period: query.period,
+    totalAmount: 0,
+    totalQuantity: 0,
+    averagePerDay: 0,
+    trend: [],
+    topProducts: [],
+  });
+}
+
 function loadSales(key: string, query: { period: "7d" | "30d" | "90d" | "365d"; warehouseId?: string }) {
   const running = salesInflight.get(key);
   if (running) return running;
@@ -1117,6 +1149,13 @@ function loadSales(key: string, query: { period: "7d" | "30d" | "90d" | "365d"; 
     .then((body) => {
       salesMemory.set(key, { savedAt: Date.now(), body });
       writeSalesDisk();
+      return body;
+    })
+    .catch(() => {
+      const cached = salesMemory.get(key);
+      if (cached) return cached.body;
+      const body = emptySales(query);
+      salesMemory.set(key, { savedAt: 0, body });
       return body;
     })
     .finally(() => {
