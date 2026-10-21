@@ -434,6 +434,16 @@ export function linkShipmentLine(shipmentId: string, lineId: string, product: { 
   return shipmentView(shipment);
 }
 
+export function clearShipmentPosted(shipmentId: string) {
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === shipmentId);
+  if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  shipment.moyskladId = null;
+  shipment.moyskladNumber = null;
+  save(store);
+  return shipmentView(shipment);
+}
+
 export function markShipmentPosted(shipmentId: string, posted: { id: string; number: string }) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);

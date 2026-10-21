@@ -15,6 +15,7 @@ import {
   listShipments,
   loginFactory,
   markShipmentPosted,
+  clearShipmentPosted,
   deleteAccount,
   deleteShipment,
   resetPassword,
@@ -379,6 +380,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "MoySklad price fill failed, replacing supply");
       }
       await replaceZeroSupply(shipment.moyskladId);
+      clearShipmentPosted(shipment.id);
     }
     const account = getAccount(shipment.factoryId);
     let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
