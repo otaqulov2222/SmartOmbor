@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
-import { buildSupplyPositions } from "../lib/supply-assortment";
+import { buildSupplyPositions, receiptParts } from "../lib/supply-assortment";
 import { idFromHref, moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
@@ -236,7 +236,8 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   const page = await moysklad<{ rows: Array<{ id: string; price?: number; assortment?: { name?: string; meta?: { href?: string; type?: string } } }> }>(
     `/entity/supply/${encodeURIComponent(supplyId)}/positions?expand=assortment&limit=100`,
   );
-  const zero = page.rows.filter((row) => !(row.price > 0));
+  const expected = lines.flatMap((line) => receiptParts(line).map((part) => (part.quantity > 0 ? kopecks(line.price) : 0))).filter((price) => price > 0);
+  const zero = page.rows.map((row, index) => ({ row, index })).filter((item) => !(item.row.price > 0));
   if (!zero.length) return (doc.sum ?? 0) > 0;
   if (doc.applicable) {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
@@ -244,8 +245,9 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
   const uzs = currencies.rows.find((item) => item.isoCode === "UZS")?.meta;
   let wrote = 0;
-  for (const row of zero) {
-    const price = priceFromWaybill(row.assortment?.name || "", lines);
+  for (const item of zero) {
+    const row = item.row;
+    const price = priceFromWaybill(row.assortment?.name || "", lines) || expected[item.index] || 0;
     if (!(price > 0)) continue;
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}/positions/${encodeURIComponent(row.id)}`, {
       price,
@@ -380,8 +382,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
           res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
           return;
         }
-        res.status(409).json({ error: "posted" });
-        return;
+        throw new MoySkladError("MoySklad hujjati bor, lekin narx yozilmadi", 400);
       } catch (error) {
         if (!supplyGone(error)) throw error;
         logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");

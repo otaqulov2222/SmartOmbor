@@ -84,7 +84,8 @@ function lineUnits(line: Line) {
 function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed') => string) {
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
-  const raw = String(body.detail || '').trim();
+  if (body.error === 'posted') return t('partners.supplyFailed');
+  const raw = String(body.detail || body.error || '').trim();
   if (raw.startsWith('{')) {
     try {
       const parsed = JSON.parse(raw) as { errors?: Array<{ error?: string }> };
