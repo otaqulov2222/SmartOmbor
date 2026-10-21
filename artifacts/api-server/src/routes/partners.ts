@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions } from "../lib/supply-assortment";
-import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
+import { idFromHref, moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -179,8 +179,15 @@ router.get("/partner-factories/:id", async (req, res, next) => {
     }
     const catalog = await loadCatalog();
     linkExactShipmentLines(account.id, (code) => exactCatalogProduct(catalog, code));
+    const shipments = listShipments(account.id);
+    for (const shipment of shipments) {
+      if (!shipment.moyskladId) continue;
+      void fillZeroSupplyPrices(shipment.moyskladId, shipment.lines).catch((error) => {
+        logger.warn({ shipment: shipment.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price repair failed");
+      });
+    }
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
-    res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
+    res.json({ account: { ...safe, password: passwordPlain || null }, shipments });
   } catch (error) {
     next(error);
   }
@@ -193,6 +200,70 @@ function lineUnits(line: { pairs: number; boxes: number; quantity: number; color
   if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
   return pack;
+}
+
+function kopecks(som: number) {
+  return Math.round(som * 100);
+}
+
+function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
+  const raw = name.trim();
+  const color = raw.match(/\(([^)]+)\)\s*$/)?.[1]?.trim().toLowerCase() || "";
+  const base = raw.replace(/\s*\([^)]+\)\s*$/, "").trim().toLowerCase();
+  let best: { score: number; price: number } | null = null;
+  for (const line of lines) {
+    if (!(line.price > 0)) continue;
+    const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
+    let score = 0;
+    if (base === identity) score = 4;
+    else if (color && base === `${identity} ${color}`) score = 4;
+    else if (identity && base.startsWith(identity)) score = 3;
+    else if (line.productCode && line.size && base.includes(line.productCode.toLowerCase()) && base.includes(line.size.toLowerCase())) score = 2;
+    if (color && (line.colors ?? []).some((item) => item.name?.trim().toLowerCase() === color)) score += 1;
+    if (score > (best?.score ?? 0)) best = { score, price: kopecks(line.price) };
+  }
+  return best?.price ?? 0;
+}
+
+async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
+  const doc = await moysklad<{ applicable?: boolean; sum?: number }>(`/entity/supply/${encodeURIComponent(supplyId)}`);
+  const page = await moysklad<{ rows: Array<{ id: string; price?: number; assortment?: { name?: string; meta?: { href?: string; type?: string } } }> }>(
+    `/entity/supply/${encodeURIComponent(supplyId)}/positions?expand=assortment&limit=100`,
+  );
+  const zero = page.rows.filter((row) => !(row.price > 0));
+  if (!zero.length) return (doc.sum ?? 0) > 0;
+  if (doc.applicable) {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
+  }
+  const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
+  const uzs = currencies.rows.find((item) => item.isoCode === "UZS")?.meta;
+  let wrote = 0;
+  for (const row of zero) {
+    const price = priceFromWaybill(row.assortment?.name || "", lines);
+    if (!(price > 0)) continue;
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}/positions/${encodeURIComponent(row.id)}`, {
+      price,
+      vat: 0,
+      vatEnabled: false,
+    }, "PUT");
+    wrote += 1;
+    const stockId = idFromHref(row.assortment?.meta?.href);
+    const kind = row.assortment?.meta?.type === "variant" ? "variant" : "product";
+    if (stockId && uzs) {
+      try {
+        await moyskladSend(`/entity/${kind}/${encodeURIComponent(stockId)}`, {
+          buyPrice: { value: price, currency: { meta: uzs } },
+        }, "PUT");
+      } catch (error) {
+        logger.warn({ stockId, err: error instanceof Error ? error.message : error }, "MoySklad buy price skipped");
+      }
+    }
+  }
+  if (doc.applicable) {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: true }, "PUT");
+  }
+  logger.warn({ supplyId, wrote, total: zero.length }, "MoySklad supply prices filled");
+  return wrote > 0;
 }
 
 async function postSupplyDocument(
@@ -294,6 +365,11 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     if (shipment.moyskladId) {
+      const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
+      if (filled) {
+        res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
+        return;
+      }
       res.status(409).json({ error: "posted" });
       return;
     }
@@ -396,15 +472,26 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     const packed = planned.positions.map((item) => ({
       quantity: item.quantity,
       price: item.price,
+      discount: 0,
+      vat: 0,
+      vatEnabled: false,
       assortment: item.assortment,
       ...(item.pack ? { pack: item.pack } : {}),
     }));
     const unpacked = planned.positions.map((item) => ({
       quantity: item.quantity,
       price: item.price,
+      discount: 0,
+      vat: 0,
+      vatEnabled: false,
       assortment: item.assortment,
     }));
     const created = await postSupplyDocument(supplyCore, packed, unpacked);
+    try {
+      await fillZeroSupplyPrices(created.id, shipment.lines);
+    } catch (error) {
+      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
+    }
     applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
