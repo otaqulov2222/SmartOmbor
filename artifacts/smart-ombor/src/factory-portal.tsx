@@ -187,6 +187,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const submit = async () => {
     const filled = lines.filter(started);
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
+    if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needCode')); return; }
     if (filled.some(line => num(line.pairs) <= 0 || num(line.boxes) <= 0 || num(line.price) <= 0)) { setError(t('zavod.needQty')); return; }
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
     const payload = filled.map(line => ({
@@ -276,13 +277,14 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
     <div className="yx-sheet factory-sheet">
-      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
+      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
         return <div className="yx-sheet-row factory-row" key={line.key}>
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
+          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
           <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })}/></label>
