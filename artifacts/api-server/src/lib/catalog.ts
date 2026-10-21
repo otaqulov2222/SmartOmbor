@@ -154,6 +154,7 @@ const LOW_STOCK = 3;
 const CACHE_FILE = dataFile("catalog-cache.json");
 let cache: Catalog | null = null;
 let pending: Promise<Catalog> | null = null;
+let lastBuildError: string | null = null;
 let epoch = 0;
 
 function remember(next: Catalog) {
@@ -405,16 +406,16 @@ async function build(): Promise<Catalog> {
     return null;
   };
   const [demands, supplies, moves, suppliesRecent, movesRecent, inventories] = await Promise.all([
-    moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/demand?limit=100&filter=${filter}`),
-    moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/supply?limit=100&filter=${filter}`),
+    moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/demand?limit=100&filter=${filter}`).catch(skipDenied("demands")),
+    moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/supply?limit=100&filter=${filter}`).catch(skipDenied("supplies")),
     moysklad<{ meta: { size: number } }>("/entity/move?limit=1&filter=applicable=false").catch(skipDenied("moves")),
-    moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc&expand=agent"),
+    moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc&expand=agent").catch(skipDenied("supply-list")),
     moysklad<{ rows: DocRow[] }>("/entity/move?limit=100&order=moment,desc").catch(skipDenied("move-list")),
     moysklad<{ rows: DocRow[] }>("/entity/inventory?limit=100&order=moment,desc").catch(skipDenied("inventory")),
   ]);
 
   const documents: CatalogDocument[] = [
-    ...suppliesRecent.rows.map((row) => toDocument(row, "receipt", warehouseById)),
+    ...(suppliesRecent?.rows ?? []).map((row) => toDocument(row, "receipt", warehouseById)),
     ...(movesRecent?.rows ?? []).map((row) => toDocument(row, "transfer", warehouseById)),
     ...(inventories?.rows ?? []).map((row) => toDocument(row, "inventory", warehouseById)),
   ].sort((a, b) => b.date.localeCompare(a.date));
@@ -427,8 +428,8 @@ async function build(): Promise<Catalog> {
     warehouses,
     stockRows,
     documents,
-    salesToday: demands.rows.reduce((sum, row) => sum + (money(row.sum) ?? 0), 0),
-    incomingToday: supplies.meta.size,
+    salesToday: (demands?.rows ?? []).reduce((sum, row) => sum + (money(row.sum) ?? 0), 0),
+    incomingToday: supplies?.meta.size ?? 0,
     pendingTransfers: moves?.meta.size ?? 0,
     error: null,
     imageHrefs,
@@ -496,17 +497,28 @@ export function idleDays(product: CatalogProduct, coverage: Catalog["salesCovera
 function startBuild(): Promise<Catalog> {
   if (pending) return pending;
   const stamp = epoch;
+  lastBuildError = null;
   pending = build()
     .then((next) => {
       if (stamp === epoch) remember(next);
       if (stamp === epoch) pending = null;
+      lastBuildError = null;
       return next;
     })
     .catch((error: unknown) => {
       if (stamp === epoch) pending = null;
+      lastBuildError = error instanceof Error ? error.message : "MoySklad sync failed";
       throw error instanceof Error ? error : new MoySkladError("MoySklad sync failed", 502);
     });
   return pending;
+}
+
+export function catalogSyncing(): boolean {
+  return pending != null;
+}
+
+export function catalogSyncState(): { running: boolean; lastSync: string | null; error: string | null } {
+  return { running: pending != null, lastSync: cache?.loadedAt ?? null, error: lastBuildError };
 }
 
 export function resetCatalog() {
