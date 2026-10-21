@@ -882,7 +882,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
 .waybill-lines { display: grid; }
 .waybill-scroll { overflow-x: auto; }
-.waybill-table { width: 100%; min-width: 64rem; border-collapse: collapse; font-size: .84rem; }
+.waybill-table { width: 100%; min-width: 72rem; border-collapse: collapse; font-size: .84rem; }
 .waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
 .waybill-table .waybill-size { min-width: 6.8rem; }
 .waybill-table .waybill-size .input { min-width: 6.8rem; }
@@ -893,10 +893,14 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .waybill-table th.num, .waybill-table td.num, .waybill-table .input { text-align: left; font-variant-numeric: tabular-nums; }
 .waybill-table td small { display: block; margin-top: .12rem; color: var(--muted); font-size: .75rem; }
-.color-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
-.color-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .16rem .2rem .16rem .55rem; border-radius: 999px; background: #e8eeff; color: #1e3a8a; font-size: .8rem; font-weight: 750; letter-spacing: .02em; }
+.waybill-table tr.has-colors td { background: #f5f8ff; }
+.waybill-table tr.has-colors td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+.waybill-table td.waybill-colors-cell { white-space: nowrap; width: 1%; }
+.waybill-table .color-empty { color: var(--muted); }
+.color-chips { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: .28rem; margin: 0; vertical-align: middle; }
+.color-chip { display: inline-flex; align-items: center; gap: .22rem; height: 1.4rem; padding: 0 .16rem 0 .42rem; border-radius: 999px; background: #e8eeff; color: #1e3a8a; font-size: .72rem; font-weight: 750; letter-spacing: .02em; line-height: 1; white-space: nowrap; }
 .color-chip b { font-weight: 800; }
-.color-chip i { min-width: 1.35rem; padding: .08rem .38rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-size: .74rem; font-weight: 750; text-align: center; }
+.color-chip i { min-width: 1.15rem; height: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-size: .68rem; font-weight: 750; display: inline-grid; place-items: center; }
 .waybill-colors { background: #f4f7ff; padding: .7rem .85rem; }
 .color-edit { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
 .color-pair { display: flex; align-items: center; gap: .35rem; padding: .2rem .35rem .2rem .45rem; background: #fff; border: 1px solid #c9d4f5; border-radius: .75rem; }
@@ -1118,7 +1122,11 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table, .waybill-table tbody { display: block; width: 100%; }
   .waybill-table tbody { display: grid; gap: .7rem; }
   .waybill-table tr { display: grid; width: 100%; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: .9rem; background: #fff; }
-  .waybill-table td { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: .7rem; padding: .38rem 0; border: 0; text-align: right; min-width: 0; }
+  .waybill-table tr.has-colors { background: #f5f8ff; box-shadow: inset 3px 0 0 var(--brand); }
+  .waybill-table tr.has-colors td { background: transparent; box-shadow: none; }
+  .waybill-table td { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: .7rem; padding: .38rem 0; border: 0; text-align: right; min-width: 0; height: auto; }
+  .waybill-table td.waybill-colors-cell { white-space: normal; min-width: 0; }
+  .waybill-table td.waybill-colors-cell .color-chips { flex-wrap: wrap; justify-content: flex-end; }
   .waybill-table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; color: var(--muted); text-align: left; flex: none; max-width: 42%; }
   .waybill-table td.waybill-line-tools, .waybill-table td.waybill-line-tools::before { display: flex; }
   .waybill-table td.waybill-line-tools::before { content: none; }
