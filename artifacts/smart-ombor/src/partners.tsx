@@ -81,6 +81,23 @@ function lineUnits(line: Line) {
   return pack;
 }
 
+function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed') => string) {
+  if (body.error === 'agent') return t('partners.agentMissing');
+  if (body.error === 'store') return t('partners.storeMissing');
+  const raw = String(body.detail || '').trim();
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as { errors?: Array<{ error?: string }> };
+      const text = parsed.errors?.[0]?.error?.trim();
+      if (text) return text;
+    } catch {
+      /* keep fallback */
+    }
+  }
+  if (raw && raw !== 'rejected' && raw !== 'unlinked') return raw;
+  return t('partners.supplyFailed');
+}
+
 function receiptParts(line: Line) {
   const pack = line.pairs > 0 ? line.pairs : 0;
   const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
@@ -531,12 +548,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
       const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };
       if (!response.ok) {
-        const detail = body.detail && !body.detail.trim().startsWith('{') ? body.detail : '';
-        setPostError(body.error === 'agent' ? t('partners.agentMissing') : body.error === 'store' ? t('partners.storeMissing') : body.error === 'unlinked' ? t('partners.noMatch') : detail || t('partners.supplyFailed'));
+        setPostError(supplyError(body, t));
         return;
       }
       setPosting(null);
       await refreshShipments();
+    } catch {
+      setPostError(t('partners.supplyFailed'));
     } finally { setBusy(false); }
   };
 

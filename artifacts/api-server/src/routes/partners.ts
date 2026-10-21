@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError } from "../lib/moysklad";
+import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
   accountFromToken,
@@ -375,11 +376,13 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
     res.status(201).json({ id: created.id, number: created.name || shipment.number, shipment: saved });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
+    logger.warn({ shipment: String(req.params.id), detail }, "MoySklad supply failed");
     if (error instanceof MoySkladError) {
-      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected", detail: error.message });
+      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected", detail });
       return;
     }
-    next(error);
+    res.status(502).json({ error: "rejected", detail });
   }
 });
 

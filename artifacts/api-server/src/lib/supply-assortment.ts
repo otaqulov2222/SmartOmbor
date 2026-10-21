@@ -124,6 +124,17 @@ async function productById(id: string) {
   return null;
 }
 
+async function productByName(name: string) {
+  const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=name=${encodeURIComponent(name)}`);
+  const hit = page.rows.find((row) => row.id && row.name === name);
+  return hit?.id ? productById(hit.id) : null;
+}
+
+function uniqueNameConflict(error: unknown) {
+  if (!(error instanceof MoySkladError)) return false;
+  return error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message);
+}
+
 async function variantsOf(productId: string) {
   const page = await moysklad<{ rows: VariantRow[] }>(`/entity/variant?limit=100&filter=productid=${encodeURIComponent(productId)}&expand=characteristics`);
   return page.rows.filter((row) => row.id);
@@ -312,15 +323,18 @@ export async function buildSupplyPositions(
   for (const line of lines) {
     const parts = receiptParts(line);
     if (!parts.length) continue;
-    const catalogMatch = matchWaybillProduct(scope.catalog, {
-      factoryCode: line.factoryCode || scope.factoryCode,
-      factoryName: scope.factoryName,
-      groupCode: line.sectionCode,
-      productCode: line.productCode,
-      size: line.size,
-    });
-    const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const exact = scope.catalog.products.find((product) => product.name.trim() === name);
+    const catalogMatch = exact
+      ? { id: exact.id, name: exact.name }
+      : matchWaybillProduct(scope.catalog, {
+          factoryCode: line.factoryCode || scope.factoryCode,
+          factoryName: scope.factoryName,
+          groupCode: line.sectionCode,
+          productCode: line.productCode,
+          size: line.size,
+        });
+    const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
     const folder = await ensureFolder(folders, line.sectionCode);
     const priceType = saleTypeOf(line);
     if (line.price > 0) line.priceType = priceType;
@@ -331,11 +345,15 @@ export async function buildSupplyPositions(
   }
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
+  const byName = new Map<string, ProductRow>();
   for (const item of resolved) {
-    if (item.parent) {
-      if (item.folder) await placeInFolder(item.parent.id, item.folder);
-      item.parent.barcodes = await ensureBarcodes("product", item.parent.id, scope.catalog, usedBarcodes);
-      parents.set(item.parent.id, item.parent);
+    const known = item.parent || byName.get(item.name) || null;
+    if (known) {
+      item.parent = known;
+      if (item.folder) await placeInFolder(known.id, item.folder);
+      known.barcodes = await ensureBarcodes("product", known.id, scope.catalog, usedBarcodes);
+      parents.set(known.id, known);
+      byName.set(item.name, known);
       continue;
     }
     const code = item.line.productCode.trim();
@@ -343,18 +361,25 @@ export async function buildSupplyPositions(
     const listed = item.line.price > 0 ? await listedPrices(undefined, saleTypeOf(item.line), item.line.price, currencyMeta) : null;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
-    const product = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", {
-      name: item.name,
-      uom: { meta: uomMeta(PIECE_UOM) },
-      barcodes: [{ ean13: barcode }],
-      ...(listed ? { salePrices: priceBody(listed) } : {}),
-      ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
-      ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
-      ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-      ...(code.length >= 8 ? { code } : {}),
-      ...(code ? { article: code } : {}),
-      ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
-    });
+    let product: (ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }) | null = null;
+    try {
+      product = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", {
+        name: item.name,
+        uom: { meta: uomMeta(PIECE_UOM) },
+        barcodes: [{ ean13: barcode }],
+        ...(listed ? { salePrices: priceBody(listed) } : {}),
+        ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
+        ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
+        ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
+        ...(code.length >= 8 ? { code } : {}),
+        ...(code ? { article: code } : {}),
+        ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
+      });
+    } catch (error) {
+      if (!uniqueNameConflict(error)) throw error;
+      product = await productByName(item.name);
+      if (!product) throw error;
+    }
     if (listed) product.salePrices = listed;
     if (item.folder) product.folderName = item.folder.name;
     product.barcodes = barcodeValues(product.barcodes);
@@ -363,6 +388,7 @@ export async function buildSupplyPositions(
     if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
     item.parent = product;
     parents.set(product.id, product);
+    byName.set(item.name, product);
     created.push(product);
   }
 

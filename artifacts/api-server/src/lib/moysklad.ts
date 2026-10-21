@@ -49,20 +49,35 @@ export async function moyskladBinary(url: string): Promise<{ type: string; body:
 export async function moyskladSend<T>(path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
   const token = moyskladToken();
   if (!token) throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
-  const response = await fetch(`${BASE}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json;charset=utf-8",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const text = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
-    throw new MoySkladError(text || "rejected", response.status);
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await takeSlot();
+    try {
+      const response = await fetch(`${BASE}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json;charset=utf-8",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new MoySkladError(shortMoySkladMessage(response.status, text), response.status);
+      }
+      if (response.status === 204) return {} as T;
+      return (await response.json()) as T;
+    } catch (error) {
+      last = error;
+      const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
+      if (!retry || attempt === 2) throw error;
+    } finally {
+      freeSlot();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
   }
-  return (await response.json()) as T;
+  throw last;
 }
 
 const MAX_IN_FLIGHT = 2;
