@@ -254,6 +254,19 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   return wrote > 0;
 }
 
+async function replaceZeroSupply(supplyId: string) {
+  try {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
+  } catch (error) {
+    logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply unconduct skipped");
+  }
+  try {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, undefined, "DELETE");
+  } catch (error) {
+    logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad zero supply delete skipped");
+  }
+}
+
 async function postSupplyDocument(
   core: Record<string, unknown>,
   packed: Array<Record<string, unknown>>,
@@ -362,11 +375,10 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
           res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
           return;
         }
-        throw new MoySkladError("MoySklad hujjati bor, lekin narx yozilmadi", 400);
       } catch (error) {
-        if (!supplyGone(error)) throw error;
-        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");
+        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "MoySklad price fill failed, replacing supply");
       }
+      await replaceZeroSupply(shipment.moyskladId);
     }
     const account = getAccount(shipment.factoryId);
     let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);

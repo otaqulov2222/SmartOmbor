@@ -85,7 +85,7 @@ function supplyError(body: { error?: string; detail?: string }, t: (key: 'partne
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
   if (body.error === 'posted') return t('partners.supplyFailed');
-  const raw = String(body.detail || body.error || '').trim();
+  const raw = String(body.detail || '').trim();
   if (raw.startsWith('{')) {
     try {
       const parsed = JSON.parse(raw) as { errors?: Array<{ error?: string }> };
