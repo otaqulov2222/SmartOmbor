@@ -676,9 +676,9 @@ function lookupKeys(value: string): string[] {
 let indexedCatalog: Catalog | null = null;
 let barcodeIndex = new Map<string, CatalogProduct[]>();
 
-function wholeToken(name: string, token: string) {
+function wholeToken(name: string, token: string, min = 3) {
   const clean = token.trim();
-  if (clean.length < 3) return false;
+  if (clean.length < min) return false;
   return new RegExp(`(^|\\D)${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`).test(name);
 }
 
@@ -710,10 +710,10 @@ export function matchWaybillProduct(
   const code = input.productCode.trim();
   const size = input.size.trim();
   const group = input.groupCode?.trim() || "";
-  if (code.length < 3) return null;
+  if (!code) return null;
   const bases = catalog.products.filter((product) => {
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
-    if (!wholeToken(product.name, code)) return false;
+    if (!wholeToken(product.name, code, 1)) return false;
     if (group.length >= 3 && !wholeToken(product.name, group)) return false;
     if (size && !product.name.includes(size)) return false;
     return !/\([^)]*\)\s*$/.test(product.name);

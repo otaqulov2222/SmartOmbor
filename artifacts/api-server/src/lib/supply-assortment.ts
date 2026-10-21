@@ -1,5 +1,6 @@
 import { matchProductFolder, matchWaybillProduct, type Catalog } from "./catalog";
 import type { ShipmentLine } from "./partners";
+import { logger } from "./logger";
 import { MoySkladError, moysklad, moyskladSend } from "./moysklad";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
@@ -108,7 +109,7 @@ async function colorCharacteristic() {
   if (rangCharacteristic) return rangCharacteristic;
   const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
   const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id && item.name);
-  if (!found?.id || !found.name) throw new MoySkladError("rang", 400);
+  if (!found?.id || !found.name) throw new MoySkladError("MoySkladda rang xususiyati yo‘q", 400);
   rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
   return rangCharacteristic;
 }
@@ -266,11 +267,16 @@ async function ensureBarcodes(
   return [code];
 }
 
+function saleTypeOf(line: ShipmentLine): string {
+  if (SALE_TYPES.includes(line.priceType)) return line.priceType;
+  return line.price > 0 ? "Standard" : "";
+}
+
 export async function buildSupplyPositions(
   lines: ShipmentLine[],
   currencyMeta: Meta,
   scope: { factoryCode: string; factoryName: string; catalog: Catalog; supplierMeta?: Meta | null },
-): Promise<Planned | null> {
+): Promise<Planned> {
   const parents = new Map<string, ProductRow>();
   const variantCache = new Map<string, VariantRow[]>();
   const packCache = new Map<string, GoodsPack | null>();
@@ -292,13 +298,17 @@ export async function buildSupplyPositions(
     const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
     const folder = matchProductFolder(folders, line.sectionCode);
-    if (line.price > 0 && !SALE_TYPES.includes(line.priceType)) throw new MoySkladError("Narx turi tanlanmagan", 400);
-    if (line.sectionCode.trim().length >= 3 && !folder) throw new MoySkladError(`Bo‘lim topilmadi: ${line.sectionCode.trim()}`, 400);
+    const priceType = saleTypeOf(line);
+    if (line.price > 0) line.priceType = priceType;
+    if (line.sectionCode.trim().length >= 3 && !folder) {
+      logger.warn({ section: line.sectionCode.trim(), name }, "MoySklad folder was not found; product will still post");
+    }
     if (!parent && (!line.productCode.trim() || name.length < 2)) {
       throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
     }
     resolved.push({ line, parent, name, folder });
   }
+  if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
   for (const item of resolved) {
     if (item.parent) {
@@ -309,7 +319,7 @@ export async function buildSupplyPositions(
     }
     const code = item.line.productCode.trim();
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
-    const listed = item.line.price > 0 && SALE_TYPES.includes(item.line.priceType) ? await listedPrices(undefined, item.line.priceType, item.line.price, currencyMeta) : null;
+    const listed = item.line.price > 0 ? await listedPrices(undefined, saleTypeOf(item.line), item.line.price, currencyMeta) : null;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
     const product = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", {
@@ -339,15 +349,15 @@ export async function buildSupplyPositions(
   const links: Planned["links"] = [];
   for (const item of resolved) {
     const parent = item.parent;
-    if (!parent) return null;
+    if (!parent) throw new MoySkladError("Mahsulot yaratilmadi", 400);
     const full = parents.get(parent.id) ?? parent;
     if (!full.salePrices) {
       const loaded = await productById(full.id);
       if (loaded) parents.set(full.id, loaded);
     }
     const product = parents.get(parent.id) ?? full;
-    if (item.line.price > 0 && SALE_TYPES.includes(item.line.priceType)) {
-      product.salePrices = await listedPrices(product.salePrices, item.line.priceType, item.line.price, currencyMeta);
+    if (item.line.price > 0) {
+      product.salePrices = await listedPrices(product.salePrices, saleTypeOf(item.line), item.line.price, currencyMeta);
       await moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices) }, "PUT");
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
@@ -375,7 +385,7 @@ export async function buildSupplyPositions(
         continue;
       }
       const variant = await ensureVariant(product, part.color, known ?? [], scope.catalog, usedBarcodes);
-      if (item.line.price > 0 && SALE_TYPES.includes(item.line.priceType) && variant.id) {
+      if (item.line.price > 0 && variant.id) {
         let current = product.salePrices;
         try {
           const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/variant/${encodeURIComponent(variant.id)}?expand=salePrices.priceType`);
@@ -383,7 +393,7 @@ export async function buildSupplyPositions(
         } catch (error) {
           if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
         }
-        const listed = await listedPrices(current, item.line.priceType, item.line.price, currencyMeta);
+        const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
         await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT");
       }
       positions.push({

@@ -270,7 +270,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     const account = getAccount(shipment.factoryId);
     let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) {
-      res.status(400).json({ error: "unlinked" });
+      res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
       return;
     }
     const catalog = await loadCatalog();
@@ -280,18 +280,22 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       res.status(400).json({ error: "store" });
       return;
     }
-    const agentName = account?.counterpartyName?.trim() || account?.catalogName?.trim() || account?.name?.trim() || "";
-    const [organization, agents, currencies] = await Promise.all([
+    const queries = [...new Set([
+      account?.counterpartyName,
+      account?.catalogName,
+      account?.name,
+      account?.code,
+    ].map((value) => value?.trim()).filter((value): value is string => Boolean(value && value.length >= 2)))];
+    const [organization, currencies, ...agentPages] = await Promise.all([
       moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/organization?limit=1"),
-      moysklad<{ rows: Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }> }>(`/entity/counterparty?limit=100&filter=name=${encodeURIComponent(agentName)}`),
       moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
+      ...queries.map((query) => moysklad<{ rows: Array<{ id?: string; name?: string; meta: { href: string; type: string; mediaType: string } }> }>(`/entity/counterparty?limit=25&search=${encodeURIComponent(query)}`).catch(() => ({ rows: [] }))),
     ]);
-    const namedAgent = agents.rows.find((row) => row.name === agentName);
     const currency = currencies.rows.find((row) => row.isoCode === "UZS");
     const company = organization.rows[0];
     const base = "https://api.moysklad.ru/api/remap/1.2";
     const meta = (href: string, type: string) => ({ href, type, mediaType: "application/json" });
-    let agentMeta = namedAgent?.meta ?? null;
+    let agentMeta: { href: string; type: string; mediaType: string } | null = null;
     if (account?.counterpartyId) {
       try {
         const saved = await moysklad<{ meta: { href: string; type: string; mediaType: string }; name?: string }>(`/entity/counterparty/${encodeURIComponent(account.counterpartyId)}`);
@@ -299,6 +303,14 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       } catch {
         agentMeta = null;
       }
+    }
+    if (!agentMeta) {
+      const rows = agentPages.flatMap((page) => page.rows).filter((row) => row.id && row.name && row.meta);
+      const lowered = queries.map((query) => query.toLowerCase());
+      const exact = rows.filter((row) => lowered.includes((row.name || "").trim().toLowerCase()));
+      const unique = new Map(exact.map((row) => [row.id!, row]));
+      if (unique.size === 1) agentMeta = [...unique.values()][0].meta;
+      else if (rows.length === 1) agentMeta = rows[0].meta;
     }
     if (!agentMeta || !currency || !company) {
       res.status(400).json({ error: agentMeta ? "currency" : "agent" });
@@ -310,8 +322,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       catalog,
       supplierMeta: agentMeta,
     });
-    if (!planned || !planned.positions.length) {
-      res.status(400).json({ error: "unlinked" });
+    if (!planned.positions.length) {
+      res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
       return;
     }
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);

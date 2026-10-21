@@ -411,10 +411,21 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [agent, setAgent] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => {
     if (!posting) return;
-    setAgent(row.account?.counterpartyId && row.account.counterpartyName ? { id: row.account.counterpartyId, name: row.account.counterpartyName } : null);
+    const saved = row.account?.counterpartyId && row.account.counterpartyName ? { id: row.account.counterpartyId, name: row.account.counterpartyName } : null;
+    setAgent(saved);
     setAgentQuery('');
     setAgentHits([]);
-  }, [posting, row.account?.counterpartyId, row.account?.counterpartyName]);
+    if (saved) return;
+    const seed = (row.account?.catalogName || row.account?.name || row.name || '').trim();
+    if (seed.length < 2) return;
+    void fetch(`/api/counterparties?search=${encodeURIComponent(seed)}`).then(response => response.json()).then(data => {
+      const items = Array.isArray(data.items) ? data.items as Array<{ id: string; name: string }> : [];
+      const exact = items.filter(item => item.name.trim().toLowerCase() === seed.toLowerCase());
+      const pick = exact.length === 1 ? exact[0] : items.length === 1 ? items[0] : null;
+      if (pick) setAgent(pick);
+      else setAgentHits(items.slice(0, 8));
+    }).catch(() => undefined);
+  }, [posting, row.account?.counterpartyId, row.account?.counterpartyName, row.account?.catalogName, row.account?.name, row.name]);
   useEffect(() => {
     const text = agentQuery.trim();
     if (text.length < 2) { setAgentHits([]); return; }
