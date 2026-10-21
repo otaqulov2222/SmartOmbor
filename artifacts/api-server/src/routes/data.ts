@@ -31,7 +31,24 @@ import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribe
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { listAccounts } from "../lib/partners";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
+
+const SALE_MARKUP: Record<string, number> = { Premium: 5, Exclusive: 8, Standard: 10 };
+
+function markedSale(cost: number, priceType: string) {
+  const pct = SALE_MARKUP[priceType];
+  if (pct == null || !(cost > 0)) return null;
+  return Math.round(cost * (100 + pct) / 100);
+}
+
+function sameFactoryCode(left: string, right: string) {
+  const a = left.trim().toUpperCase();
+  const b = right.trim().toUpperCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a.replace(/^0+/, "") === b.replace(/^0+/, "") && a.replace(/^0+/, "").length > 0;
+}
 
 const router: IRouter = Router();
 const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
@@ -513,9 +530,15 @@ function som(value: unknown): number | null {
 
 router.post("/products", async (req, res, next) => {
   try {
-    const name = String(req.body?.name ?? "").trim();
-    const code = String(req.body?.code ?? "").trim();
-    const article = String(req.body?.article ?? "").trim() || code;
+    const factoryCode = String(req.body?.factoryCode ?? "").trim().toUpperCase();
+    const groupCode = String(req.body?.groupCode ?? "").trim();
+    const productCode = String(req.body?.productCode ?? req.body?.code ?? "").trim();
+    const size = String(req.body?.size ?? "").trim();
+    const priceType = String(req.body?.priceType ?? "").trim();
+    const builtName = ["Bordo", factoryCode, groupCode, productCode, size].filter(Boolean).join(" ").trim();
+    const name = factoryCode ? builtName : String(req.body?.name ?? "").trim() || builtName;
+    const code = productCode;
+    const article = String(req.body?.article ?? "").trim() || productCode || groupCode;
     const catalog = peekCatalog() ?? await loadCatalog();
     let barcode = String(req.body?.barcode ?? "").trim();
     if (!barcode) barcode = nextInternalEan13(catalog, new Set());
@@ -525,10 +548,17 @@ router.post("/products", async (req, res, next) => {
       Standard: som(req.body?.priceStandard),
     };
     let cost = som(req.body?.cost);
-    if (prices.Exclusive == null && cost != null) prices.Exclusive = cost;
-    if (cost == null && prices.Exclusive != null) cost = prices.Exclusive;
+    if (cost != null && SALE_MARKUP[priceType] != null) {
+      const sale = markedSale(cost, priceType);
+      prices.Exclusive = priceType === "Exclusive" ? sale : null;
+      prices.Premium = priceType === "Premium" ? sale : null;
+      prices.Standard = priceType === "Standard" ? sale : null;
+    } else {
+      if (prices.Exclusive == null && cost != null) prices.Exclusive = cost;
+      if (cost == null && prices.Exclusive != null) cost = prices.Exclusive;
+    }
     const packSize = Math.max(0, Math.round(Number(req.body?.packSize) || 0));
-    if (name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
+    if (!factoryCode || !groupCode || !size || cost == null || SALE_MARKUP[priceType] == null || name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
       res.status(400).json({ error: "rejected" });
       return;
     }
@@ -539,10 +569,38 @@ router.post("/products", async (req, res, next) => {
     if (article) payload.article = article;
     if (barcode) payload.barcodes = [ean13(barcode) ? { ean13: barcode } : { code128: barcode }];
     if (packSize > 1) payload.packs = [{ quantity: packSize, uom: { meta: pachkaMeta } }];
-    const folderId = String(req.body?.folderId ?? "").trim();
-    const supplierId = String(req.body?.supplierId ?? "").trim();
+    let folderId = String(req.body?.folderId ?? "").trim();
+    let supplierId = String(req.body?.supplierId ?? "").trim();
     let folderName: string | null = null;
     let supplierName: string | null = null;
+    if (!supplierId && factoryCode) {
+      const account = listAccounts().find((item) => sameFactoryCode(item.code, factoryCode));
+      if (account?.counterpartyId) {
+        supplierId = account.counterpartyId;
+        supplierName = account.counterpartyName || account.name;
+      } else {
+        const query = account?.counterpartyName || account?.name || factoryCode;
+        try {
+          const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
+          const needle = factoryCode.toUpperCase();
+          const hit = page.rows.find((row) => {
+            const label = (row.name || "").toUpperCase();
+            return Boolean(row.id && (sameFactoryCode(label, factoryCode) || label.includes(needle) || (account?.name && label.includes(account.name.toUpperCase()))));
+          }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
+          if (hit?.id && hit.name) {
+            supplierId = hit.id;
+            supplierName = hit.name;
+          }
+        } catch {
+          /* supplier stays empty; product is still created */
+        }
+      }
+    }
+    if (!folderId && groupCode.length >= 3) {
+      const folders = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
+      const matched = matchProductFolder(folders.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id as string, name: row.name as string, pathName: row.pathName })), groupCode);
+      if (matched?.id) folderId = matched.id;
+    }
     if (folderId) {
       try {
         const folder = await moysklad<{ name?: string; meta: { href: string; type: string; mediaType: string } }>(`/entity/productfolder/${encodeURIComponent(folderId)}`);
@@ -585,14 +643,16 @@ router.post("/products", async (req, res, next) => {
     try {
       const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
       const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
-      const sale = prices.Exclusive ?? cost ?? 0;
+      const sale = prices.Exclusive ?? prices.Premium ?? prices.Standard ?? cost ?? 0;
+      const typeName = prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "";
       const asMeta = (id: string, type: string) => id ? { href: `https://api.moysklad.ru/api/remap/1.2/entity/${type}/${id}`, type, mediaType: "application/json" } : null;
       if (currency) {
-        await writeProductCard(created.id, sale, prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "", currency, {
+        await writeProductCard(created.id, sale, typeName, currency, {
           article,
           supplierMeta: asMeta(supplierId, "counterparty"),
           folderMeta: asMeta(folderId, "productfolder"),
           packSize,
+          buySom: cost ?? undefined,
         });
       } else if (packSize > 1) {
         await ensurePachka(created.id, packSize);
@@ -670,6 +730,55 @@ router.get("/products/suppliers", async (req, res, next) => {
     }
     const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(search)}`);
     res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: row.name })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/factory-setup", async (req, res, next) => {
+  try {
+    const code = String(req.query.code ?? "").trim();
+    if (code.length < 2) {
+      res.json({ found: false, code: "", name: "", supplierId: "", supplierName: "" });
+      return;
+    }
+    const account = listAccounts().find((item) => sameFactoryCode(item.code, code));
+    if (account) {
+      let supplierId = account.counterpartyId || "";
+      let supplierName = account.counterpartyName || account.name;
+      if (!supplierId) {
+        const query = supplierName || account.code;
+        const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
+        const needle = account.code.toUpperCase();
+        const hit = page.rows.find((row) => {
+          const label = (row.name || "").toUpperCase();
+          return Boolean(row.id && (sameFactoryCode(label, account.code) || label.includes(needle) || label.includes(account.name.toUpperCase())));
+        }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
+        if (hit?.id && hit.name) {
+          supplierId = hit.id;
+          supplierName = hit.name;
+        }
+      }
+      res.json({
+        found: true,
+        code: account.code,
+        name: account.name,
+        supplierId,
+        supplierName,
+      });
+      return;
+    }
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(code)}`);
+    const needle = code.toUpperCase();
+    const hit = page.rows.find((row) => {
+      const name = (row.name || "").toUpperCase();
+      return Boolean(row.id && (sameFactoryCode(name, code) || name.includes(needle)));
+    });
+    if (hit?.id && hit.name) {
+      res.json({ found: true, code, name: hit.name, supplierId: hit.id, supplierName: hit.name });
+      return;
+    }
+    res.json({ found: false, code, name: "", supplierId: "", supplierName: "" });
   } catch (error) {
     next(error);
   }

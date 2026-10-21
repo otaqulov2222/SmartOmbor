@@ -137,9 +137,11 @@ export async function writeProductCard(
   som: number,
   priceType: string,
   currencyMeta: Meta,
-  extras: { article?: string; supplierMeta?: Meta | null; description?: string; folderMeta?: Meta | null; packSize?: number } = {},
+  extras: { article?: string; supplierMeta?: Meta | null; description?: string; folderMeta?: Meta | null; packSize?: number; buySom?: number } = {},
 ) {
   if (!productId) return;
+  const buy = extras.buySom != null && extras.buySom > 0 ? extras.buySom : som;
+  const buyKopecks = buy > 0 ? Math.round(buy * 100) : 0;
   const kopecks = som > 0 ? Math.round(som * 100) : 0;
   let current: { salePrices?: Price[]; article?: string; description?: string; supplier?: { meta?: Meta }; uom?: { meta?: Meta }; productFolder?: { meta?: Meta } } = {};
   try {
@@ -150,7 +152,7 @@ export async function writeProductCard(
   const article = extras.article?.trim();
   const description = extras.description?.trim();
   const card: Record<string, unknown> = {
-    ...(kopecks > 0 ? { buyPrice: { value: kopecks, currency: { meta: currencyMeta } } } : {}),
+    ...(buyKopecks > 0 ? { buyPrice: { value: buyKopecks, currency: { meta: currencyMeta } } } : {}),
     ...(article && !current.article?.trim() ? { article } : {}),
     ...(description && !current.description?.trim() ? { description } : {}),
     ...(extras.supplierMeta && !current.supplier?.meta?.href ? { supplier: { meta: extras.supplierMeta } } : {}),

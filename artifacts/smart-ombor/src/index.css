@@ -345,6 +345,8 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .modal { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; background: var(--surface); border-radius: var(--r-lg); padding: 1.2rem; display: grid; gap: 1rem; box-shadow: var(--shadow-lg); animation: pop-in .2s cubic-bezier(.2,.8,.2,1); }
 .product-add { width: min(760px, calc(100vw - 2rem)); align-content: start; }
 .product-add .form-grid { align-items: start; }
+.product-add .name-lock { display: grid; grid-template-columns: 5.6rem minmax(0, 1fr); gap: .5rem; }
+.product-add .input-locked { background: var(--surface-2); color: var(--ink); font-weight: 700; }
 .suggest { display: grid; gap: .1rem; margin-top: .35rem; }
 .suggest button { width: 100%; padding: .4rem .6rem; border: 0; border-radius: .45rem; background: var(--surface-2); color: var(--ink); text-align: left; cursor: pointer; }
 .suggest button:hover { background: var(--brand-soft); }
