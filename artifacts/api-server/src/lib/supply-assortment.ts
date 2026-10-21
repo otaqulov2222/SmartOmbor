@@ -163,14 +163,14 @@ async function ensureVariant(
   return created;
 }
 
-type FolderRow = { id: string; name: string; meta: Meta };
+type FolderRow = { id: string; name: string; pathName?: string; meta: Meta };
 
 async function productFolders(): Promise<FolderRow[]> {
   const folders: FolderRow[] = [];
   for (let offset = 0; offset < 500; offset += 100) {
-    const page = await moysklad<{ meta?: { size?: number }; rows: Array<{ id?: string; name?: string; meta?: Meta }> }>(`/entity/productfolder?limit=100&offset=${offset}`);
+    const page = await moysklad<{ meta?: { size?: number }; rows: Array<{ id?: string; name?: string; pathName?: string; meta?: Meta }> }>(`/entity/productfolder?limit=100&offset=${offset}`);
     for (const row of page.rows) {
-      if (row.id && row.name && row.meta) folders.push({ id: row.id, name: row.name, meta: row.meta });
+      if (row.id && row.name && row.meta) folders.push({ id: row.id, name: row.name, pathName: row.pathName, meta: row.meta });
     }
     if (folders.length >= (page.meta?.size ?? folders.length)) break;
   }
@@ -186,9 +186,12 @@ async function saleTypes() {
   return saleTypeCache;
 }
 
-async function listedPrices(current: Price[] | undefined, typeName: string, som: number, currencyMeta: Meta) {
+async function listedPrices(current: Price[] | undefined, typeName: string, som: number, currencyMeta: Meta): Promise<Price[] | null> {
   const chosen = (await saleTypes()).find((row) => row.name === typeName);
-  if (!chosen) throw new MoySkladError("Narx turi topilmadi", 400);
+  if (!chosen) {
+    logger.warn({ typeName }, "MoySklad sale price type was not found");
+    return null;
+  }
   const chosenHref = chosen.meta.href;
   const kept = (current ?? []).filter((price) => {
     const href = price.priceType?.meta?.href;
@@ -357,8 +360,11 @@ export async function buildSupplyPositions(
     }
     const product = parents.get(parent.id) ?? full;
     if (item.line.price > 0) {
-      product.salePrices = await listedPrices(product.salePrices, saleTypeOf(item.line), item.line.price, currencyMeta);
-      await moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices) }, "PUT");
+      const listed = await listedPrices(product.salePrices, saleTypeOf(item.line), item.line.price, currencyMeta);
+      if (listed) {
+        product.salePrices = listed;
+        await moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices) }, "PUT");
+      }
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
@@ -394,7 +400,7 @@ export async function buildSupplyPositions(
           if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
         }
         const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
-        await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT");
+        if (listed) await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT");
       }
       positions.push({
         quantity: part.quantity,
