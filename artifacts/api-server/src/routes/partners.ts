@@ -373,11 +373,12 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       try {
         const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
         if (filled) {
-          res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
+          res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true });
           return;
         }
       } catch (error) {
-        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "MoySklad price fill failed, replacing supply");
+        if (!supplyGone(error)) throw error;
+        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");
       }
       await replaceZeroSupply(shipment.moyskladId);
       clearShipmentPosted(shipment.id);

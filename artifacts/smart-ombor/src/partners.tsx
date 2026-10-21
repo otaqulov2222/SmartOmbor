@@ -533,7 +533,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const postSupply = async () => {
-    if (!posting) return;
+    if (!posting || posting.moyskladId) return;
     const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
     if (!agent && !row.account?.counterpartyId) { setPostError(t('partners.agentMissing')); return; }
@@ -703,7 +703,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                 <div className="waybill-decide">
                   {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
                   {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
-                  <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>
+                  {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
                 </div>
               </div>
             )}
