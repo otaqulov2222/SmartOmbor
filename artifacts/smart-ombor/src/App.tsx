@@ -477,7 +477,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [addError, setAddError] = useState('');
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
   const [folderId, setFolderId] = useState('');
-  const [factory, setFactory] = useState({ found: false, name: '', supplierId: '', supplierName: '' });
+  const [factory, setFactory] = useState({ found: false, ready: true, name: '', supplierId: '', supplierName: '' });
   useEffect(() => {
     void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
     void fetch('/api/products/next-barcode').then(response => response.json()).then((data: { barcode?: string }) => {
@@ -487,20 +487,26 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   useEffect(() => {
     const code = draft.factoryCode.trim();
     if (code.length < 2) {
-      setFactory({ found: false, name: '', supplierId: '', supplierName: '' });
+      setFactory({ found: false, ready: true, name: '', supplierId: '', supplierName: '' });
       return;
     }
+    let cancelled = false;
+    setFactory({ found: false, ready: false, name: '', supplierId: '', supplierName: '' });
     const timer = window.setTimeout(() => {
       void fetch(`/api/products/factory-setup?code=${encodeURIComponent(code)}`).then(response => response.json()).then((data: { found?: boolean; name?: string; supplierId?: string; supplierName?: string }) => {
+        if (cancelled) return;
         setFactory({
           found: Boolean(data.found),
+          ready: true,
           name: data.name || '',
           supplierId: data.supplierId || '',
           supplierName: data.supplierName || data.name || '',
         });
-      }).catch(() => setFactory({ found: false, name: '', supplierId: '', supplierName: '' }));
+      }).catch(() => {
+        if (!cancelled) setFactory({ found: false, ready: true, name: '', supplierId: '', supplierName: '' });
+      });
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [draft.factoryCode]);
   useEffect(() => {
     const code = draft.groupCode.trim() || draft.productCode.trim();
@@ -520,7 +526,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const name = ['Bordo', nameRest].filter(Boolean).join(' ');
   const cost = draft.cost.trim() ? Number(draft.cost) : null;
   const sale = cost != null && priceType ? markedSale(cost, priceType) : 0;
-  const canSave = factoryCode.length >= 2 && Boolean(groupCode) && Boolean(draft.size) && cost != null && cost > 0 && Boolean(priceType) && !saving;
+  const canSave = factory.found && factoryCode.length >= 2 && Boolean(groupCode) && Boolean(draft.size) && cost != null && cost > 0 && Boolean(priceType) && !saving;
   const saveProduct = async () => {
     if (!canSave || cost == null) return;
     if (!Number.isFinite(cost) || cost < 0) {
@@ -546,21 +552,25 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
           supplierId: factory.supplierId,
         }),
       });
-      if (!response.ok) throw new Error(t('products.addFailed'));
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: '' })) as { error?: string };
+        throw new Error(body.error === 'factory_missing' ? `${t('products.factoryMissing')} ${t('products.factoryMissing.action')}` : t('products.addFailed'));
+      }
       localStorage.setItem(PRODUCT_ADD_MEMORY, JSON.stringify({ factoryCode, packSize: draft.packSize, priceType }));
       onSaved(name);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : t('products.addFailed'));
     } finally { setSaving(false); }
   };
-  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'factoryCode' || key === 'packSize' ? moneyDigits(event.target.value) : event.target.value }));
-  const factoryHint = draft.factoryCode.trim().length >= 2 && !factory.found ? t('products.factoryUnknown') : '';
+  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'packSize' ? moneyDigits(event.target.value) : key === 'factoryCode' ? event.target.value.replace(/[^\dA-Za-z]/g, '').toUpperCase() : event.target.value }));
+  const factoryMissing = factory.ready && draft.factoryCode.trim().length >= 2 && !factory.found;
   return createPortal(<div className="backdrop" onClick={() => { if (!saving) onClose(); }}><form className="modal product-add" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title">
     <div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div>
     <div className="form-grid">
-      <label className="field span-2">{t('products.field.name')}<span className="name-lock"><TextInput testId="input-product-brand" className="input-locked" value={t('zavod.brand')} readOnly tabIndex={-1}/><TextInput testId="input-product-name" className="input-locked" value={nameRest} readOnly placeholder="0044 1025 24-29" tabIndex={-1}/></span></label>
-      <label className="field">{t('zavod.factoryCode')}<TextInput testId="input-product-factory" inputMode="numeric" value={draft.factoryCode} onChange={setText('factoryCode')} autoFocus/>{factoryHint ? <small className="error-text">{factoryHint}</small> : null}</label>
-      <label className="field">{t('products.field.supplier')}<TextInput testId="input-product-supplier" className="input-locked" value={factory.supplierName} readOnly placeholder={t('products.supplierSearch')} tabIndex={-1}/></label>
+      <label className="field span-2">{t('products.field.name')}<span className="name-lock"><TextInput testId="input-product-brand" className="input-locked" value={t('zavod.brand')} readOnly tabIndex={-1}/><TextInput testId="input-product-name" className="input-locked" value={nameRest} readOnly tabIndex={-1}/></span></label>
+      <label className="field">{t('zavod.factoryCode')}<TextInput testId="input-product-factory" value={draft.factoryCode} onChange={setText('factoryCode')} autoFocus/></label>
+      <label className="field">{t('products.field.supplier')}<TextInput testId="input-product-supplier" className="input-locked" value={factory.supplierName} readOnly tabIndex={-1}/></label>
+      {factoryMissing ? <p className="field-note" data-testid="status-factory-missing">{t('products.factoryMissing')} <Link href="/partners" className="notice-link" onClick={onClose}>{t('products.factoryMissing.action')}</Link></p> : null}
       <label className="field">{t('zavod.groupCode')}<TextInput testId="input-product-group" value={draft.groupCode} onChange={setText('groupCode')}/></label>
       <label className="field">{t('zavod.product')}<TextInput testId="input-product-code" value={draft.productCode} onChange={setText('productCode')}/></label>
       <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>

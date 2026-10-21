@@ -50,6 +50,31 @@ function sameFactoryCode(left: string, right: string) {
   return a.replace(/^0+/, "") === b.replace(/^0+/, "") && a.replace(/^0+/, "").length > 0;
 }
 
+async function resolvePartnerFactory(code: string) {
+  const account = listAccounts().find((item) => sameFactoryCode(item.code, code));
+  if (!account) return null;
+  let supplierId = account.counterpartyId || "";
+  let supplierName = account.counterpartyName || account.name;
+  if (!supplierId) {
+    try {
+      const query = supplierName || account.code;
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
+      const needle = account.code.toUpperCase();
+      const hit = page.rows.find((row) => {
+        const label = (row.name || "").toUpperCase();
+        return Boolean(row.id && (sameFactoryCode(label, account.code) || label.includes(needle) || label.includes(account.name.toUpperCase())));
+      }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
+      if (hit?.id && hit.name) {
+        supplierId = hit.id;
+        supplierName = hit.name;
+      }
+    } catch {
+      /* partner exists; supplier can stay empty */
+    }
+  }
+  return { code: account.code, name: account.name, supplierId, supplierName };
+}
+
 const router: IRouter = Router();
 const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -562,6 +587,11 @@ router.post("/products", async (req, res, next) => {
       res.status(400).json({ error: "rejected" });
       return;
     }
+    const partner = await resolvePartnerFactory(factoryCode);
+    if (!partner) {
+      res.status(400).json({ error: "factory_missing" });
+      return;
+    }
     const uomMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/19f1edc0-fc42-4001-94cb-c9ec9c62ec10", type: "uom", mediaType: "application/json" };
     const pachkaMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/2061e032-0683-11f1-0a80-00e70010dbf7", type: "uom", mediaType: "application/json" };
     const payload: Record<string, unknown> = { name, uom: { meta: uomMeta } };
@@ -573,28 +603,9 @@ router.post("/products", async (req, res, next) => {
     let supplierId = String(req.body?.supplierId ?? "").trim();
     let folderName: string | null = null;
     let supplierName: string | null = null;
-    if (!supplierId && factoryCode) {
-      const account = listAccounts().find((item) => sameFactoryCode(item.code, factoryCode));
-      if (account?.counterpartyId) {
-        supplierId = account.counterpartyId;
-        supplierName = account.counterpartyName || account.name;
-      } else {
-        const query = account?.counterpartyName || account?.name || factoryCode;
-        try {
-          const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
-          const needle = factoryCode.toUpperCase();
-          const hit = page.rows.find((row) => {
-            const label = (row.name || "").toUpperCase();
-            return Boolean(row.id && (sameFactoryCode(label, factoryCode) || label.includes(needle) || (account?.name && label.includes(account.name.toUpperCase()))));
-          }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
-          if (hit?.id && hit.name) {
-            supplierId = hit.id;
-            supplierName = hit.name;
-          }
-        } catch {
-          /* supplier stays empty; product is still created */
-        }
-      }
+    if (!supplierId) {
+      supplierId = partner.supplierId;
+      supplierName = partner.supplierName;
     }
     if (!folderId && groupCode.length >= 3) {
       const folders = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
@@ -742,43 +753,12 @@ router.get("/products/factory-setup", async (req, res, next) => {
       res.json({ found: false, code: "", name: "", supplierId: "", supplierName: "" });
       return;
     }
-    const account = listAccounts().find((item) => sameFactoryCode(item.code, code));
-    if (account) {
-      let supplierId = account.counterpartyId || "";
-      let supplierName = account.counterpartyName || account.name;
-      if (!supplierId) {
-        const query = supplierName || account.code;
-        const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
-        const needle = account.code.toUpperCase();
-        const hit = page.rows.find((row) => {
-          const label = (row.name || "").toUpperCase();
-          return Boolean(row.id && (sameFactoryCode(label, account.code) || label.includes(needle) || label.includes(account.name.toUpperCase())));
-        }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
-        if (hit?.id && hit.name) {
-          supplierId = hit.id;
-          supplierName = hit.name;
-        }
-      }
-      res.json({
-        found: true,
-        code: account.code,
-        name: account.name,
-        supplierId,
-        supplierName,
-      });
+    const partner = await resolvePartnerFactory(code);
+    if (!partner) {
+      res.json({ found: false, code, name: "", supplierId: "", supplierName: "" });
       return;
     }
-    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(code)}`);
-    const needle = code.toUpperCase();
-    const hit = page.rows.find((row) => {
-      const name = (row.name || "").toUpperCase();
-      return Boolean(row.id && (sameFactoryCode(name, code) || name.includes(needle)));
-    });
-    if (hit?.id && hit.name) {
-      res.json({ found: true, code, name: hit.name, supplierId: hit.id, supplierName: hit.name });
-      return;
-    }
-    res.json({ found: false, code, name: "", supplierId: "", supplierName: "" });
+    res.json({ found: true, ...partner });
   } catch (error) {
     next(error);
   }
