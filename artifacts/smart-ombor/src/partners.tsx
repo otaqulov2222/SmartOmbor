@@ -133,29 +133,29 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
   };
   if (locked) {
     return <>
-      <td><b>Bordo</b>{chips}</td>
-      <td>{line.factoryCode || '—'}</td>
-      <td>{line.sectionCode || '—'}</td>
-      <td><b>{line.productCode || '—'}</b></td>
-      <td>{line.size || '—'}</td>
-      <td className="num">{fmt(line.pairs)}</td>
-      <td className="num">{fmt(line.boxes)}</td>
-      <td className="num">{line.price ? money(line.price) : '—'}</td>
-      <td>{line.priceType || '—'}</td>
-      <td className="num">{money(lineUnits(line) * line.price)}</td>
+      <td data-label={t('zavod.brand')}><b>Bordo</b>{chips}</td>
+      <td data-label={t('zavod.factoryCode')}>{line.factoryCode || '—'}</td>
+      <td data-label={t('zavod.groupCode')}>{line.sectionCode || '—'}</td>
+      <td data-label={t('zavod.product')}><b>{line.productCode || '—'}</b></td>
+      <td data-label={t('zavod.size')}>{line.size || '—'}</td>
+      <td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td>
+      <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
+      <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
+      <td data-label={t('zavod.priceType')}>{line.priceType || '—'}</td>
+      <td className="num" data-label={t('zavod.sum')}>{money(lineUnits(line) * line.price)}</td>
     </>;
   }
   return <>
-    <td><b>Bordo</b>{chips}</td>
-    <td><input className="input" aria-label={t('zavod.factoryCode')} value={factoryCode} onChange={event => setFactoryCode(event.target.value.replace(/[^0-9A-Za-z]/g, ''))} onBlur={() => commit()}/></td>
-    <td><input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
-    <td><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
-    <td className="waybill-size"><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); commit({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
-    <td><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => commit()}/></td>
-    <td><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
-    <td><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => commit()}/></td>
-    <td className="waybill-type"><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
-    <td className="num">{money(preview * asNumber(price))}</td>
+    <td data-label={t('zavod.brand')}><b>Bordo</b>{chips}</td>
+    <td data-label={t('zavod.factoryCode')}><input className="input" aria-label={t('zavod.factoryCode')} value={factoryCode} onChange={event => setFactoryCode(event.target.value.replace(/[^0-9A-Za-z]/g, ''))} onBlur={() => commit()}/></td>
+    <td data-label={t('zavod.groupCode')}><input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
+    <td data-label={t('zavod.product')}><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => commit()}/></td>
+    <td className="waybill-size" data-label={t('zavod.size')}><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); commit({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => commit()}/></td>
+    <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
+    <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => commit()}/></td>
+    <td className="waybill-type" data-label={t('zavod.priceType')}><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;
 }
 
@@ -664,7 +664,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   return <Fragment key={line.id}>
                     <tr>
                       <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} onSave={patch => saveLine(shipment, line, patch)}/>
-                      <td className="waybill-line-tools">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}</td>
+                      <td className="waybill-line-tools" data-label="">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => void removeLine(shipment, line)}><Trash2 size={14}/></button></>}</td>
                     </tr>
                     {colorFor === line.id && <tr><td className="waybill-colors" colSpan={11}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;
