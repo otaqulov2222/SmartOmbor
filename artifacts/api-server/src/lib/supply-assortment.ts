@@ -294,7 +294,9 @@ export async function buildSupplyPositions(
     const folder = matchProductFolder(folders, line.sectionCode);
     if (line.price > 0 && !SALE_TYPES.includes(line.priceType)) throw new MoySkladError("Narx turi tanlanmagan", 400);
     if (line.sectionCode.trim().length >= 3 && !folder) throw new MoySkladError(`Bo‘lim topilmadi: ${line.sectionCode.trim()}`, 400);
-    if (!parent && (line.productCode.trim().length < 3 || name.length < 2)) return null;
+    if (!parent && (!line.productCode.trim() || name.length < 2)) {
+      throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
+    }
     resolved.push({ line, parent, name, folder });
   }
 

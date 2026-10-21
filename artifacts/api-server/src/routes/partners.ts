@@ -185,11 +185,13 @@ router.get("/partner-factories/:id", async (req, res, next) => {
   }
 });
 
-function lineUnits(line: { pairs: number; quantity: number; colors: Array<{ quantity: number }> }) {
-  if (line.pairs > 0) return line.pairs;
+function lineUnits(line: { pairs: number; boxes: number; quantity: number; colors: Array<{ name?: string; quantity: number }> }) {
+  const pack = line.pairs > 0 ? line.pairs : 0;
+  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
+  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
-  const colors = Array.isArray(line.colors) ? line.colors : [];
-  return colors.reduce((sum, color) => sum + (color.quantity || 0), 0);
+  return pack;
 }
 
 router.get("/counterparties", async (req, res, next) => {

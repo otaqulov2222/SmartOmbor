@@ -506,6 +506,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     if (!posting) return;
     const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
+    if (!agent && !row.account?.counterpartyId) { setPostError(t('partners.agentMissing')); return; }
     setBusy(true); setPostError('');
     try {
       if (row.account && (agent ? agent.id !== row.account.counterpartyId : Boolean(row.account.counterpartyId))) {
