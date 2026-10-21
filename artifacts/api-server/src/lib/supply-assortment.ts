@@ -163,18 +163,39 @@ async function ensureVariant(
   return created;
 }
 
-type FolderRow = { id: string; name: string; pathName?: string; meta: Meta };
+type FolderRow = { id: string; name: string; pathName?: string; meta: Meta; parent?: Meta | null };
 
 async function productFolders(): Promise<FolderRow[]> {
   const folders: FolderRow[] = [];
   for (let offset = 0; offset < 500; offset += 100) {
-    const page = await moysklad<{ meta?: { size?: number }; rows: Array<{ id?: string; name?: string; pathName?: string; meta?: Meta }> }>(`/entity/productfolder?limit=100&offset=${offset}`);
+    const page = await moysklad<{ meta?: { size?: number }; rows: Array<{ id?: string; name?: string; pathName?: string; meta?: Meta; productFolder?: { meta?: Meta } }> }>(`/entity/productfolder?limit=100&offset=${offset}`);
     for (const row of page.rows) {
-      if (row.id && row.name && row.meta) folders.push({ id: row.id, name: row.name, pathName: row.pathName, meta: row.meta });
+      if (row.id && row.name && row.meta) folders.push({ id: row.id, name: row.name, pathName: row.pathName, meta: row.meta, parent: row.productFolder?.meta ?? null });
     }
     if (folders.length >= (page.meta?.size ?? folders.length)) break;
   }
   return folders;
+}
+
+async function ensureFolder(folders: FolderRow[], groupCode: string): Promise<FolderRow | null> {
+  const code = groupCode.trim();
+  if (code.length < 3) return null;
+  const existing = matchProductFolder(folders, code);
+  if (existing) return existing;
+  const parent = folders.find((folder) => /^\d{3,5}$/.test(folder.name.trim()) && folder.parent)?.parent ?? null;
+  try {
+    const created = await moyskladSend<{ id?: string; name?: string; pathName?: string; meta?: Meta }>("/entity/productfolder", {
+      name: code,
+      ...(parent ? { productFolder: { meta: parent } } : {}),
+    });
+    if (!created.id || !created.meta) return null;
+    const folder: FolderRow = { id: created.id, name: created.name || code, pathName: created.pathName, meta: created.meta, parent };
+    folders.push(folder);
+    return folder;
+  } catch (error) {
+    logger.warn({ section: code, err: error instanceof Error ? error.message : error }, "MoySklad folder could not be created");
+    return null;
+  }
 }
 
 let saleTypeCache: Array<{ name: string; meta: Meta }> | null = null;
@@ -300,12 +321,9 @@ export async function buildSupplyPositions(
     });
     const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-    const folder = matchProductFolder(folders, line.sectionCode);
+    const folder = await ensureFolder(folders, line.sectionCode);
     const priceType = saleTypeOf(line);
     if (line.price > 0) line.priceType = priceType;
-    if (line.sectionCode.trim().length >= 3 && !folder) {
-      logger.warn({ section: line.sectionCode.trim(), name }, "MoySklad folder was not found; product will still post");
-    }
     if (!parent && (!line.productCode.trim() || name.length < 2)) {
       throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
     }
