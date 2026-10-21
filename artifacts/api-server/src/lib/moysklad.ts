@@ -1,4 +1,5 @@
 import { moyskladToken } from "./connection";
+import { logger } from "./logger";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 
@@ -6,9 +7,18 @@ export class MoySkladError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly moyCode?: number,
+    readonly parameter?: string,
+    readonly path?: string,
   ) {
     super(message);
   }
+}
+
+export function permissionDenied(error: unknown): boolean {
+  if (!(error instanceof MoySkladError)) return false;
+  if (error.moyCode === 1016 || error.moyCode === 1017 || error.moyCode === 1018 || error.moyCode === 1061) return true;
+  return error.status === 403 || /нет прав|доступ запрещ|ruxsat yetarli emas|API ruxsati yo‘q/i.test(error.message);
 }
 
 export function moyskladConfigured(): boolean {
@@ -64,7 +74,7 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new MoySkladError(shortMoySkladMessage(response.status, text), response.status);
+        throw parseMoySkladFailure(response.status, text, path, true);
       }
       if (response.status === 204) return {} as T;
       return (await response.json()) as T;
@@ -113,21 +123,32 @@ function temporaryMoySklad(error: unknown): boolean {
   return error instanceof MoySkladError && (error.status === 502 || error.status === 503 || error.status === 504);
 }
 
-function shortMoySkladMessage(status: number, body: string): string {
-  if (status === 502 || status === 503 || status === 504) return "MoySklad vaqtincha javob bermadi";
-  const trimmed = body.replace(/\s+/g, " ").trim();
-  if (!trimmed || /<html|<!doctype/i.test(trimmed)) return `MoySklad ${status}`;
-  try {
-    const parsed = JSON.parse(body) as { errors?: Array<{ code?: number; error?: string }> };
-    const code = parsed.errors?.[0]?.code;
-    const text = parsed.errors?.[0]?.error;
-    if (code === 1061) return "MoySklad API ruxsati yo‘q";
-    if (code === 1016) return "MoySkladda ruxsat yetarli emas";
-    if (text) return text.slice(0, 160);
-  } catch {
-    /* plain text */
+function parseMoySkladFailure(status: number, body: string, path?: string, log = false): MoySkladError {
+  if (status === 502 || status === 503 || status === 504) {
+    return new MoySkladError("MoySklad vaqtincha javob bermadi", status, undefined, undefined, path);
   }
-  return `MoySklad ${status}: ${trimmed.slice(0, 160)}`;
+  const trimmed = body.replace(/\s+/g, " ").trim();
+  if (!trimmed || /<html|<!doctype/i.test(trimmed)) {
+    return new MoySkladError(`MoySklad ${status}`, status, undefined, undefined, path);
+  }
+  try {
+    const parsed = JSON.parse(body) as { errors?: Array<{ code?: number; error?: string; parameter?: string }> };
+    const first = parsed.errors?.[0];
+    const code = first?.code;
+    const parameter = first?.parameter?.trim() || undefined;
+    const text = first?.error?.trim();
+    if (log) logger.warn({ path, status, moyCode: code, parameter }, "MoySklad write failed");
+    let message = text ? text.slice(0, 160) : `MoySklad ${status}`;
+    if (code === 1061) message = "MoySklad API ruxsati yo‘q";
+    else if (code === 1016) message = "MoySkladda ruxsat yetarli emas";
+    else if (code === 1017) message = "MoySkladda tahrirlashga ruxsat yo‘q";
+    else if (code === 1018) message = parameter
+      ? `MoySkladda ${parameter} yaratishga ruxsat yo‘q`
+      : "MoySkladda yangi obyekt yaratishga ruxsat yo‘q";
+    return new MoySkladError(message, status, code, parameter, path);
+  } catch {
+    return new MoySkladError(`MoySklad ${status}: ${trimmed.slice(0, 160)}`, status, undefined, undefined, path);
+  }
 }
 
 export async function moysklad<T>(path: string): Promise<T> {
@@ -151,7 +172,7 @@ export async function moysklad<T>(path: string): Promise<T> {
 
       if (!response.ok) {
         const body = await response.text();
-        throw new MoySkladError(shortMoySkladMessage(response.status, body), response.status);
+        throw parseMoySkladFailure(response.status, body, path);
       }
 
       return (await response.json()) as T;

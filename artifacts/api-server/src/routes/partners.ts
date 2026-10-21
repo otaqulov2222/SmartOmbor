@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions } from "../lib/supply-assortment";
-import { moysklad, moyskladSend, MoySkladError } from "../lib/moysklad";
+import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -195,6 +195,35 @@ function lineUnits(line: { pairs: number; boxes: number; quantity: number; color
   return pack;
 }
 
+async function postSupplyDocument(
+  core: Record<string, unknown>,
+  packed: Array<Record<string, unknown>>,
+  unpacked: Array<Record<string, unknown>>,
+) {
+  const attempts: Array<{ applicable: boolean; positions: Array<Record<string, unknown>>; label: string }> = [
+    { applicable: true, positions: packed, label: "packed" },
+    { applicable: true, positions: unpacked, label: "unpacked" },
+    { applicable: false, positions: unpacked, label: "draft" },
+  ];
+  let last: unknown;
+  for (const attempt of attempts) {
+    try {
+      return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+        ...core,
+        applicable: attempt.applicable,
+        positions: attempt.positions,
+      });
+    } catch (error) {
+      last = error;
+      const retry = permissionDenied(error)
+        || (error instanceof MoySkladError && /pack|uom|barcode|applicable/i.test(`${error.parameter || ""} ${error.message}`));
+      logger.warn({ label: attempt.label, err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
+      if (!retry) throw error;
+    }
+  }
+  throw last;
+}
+
 router.get("/counterparties", async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
@@ -356,28 +385,39 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         inTransit: 0,
       });
     }
-    const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+    const supplyCore = {
       name: shipment.number,
       moment: `${shipment.date} 12:00:00`,
-      applicable: true,
       organization: { meta: company.meta },
       agent: { meta: agentMeta },
       store: { meta: meta(`${base}/entity/store/${store.id}`, "store") },
       rate: { currency: { meta: currency.meta } },
-      positions: planned.positions.map((item) => ({
-        quantity: item.quantity,
-        price: item.price,
-        assortment: item.assortment,
-        ...(item.pack ? { pack: item.pack } : {}),
-      })),
-    });
+    };
+    const packed = planned.positions.map((item) => ({
+      quantity: item.quantity,
+      price: item.price,
+      assortment: item.assortment,
+      ...(item.pack ? { pack: item.pack } : {}),
+    }));
+    const unpacked = planned.positions.map((item) => ({
+      quantity: item.quantity,
+      price: item.price,
+      assortment: item.assortment,
+    }));
+    const created = await postSupplyDocument(supplyCore, packed, unpacked);
     applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
     res.status(201).json({ id: created.id, number: created.name || shipment.number, shipment: saved });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
-    logger.warn({ shipment: String(req.params.id), detail }, "MoySklad supply failed");
+    logger.warn({
+      shipment: String(req.params.id),
+      detail,
+      path: error instanceof MoySkladError ? error.path : undefined,
+      moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
+      parameter: error instanceof MoySkladError ? error.parameter : undefined,
+    }, "MoySklad supply failed");
     if (error instanceof MoySkladError) {
       res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected", detail });
       return;

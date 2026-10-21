@@ -1,7 +1,7 @@
 import { matchProductFolder, matchWaybillProduct, type Catalog } from "./catalog";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
-import { MoySkladError, moysklad, moyskladSend } from "./moysklad";
+import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 const SALE_TYPES = ["Exclusive", "Premium", "Standard"];
@@ -61,27 +61,32 @@ function packBody(pack: GoodsPack, quantity = pack.quantity) {
 }
 
 async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
-  const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
-  const packs = current.packs ?? [];
-  const pachka = packs.find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka");
-  if (!(packSize > 1)) {
-    if (!current.uom) await moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT");
+  try {
+    const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
+    const packs = current.packs ?? [];
+    const pachka = packs.find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka");
+    if (!(packSize > 1)) {
+      if (!current.uom) await optionalWrite(() => moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT"));
+      return null;
+    }
+    if (pachka?.id && pachka.quantity === packSize && current.uom && pachka.uom?.meta) return pachka;
+    const next = packs
+      .filter((pack) => pack.id && pack.id !== pachka?.id)
+      .map((pack) => packBody(pack));
+    if (packSize > 1) next.push(pachka?.id ? packBody(pachka, packSize) : { quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } });
+    const updated = await moyskladSend<{ packs?: GoodsPack[] }>(`/entity/product/${productId}`, {
+      ...(current.uom ? {} : { uom: { meta: uomMeta(PIECE_UOM) } }),
+      ...(next.length ? { packs: next } : {}),
+    }, "PUT");
+    const saved = (updated.packs ?? []).find((pack) => pack.quantity === packSize && pack.uom?.meta);
+    if (saved?.id && saved.uom?.meta) return saved;
+    const again = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom`);
+    return (again.packs ?? []).find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka" && pack.quantity === packSize) ?? null;
+  } catch (error) {
+    if (!permissionDenied(error)) throw error;
+    logger.warn({ productId, packSize, err: error instanceof Error ? error.message : error }, "MoySklad pack skipped");
     return null;
   }
-  if (pachka?.id && pachka.quantity === packSize && current.uom && pachka.uom?.meta) return pachka;
-  const next = packs
-    .filter((pack) => pack.id && pack.id !== pachka?.id)
-    .map((pack) => packBody(pack));
-  if (packSize > 1) next.push(pachka?.id ? packBody(pachka, packSize) : { quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } });
-  const updated = await moyskladSend<{ packs?: GoodsPack[] }>(`/entity/product/${productId}`, {
-    ...(current.uom ? {} : { uom: { meta: uomMeta(PIECE_UOM) } }),
-    ...(next.length ? { packs: next } : {}),
-  }, "PUT");
-  if (!(packSize > 1)) return null;
-  const saved = (updated.packs ?? []).find((pack) => pack.quantity === packSize && pack.uom?.meta);
-  if (saved?.id && saved.uom?.meta) return saved;
-  const again = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom`);
-  return (again.packs ?? []).find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka" && pack.quantity === packSize) ?? null;
 }
 
 export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
@@ -107,11 +112,17 @@ let rangCharacteristic: { id: string; name: string; href: string } | null = null
 
 async function colorCharacteristic() {
   if (rangCharacteristic) return rangCharacteristic;
-  const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
-  const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id && item.name);
-  if (!found?.id || !found.name) throw new MoySkladError("MoySkladda rang xususiyati yo‘q", 400);
-  rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
-  return rangCharacteristic;
+  try {
+    const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
+    const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id && item.name);
+    if (!found?.id || !found.name) return null;
+    rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
+    return rangCharacteristic;
+  } catch (error) {
+    if (!permissionDenied(error)) throw error;
+    logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad rang characteristic unavailable");
+    return null;
+  }
 }
 
 async function productById(id: string) {
@@ -135,6 +146,41 @@ function uniqueNameConflict(error: unknown) {
   return error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message);
 }
 
+async function optionalWrite<T>(task: () => Promise<T>, label: string, extra?: Record<string, unknown>): Promise<T | null> {
+  try {
+    return await task();
+  } catch (error) {
+    if (!permissionDenied(error)) throw error;
+    logger.warn({ ...extra, err: error instanceof Error ? error.message : error }, label);
+    return null;
+  }
+}
+
+const STRIP_PRODUCT_FIELDS = ["packs", "barcodes", "productFolder", "supplier", "salePrices", "buyPrice", "code"] as const;
+
+async function createProduct(body: Record<string, unknown>): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
+  const payload: Record<string, unknown> = { ...body };
+  for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 1; attempt += 1) {
+    try {
+      return await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
+    } catch (error) {
+      if (uniqueNameConflict(error)) {
+        const existing = await productByName(String(payload.name ?? ""));
+        if (existing) return existing;
+        throw error;
+      }
+      if (!permissionDenied(error)) throw error;
+      const drop = error instanceof MoySkladError && error.parameter && error.parameter in payload
+        ? error.parameter
+        : STRIP_PRODUCT_FIELDS.find((field) => field in payload);
+      if (!drop) throw error;
+      logger.warn({ field: drop, name: payload.name }, "MoySklad product create retry without field");
+      delete payload[drop];
+    }
+  }
+  throw new MoySkladError("MoySklad mahsulot yaratilmadi", 403);
+}
+
 async function variantsOf(productId: string) {
   const page = await moysklad<{ rows: VariantRow[] }>(`/entity/variant?limit=100&filter=productid=${encodeURIComponent(productId)}&expand=characteristics`);
   return page.rows.filter((row) => row.id);
@@ -146,31 +192,89 @@ async function ensureVariant(
   known: VariantRow[],
   catalog: Catalog,
   used: Set<string>,
-) {
+): Promise<VariantRow | null> {
   const found = known.find((row) => sameColor(variantColor(row), color));
   if (found?.id) {
     await ensureBarcodes("variant", found.id, catalog, used);
     return found;
   }
   const rang = await colorCharacteristic();
+  if (!rang || !product.meta) return null;
   const prices = (product.salePrices ?? []).filter((price) => price.priceType?.meta && price.value != null);
   const barcode = nextInternalEan13(catalog, used);
-  used.add(barcode);
-  const body = {
-    product: { meta: product.meta },
-    characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
-    barcodes: [{ ean13: barcode }],
-    ...(prices.length ? { salePrices: prices.map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } })) } : {}),
-  };
-  let created: VariantRow;
-  try {
-    created = await moyskladSend<VariantRow>("/entity/variant", body);
-  } catch (error) {
-    if (!prices.length || !(error instanceof MoySkladError)) throw error;
-    created = await moyskladSend<VariantRow>("/entity/variant", { product: body.product, characteristics: body.characteristics, barcodes: body.barcodes });
+  const attempts: Array<Record<string, unknown>> = [
+    {
+      product: { meta: product.meta },
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+      barcodes: [{ ean13: barcode }],
+      ...(prices.length ? { salePrices: prices.map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } })) } : {}),
+    },
+    {
+      product: { meta: product.meta },
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+      barcodes: [{ ean13: barcode }],
+    },
+    {
+      product: { meta: product.meta },
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+    },
+  ];
+  for (const body of attempts) {
+    try {
+      const created = await moyskladSend<VariantRow>("/entity/variant", body);
+      used.add(barcode);
+      if (created.id) await ensureBarcodes("variant", created.id, catalog, used);
+      known.push({ ...created, characteristics: [{ name: "rang", value: color }] });
+      return created;
+    } catch (error) {
+      if (uniqueNameConflict(error)) {
+        const rows = await variantsOf(product.id);
+        const hit = rows.find((row) => sameColor(variantColor(row), color));
+        if (hit?.id) {
+          known.push(hit);
+          return hit;
+        }
+      }
+      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+      if (!permissionDenied(error) && body === attempts[attempts.length - 1]) throw error;
+      logger.warn({ color, product: product.name, err: error instanceof Error ? error.message : error }, "MoySklad variant create retry");
+    }
   }
-  if (created.id) await ensureBarcodes("variant", created.id, catalog, used);
-  known.push({ ...created, characteristics: [{ name: "rang", value: color }] });
+  return null;
+}
+
+async function colorNamedProduct(
+  parent: ProductRow,
+  color: string,
+  extras: {
+    folder: FolderRow | null;
+    supplierMeta?: Meta | null;
+    currencyMeta: Meta;
+    price: number;
+    priceType: string;
+    article: string;
+    catalog: Catalog;
+    used: Set<string>;
+  },
+): Promise<ProductRow> {
+  const name = `${parent.name || ""} ${color}`.trim();
+  const existing = await productByName(name);
+  if (existing) return existing;
+  const listed = extras.price > 0 ? await listedPrices(undefined, extras.priceType, extras.price, extras.currencyMeta) : null;
+  const barcode = nextInternalEan13(extras.catalog, extras.used);
+  extras.used.add(barcode);
+  const created = await createProduct({
+    name,
+    uom: { meta: uomMeta(PIECE_UOM) },
+    barcodes: [{ ean13: barcode }],
+    ...(listed ? { salePrices: priceBody(listed) } : {}),
+    ...(extras.folder ? { productFolder: { meta: extras.folder.meta } } : {}),
+    ...(extras.supplierMeta ? { supplier: { meta: extras.supplierMeta } } : {}),
+    ...(extras.article ? { article: extras.article } : {}),
+    ...(extras.price > 0 ? { buyPrice: { value: Math.round(extras.price * 100), currency: { meta: extras.currencyMeta } } } : {}),
+  });
+  if (listed) created.salePrices = listed;
+  created.barcodes = barcodeValues(created.barcodes);
   return created;
 }
 
@@ -277,10 +381,15 @@ function nextInternalEan13(catalog: Catalog, used: Set<string>): string {
 }
 
 async function placeInFolder(productId: string, folder: FolderRow) {
-  const current = await moysklad<{ productFolder?: { meta?: { href?: string } } }>(`/entity/product/${encodeURIComponent(productId)}?expand=productFolder`);
-  if (current.productFolder?.meta?.href === folder.meta.href) return;
-  if (current.productFolder?.meta?.href) return;
-  await moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, { productFolder: { meta: folder.meta } }, "PUT");
+  try {
+    const current = await moysklad<{ productFolder?: { meta?: { href?: string } } }>(`/entity/product/${encodeURIComponent(productId)}?expand=productFolder`);
+    if (current.productFolder?.meta?.href === folder.meta.href) return;
+    if (current.productFolder?.meta?.href) return;
+    await moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, { productFolder: { meta: folder.meta } }, "PUT");
+  } catch (error) {
+    if (!permissionDenied(error)) throw error;
+    logger.warn({ productId, folder: folder.name, err: error instanceof Error ? error.message : error }, "MoySklad folder place skipped");
+  }
 }
 
 async function ensureBarcodes(
@@ -298,8 +407,8 @@ async function ensureBarcodes(
   }
   const code = nextInternalEan13(catalog, used);
   used.add(code);
-  await moyskladSend(path, { barcodes: [{ ean13: code }] }, "PUT");
-  return [code];
+  const saved = await optionalWrite(() => moyskladSend(path, { barcodes: [{ ean13: code }] }, "PUT"), "MoySklad barcode skipped", { id, kind });
+  return saved ? [code] : existing;
 }
 
 function saleTypeOf(line: ShipmentLine): string {
@@ -371,25 +480,18 @@ export async function buildSupplyPositions(
     const listed = item.line.price > 0 ? await listedPrices(undefined, saleTypeOf(item.line), item.line.price, currencyMeta) : null;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
-    let product: (ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }) | null = null;
-    try {
-      product = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", {
-        name: item.name,
-        uom: { meta: uomMeta(PIECE_UOM) },
-        barcodes: [{ ean13: barcode }],
-        ...(listed ? { salePrices: priceBody(listed) } : {}),
-        ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
-        ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
-        ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-        ...(code.length >= 8 ? { code } : {}),
-        ...(code ? { article: code } : {}),
-        ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
-      });
-    } catch (error) {
-      if (!uniqueNameConflict(error)) throw error;
-      product = await productByName(item.name);
-      if (!product) throw error;
-    }
+    const product = await createProduct({
+      name: item.name,
+      uom: { meta: uomMeta(PIECE_UOM) },
+      barcodes: [{ ean13: barcode }],
+      ...(listed ? { salePrices: priceBody(listed) } : {}),
+      ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
+      ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
+      ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
+      ...(code.length >= 8 ? { code } : {}),
+      ...(code ? { article: code } : {}),
+      ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
+    });
     if (listed) product.salePrices = listed;
     if (item.folder) product.folderName = item.folder.name;
     product.barcodes = barcodeValues(product.barcodes);
@@ -417,7 +519,11 @@ export async function buildSupplyPositions(
       const listed = await listedPrices(product.salePrices, saleTypeOf(item.line), item.line.price, currencyMeta);
       if (listed) {
         product.salePrices = listed;
-        await moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices) }, "PUT");
+        await optionalWrite(
+          () => moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices!) }, "PUT"),
+          "MoySklad sale price skipped",
+          { product: product.name },
+        );
       }
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
@@ -445,22 +551,50 @@ export async function buildSupplyPositions(
         continue;
       }
       const variant = await ensureVariant(product, part.color, known ?? [], scope.catalog, usedBarcodes);
-      if (item.line.price > 0 && variant.id) {
-        let current = product.salePrices;
-        try {
-          const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/variant/${encodeURIComponent(variant.id)}?expand=salePrices.priceType`);
-          if (loaded.salePrices?.length) current = loaded.salePrices;
-        } catch (error) {
-          if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
+      let assortment: { meta: Meta };
+      let stockId: string;
+      if (variant?.id) {
+        if (item.line.price > 0) {
+          let current = product.salePrices;
+          try {
+            const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/variant/${encodeURIComponent(variant.id)}?expand=salePrices.priceType`);
+            if (loaded.salePrices?.length) current = loaded.salePrices;
+          } catch (error) {
+            if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
+          }
+          const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
+          if (listed) {
+            await optionalWrite(
+              () => moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT"),
+              "MoySklad variant price skipped",
+              { color: part.color },
+            );
+          }
         }
-        const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
-        if (listed) await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT");
+        assortment = { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") };
+        stockId = variant.id;
+      } else {
+        const colored = await colorNamedProduct(product, part.color, {
+          folder: item.folder,
+          supplierMeta: scope.supplierMeta,
+          currencyMeta,
+          price: item.line.price,
+          priceType: saleTypeOf(item.line),
+          article: item.line.productCode.trim(),
+          catalog: scope.catalog,
+          used: usedBarcodes,
+        });
+        if (!colored.meta?.href) colored.meta = entityMeta(`${BASE}/entity/product/${colored.id}`, "product");
+        parents.set(colored.id, colored);
+        if (!created.some((row) => row.id === colored.id)) created.push(colored);
+        assortment = { meta: colored.meta };
+        stockId = colored.id;
       }
       positions.push({
         quantity: part.quantity,
         price: Math.round(item.line.price * 100),
-        assortment: { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") },
-        stockId: variant.id,
+        assortment,
+        stockId,
         ...(pack ? { pack } : {}),
       });
     }
