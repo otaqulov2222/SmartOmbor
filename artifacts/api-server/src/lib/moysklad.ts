@@ -60,7 +60,7 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
   const token = moyskladToken();
   if (!token) throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   let last: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     await takeSlot();
     try {
       const response = await fetch(`${BASE}${path}`, {
@@ -81,11 +81,11 @@ export async function moyskladSend<T>(path: string, body: unknown, method: "POST
     } catch (error) {
       last = error;
       const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
-      if (!retry || attempt === 2) throw error;
+      if (!retry || attempt === 5) throw error;
     } finally {
       freeSlot();
     }
-    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    await new Promise((resolve) => setTimeout(resolve, retryDelay(last, attempt)));
   }
   throw last;
 }
@@ -123,7 +123,15 @@ function temporaryMoySklad(error: unknown): boolean {
   return error instanceof MoySkladError && (error.status === 502 || error.status === 503 || error.status === 504);
 }
 
+function retryDelay(error: unknown, attempt: number) {
+  if (error instanceof MoySkladError && error.status === 429) return 3000 * (attempt + 1);
+  return 500 * (attempt + 1);
+}
+
 function parseMoySkladFailure(status: number, body: string, path?: string, log = false): MoySkladError {
+  if (status === 429) {
+    return new MoySkladError("MoySklad so‘rov limiti. 20 soniyadan keyin bir marta qayta bosing.", 429, undefined, undefined, path);
+  }
   if (status === 502 || status === 503 || status === 504) {
     return new MoySkladError("MoySklad vaqtincha javob bermadi", status, undefined, undefined, path);
   }
@@ -158,7 +166,7 @@ export async function moysklad<T>(path: string): Promise<T> {
   }
 
   let last: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     await takeSlot();
     try {
       const response = await fetch(`${BASE}${path}`, {
@@ -178,12 +186,12 @@ export async function moysklad<T>(path: string): Promise<T> {
       return (await response.json()) as T;
     } catch (error) {
       last = error;
-      const retry = networkFailure(error) || temporaryMoySklad(error);
-      if (!retry || attempt === 2) throw error;
+      const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
+      if (!retry || attempt === 5) throw error;
     } finally {
       freeSlot();
     }
-    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    await new Promise((resolve) => setTimeout(resolve, retryDelay(last, attempt)));
   }
   throw last;
 }

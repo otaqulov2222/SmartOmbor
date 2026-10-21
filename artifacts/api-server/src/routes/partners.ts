@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions, receiptParts } from "../lib/supply-assortment";
-import { idFromHref, moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
+import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -179,15 +179,8 @@ router.get("/partner-factories/:id", async (req, res, next) => {
     }
     const catalog = await loadCatalog();
     linkExactShipmentLines(account.id, (code) => exactCatalogProduct(catalog, code));
-    const shipments = listShipments(account.id);
-    for (const shipment of shipments) {
-      if (!shipment.moyskladId) continue;
-      void fillZeroSupplyPrices(shipment.moyskladId, shipment.lines).catch((error) => {
-        logger.warn({ shipment: shipment.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price repair failed");
-      });
-    }
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
-    res.json({ account: { ...safe, password: passwordPlain || null }, shipments });
+    res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {
     next(error);
   }
@@ -242,8 +235,6 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   if (doc.applicable) {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
   }
-  const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
-  const uzs = currencies.rows.find((item) => item.isoCode === "UZS")?.meta;
   let wrote = 0;
   for (const item of zero) {
     const row = item.row;
@@ -255,17 +246,6 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
       vatEnabled: false,
     }, "PUT");
     wrote += 1;
-    const stockId = idFromHref(row.assortment?.meta?.href);
-    const kind = row.assortment?.meta?.type === "variant" ? "variant" : "product";
-    if (stockId && uzs) {
-      try {
-        await moyskladSend(`/entity/${kind}/${encodeURIComponent(stockId)}`, {
-          buyPrice: { value: price, currency: { meta: uzs } },
-        }, "PUT");
-      } catch (error) {
-        logger.warn({ stockId, err: error instanceof Error ? error.message : error }, "MoySklad buy price skipped");
-      }
-    }
   }
   if (doc.applicable) {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: true }, "PUT");
