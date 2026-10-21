@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
-import { buildSupplyPositions, receiptParts } from "../lib/supply-assortment";
+import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
@@ -188,12 +188,7 @@ router.get("/partner-factories/:id", async (req, res, next) => {
 });
 
 function lineUnits(line: { pairs: number; boxes: number; quantity: number; colors: Array<{ name?: string; quantity: number }> }) {
-  const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
-  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
-  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
-  if (line.quantity > 0) return line.quantity;
-  return pack;
+  return pieceCount(line);
 }
 
 function kopecks(som: number) {
@@ -370,15 +365,36 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     if (shipment.moyskladId) {
+      let gone = false;
       try {
         const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
+        try {
+          const catalog = await loadCatalog();
+          const owner = getAccount(shipment.factoryId);
+          const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
+          const currency = currencies.rows.find((row) => row.isoCode === "UZS") || currencies.rows[0];
+          if (currency?.meta) {
+            await stampWaybillCardPrices(shipment.lines, currency.meta, {
+              factoryCode: owner?.code || "",
+              factoryName: owner?.catalogName || owner?.name || "",
+              catalog,
+            });
+          }
+        } catch (error) {
+          logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Waybill product prices were not stamped");
+        }
         if (filled) {
           res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true });
           return;
         }
       } catch (error) {
         if (!supplyGone(error)) throw error;
+        gone = true;
         logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");
+      }
+      if (!gone) {
+        res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true });
+        return;
       }
       await replaceZeroSupply(shipment.moyskladId);
       clearShipmentPosted(shipment.id);
@@ -444,6 +460,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     }
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
     for (const product of planned.created) {
+      const linked = planned.links.find((item) => item.product.id === product.id);
+      const source = shipment.lines.find((line) => line.id === linked?.lineId);
       addCatalogProduct({
         id: product.id,
         name: product.name || "",
@@ -453,13 +471,13 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         factory: account?.name || null,
         category: product.folderName || null,
         unit: "шт",
-        packType: null,
-        packSize: 1,
+        packType: source && source.pairs > 1 ? "pachka" : null,
+        packSize: source && source.pairs > 1 ? source.pairs : 1,
         imageUrl: null,
         stock: 0,
         available: 0,
-        cost: null,
-        salePrice: null,
+        cost: source?.price ?? null,
+        salePrice: source?.price ?? null,
         lastSale: null,
         lastReceipt: null,
         sales7: 0,

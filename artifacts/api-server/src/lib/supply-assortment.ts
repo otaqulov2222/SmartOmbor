@@ -66,7 +66,7 @@ async function ensurePachka(productId: string, packSize: number): Promise<GoodsP
     const packs = current.packs ?? [];
     const pachka = packs.find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka");
     if (!(packSize > 1)) {
-      if (!current.uom) await optionalWrite(() => moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT"));
+      if (!current.uom) await optionalWrite(() => moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT"), "MoySklad uom skipped", { productId });
       return null;
     }
     if (pachka?.id && pachka.quantity === packSize && current.uom && pachka.uom?.meta) return pachka;
@@ -89,15 +89,42 @@ async function ensurePachka(productId: string, packSize: number): Promise<GoodsP
   }
 }
 
+export function pieceCount(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): number {
+  const pack = line.pairs > 0 ? line.pairs : 0;
+  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
+  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  if (pack > 0 && line.boxes > 0) return pack * line.boxes;
+  return line.quantity > 0 ? line.quantity : pack;
+}
+
 export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter((color) => color.name.trim() && color.quantity > 0);
+  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
   if (pack > 0 && colors.length) return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity * pack }));
-  if (pack > 0 && line.boxes > 0) return [{ color: null, quantity: pack * line.boxes }];
-  const total = line.quantity > 0 ? line.quantity : pack;
+  const total = pieceCount(line);
   if (total <= 0) return [];
-  if (!colors.length) return [{ color: null, quantity: total }];
-  return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity }));
+  return [{ color: null, quantity: total }];
+}
+
+async function writeProductPrices(productId: string, som: number, priceType: string, currencyMeta: Meta) {
+  if (!(som > 0) || !productId) return;
+  const kopecks = Math.round(som * 100);
+  let current: Price[] | undefined;
+  try {
+    const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType`);
+    current = loaded.salePrices;
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError && error.status === 404)) throw error;
+  }
+  const listed = await listedPrices(current, priceType, som, currencyMeta);
+  await optionalWrite(
+    () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, {
+      buyPrice: { value: kopecks, currency: { meta: currencyMeta } },
+      ...(listed ? { salePrices: priceBody(listed) } : {}),
+    }, "PUT"),
+    "MoySklad product prices skipped",
+    { productId },
+  );
 }
 
 function sameColor(left: string, right: string) {
@@ -263,7 +290,7 @@ async function colorNamedProduct(
   const listed = extras.price > 0 ? await listedPrices(undefined, extras.priceType, extras.price, extras.currencyMeta) : null;
   const barcode = nextInternalEan13(extras.catalog, extras.used);
   extras.used.add(barcode);
-  const created = await createProduct({
+    const created = await createProduct({
     name,
     uom: { meta: uomMeta(PIECE_UOM) },
     barcodes: [{ ean13: barcode }],
@@ -275,6 +302,7 @@ async function colorNamedProduct(
   });
   if (listed) created.salePrices = listed;
   created.barcodes = barcodeValues(created.barcodes);
+  if (extras.price > 0) await writeProductPrices(created.id, extras.price, extras.priceType, extras.currencyMeta);
   return created;
 }
 
@@ -413,7 +441,32 @@ async function ensureBarcodes(
 
 function saleTypeOf(line: ShipmentLine): string {
   if (SALE_TYPES.includes(line.priceType)) return line.priceType;
-  return line.price > 0 ? "Standard" : "";
+  return line.price > 0 ? "Exclusive" : "";
+}
+
+export async function stampWaybillCardPrices(
+  lines: ShipmentLine[],
+  currencyMeta: Meta,
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+) {
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (!(line.price > 0)) continue;
+    const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const exact = scope.catalog.products.find((product) => product.name.trim() === name);
+    const matched = exact
+      ? { id: exact.id, name: exact.name }
+      : matchWaybillProduct(scope.catalog, {
+          factoryCode: line.factoryCode || scope.factoryCode,
+          factoryName: scope.factoryName,
+          groupCode: line.sectionCode,
+          productCode: line.productCode,
+          size: line.size,
+        });
+    if (!matched?.id || seen.has(matched.id)) continue;
+    seen.add(matched.id);
+    await writeProductPrices(matched.id, line.price, saleTypeOf(line), currencyMeta);
+  }
 }
 
 function productIdentity(line: ShipmentLine, factoryCode: string) {
@@ -515,25 +568,13 @@ export async function buildSupplyPositions(
       if (loaded) parents.set(full.id, loaded);
     }
     const product = parents.get(parent.id) ?? full;
-    if (item.line.price > 0) {
-      const listed = await listedPrices(product.salePrices, saleTypeOf(item.line), item.line.price, currencyMeta);
-      if (listed) {
-        product.salePrices = listed;
-        await optionalWrite(
-          () => moyskladSend(`/entity/product/${encodeURIComponent(product.id)}`, { salePrices: priceBody(product.salePrices!) }, "PUT"),
-          "MoySklad sale price skipped",
-          { product: product.name },
-        );
-      }
-    }
+    if (item.line.price > 0) await writeProductPrices(product.id, item.line.price, saleTypeOf(item.line), currencyMeta);
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
     const packKey = `${product.id}:${packSize}`;
     if (!packCache.has(packKey)) packCache.set(packKey, await ensurePachka(product.id, packSize));
-    const salePack = packCache.get(packKey);
-    const pack = salePack?.id && salePack.uom?.meta ? { id: salePack.id, quantity: salePack.quantity, uom: { meta: salePack.uom.meta } } : undefined;
     let known = variantCache.get(product.id);
     if (!known && parts.some((part) => part.color)) {
       known = await variantsOf(product.id);
@@ -546,7 +587,6 @@ export async function buildSupplyPositions(
           price: Math.round(item.line.price * 100),
           assortment: { meta: product.meta?.href ? product.meta : entityMeta(`${BASE}/entity/product/${product.id}`, "product") },
           stockId: product.id,
-          ...(pack ? { pack } : {}),
         });
         continue;
       }
@@ -595,7 +635,6 @@ export async function buildSupplyPositions(
         price: Math.round(item.line.price * 100),
         assortment,
         stockId,
-        ...(pack ? { pack } : {}),
       });
     }
   }
