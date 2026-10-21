@@ -118,6 +118,20 @@ function requireWaybillLine(line: ShipmentLine) {
   if (pieceCount(line) <= 0) throw new MoySkladError(`Miqdor yo‘q (${label})`, 400);
 }
 
+function asPriceTypes(raw: unknown): Array<{ name: string; meta: Meta }> {
+  const list = Array.isArray(raw) ? raw : Array.isArray((raw as { rows?: unknown[] })?.rows) ? (raw as { rows: unknown[] }).rows : [];
+  return list.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const item = row as { name?: string; meta?: Partial<Meta> };
+    if (!item.name?.trim() || !item.meta?.href) return [];
+    return [{ name: item.name.trim(), meta: { href: item.meta.href, type: item.meta.type || "pricetype", mediaType: item.meta.mediaType || "application/json" } }];
+  });
+}
+
+function samePriceType(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 async function writeProductCard(
   productId: string,
   som: number,
@@ -133,22 +147,32 @@ async function writeProductCard(
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError && error.status === 404)) throw error;
   }
-  const listed = kopecks > 0 ? await listedPrices(current.salePrices, priceType, som, currencyMeta) : null;
   const article = extras.article?.trim();
   const description = extras.description?.trim();
-  const patch: Record<string, unknown> = {
+  const card: Record<string, unknown> = {
     ...(kopecks > 0 ? { buyPrice: { value: kopecks, currency: { meta: currencyMeta } } } : {}),
-    ...(listed ? { salePrices: priceBody(listed) } : {}),
     ...(article && !current.article?.trim() ? { article } : {}),
     ...(description && !current.description?.trim() ? { description } : {}),
     ...(extras.supplierMeta && !current.supplier?.meta?.href ? { supplier: { meta: extras.supplierMeta } } : {}),
     ...(!current.uom ? { uom: { meta: uomMeta(PIECE_UOM) } } : {}),
   };
-  if (!Object.keys(patch).length) return;
+  if (Object.keys(card).length) {
+    await optionalWrite(
+      () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, card, "PUT"),
+      "MoySklad product card skipped",
+      { productId },
+    );
+  }
+  if (!(kopecks > 0) || !priceType) return;
+  const listed = await listedPrices(current.salePrices, priceType, som, currencyMeta);
+  if (!listed) {
+    logger.warn({ productId, priceType }, "MoySklad Exclusive/sale price was not written");
+    return;
+  }
   await optionalWrite(
-    () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, patch, "PUT"),
-    "MoySklad product card skipped",
-    { productId },
+    () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, { salePrices: priceBody(listed) }, "PUT"),
+    "MoySklad sale prices skipped",
+    { productId, priceType },
   );
 }
 
@@ -387,27 +411,42 @@ let saleTypeCache: Array<{ name: string; meta: Meta }> | null = null;
 
 async function saleTypes() {
   if (saleTypeCache) return saleTypeCache;
-  const rows = await moysklad<Array<{ name?: string; meta?: Meta }>>("/context/companysettings/pricetype");
-  saleTypeCache = rows.filter((row): row is { name: string; meta: Meta } => Boolean(row.name && row.meta));
+  try {
+    saleTypeCache = asPriceTypes(await moysklad("/context/companysettings/pricetype"));
+  } catch (error) {
+    if (!permissionDenied(error)) throw error;
+    logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad price types unavailable");
+    saleTypeCache = [];
+  }
   return saleTypeCache;
 }
 
 async function listedPrices(current: Price[] | undefined, typeName: string, som: number, currencyMeta: Meta): Promise<Price[] | null> {
-  const chosen = (await saleTypes()).find((row) => row.name === typeName);
-  if (!chosen) {
-    logger.warn({ typeName }, "MoySklad sale price type was not found");
+  const wanted = typeName.trim();
+  if (!wanted || !(som > 0)) return null;
+  const kopecks = Math.round(som * 100);
+  const fromProduct = asPriceTypes((current ?? []).map((price) => ({ name: price.priceType?.name, meta: price.priceType?.meta })));
+  const types = new Map<string, { name: string; meta: Meta }>();
+  for (const row of [...fromProduct, ...(await saleTypes())]) {
+    if (!types.has(row.meta.href)) types.set(row.meta.href, row);
+  }
+  if (!types.size) {
+    logger.warn({ typeName: wanted }, "MoySklad sale price type was not found");
     return null;
   }
-  const chosenHref = chosen.meta.href;
-  const kept = (current ?? []).filter((price) => {
-    const href = price.priceType?.meta?.href;
-    if (!href || price.value == null || href === chosenHref || price.priceType?.name === typeName) return false;
-    return true;
+  const chosen = [...types.values()].find((row) => samePriceType(row.name, wanted));
+  if (!chosen) {
+    logger.warn({ typeName: wanted, have: [...types.values()].map((row) => row.name) }, "MoySklad sale price type was not found");
+    return null;
+  }
+  return [...types.values()].map((type) => {
+    const existing = (current ?? []).find((price) => price.priceType?.meta?.href === type.meta.href);
+    return {
+      value: samePriceType(type.name, wanted) ? kopecks : (existing?.value ?? 0),
+      currency: existing?.currency ?? { meta: currencyMeta },
+      priceType: { meta: type.meta, name: type.name },
+    };
   });
-  return [
-    ...kept.map((price) => ({ value: price.value, currency: price.currency ?? { meta: currencyMeta }, priceType: { meta: price.priceType?.meta, name: price.priceType?.name } })),
-    { value: Math.round(som * 100), currency: { meta: currencyMeta }, priceType: { meta: chosen.meta, name: typeName } },
-  ];
 }
 
 function priceBody(rows: Price[]) {
