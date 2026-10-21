@@ -25,10 +25,12 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, matchProductFolder, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { ensurePachka, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
+import { logger } from "../lib/logger";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
 const router: IRouter = Router();
@@ -82,6 +84,20 @@ router.get("/moysklad/status", async (_req, res) => {
     return;
   }
 
+  const cached = peekCatalog();
+  if (catalogSyncing() && cached) {
+    res.json(
+      GetMoyskladStatusResponse.parse({
+        configured: true,
+        connected: true,
+        companyName: cached.companyName,
+        lastSync: cached.loadedAt,
+        error: cached.error,
+      }),
+    );
+    return;
+  }
+
   try {
     const [organization, catalog] = await Promise.all([
       moysklad<{ rows?: Array<{ name?: string }> }>("/entity/organization?limit=1"),
@@ -111,12 +127,16 @@ router.get("/moysklad/status", async (_req, res) => {
   }
 });
 
+router.get("/moysklad/sync", (_req, res) => {
+  res.json(catalogSyncState());
+});
+
 router.post("/moysklad/sync", async (_req, res) => {
   const startedAt = new Date().toISOString();
   try {
-    const current = await loadCatalog(false);
+    const current = peekCatalog() ?? await loadCatalog(false);
     const age = Date.now() - Date.parse(current.loadedAt);
-    const fresh = age >= 0 && age < SYNC_COOLDOWN_MS;
+    const fresh = !catalogSyncing() && age >= 0 && age < SYNC_COOLDOWN_MS;
     if (fresh) {
       res.json(
         SyncMoyskladResponse.parse({
@@ -132,7 +152,33 @@ router.post("/moysklad/sync", async (_req, res) => {
       return;
     }
     const before = current.loadedAt;
-    const catalog = await loadCatalog(true);
+    const job = loadCatalog(true);
+    const raced = await Promise.race([
+      job.then((catalog) => ({ done: true as const, catalog })),
+      new Promise<{ done: false }>((resolve) => setTimeout(() => resolve({ done: false }), 2500)),
+    ]);
+    if (!raced.done) {
+      void job
+        .then((catalog) => {
+          if (catalog.loadedAt !== before) void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
+        })
+        .catch((error: unknown) => {
+          logger.warn({ err: error instanceof Error ? error.message : error }, "Background catalog sync failed");
+        });
+      res.json(
+        SyncMoyskladResponse.parse({
+          id: crypto.randomUUID(),
+          status: "running",
+          startedAt,
+          finishedAt: current.loadedAt,
+          productCount: current.productCount,
+          warehouseCount: current.warehouses.length,
+          error: null,
+        }),
+      );
+      return;
+    }
+    const catalog = raced.catalog;
     const kept = catalog.loadedAt === before;
     if (!kept) void recordAudit({ action: "catalog.sync", entityType: "catalog", details: `${catalog.productCount}` });
     res.json(
@@ -396,13 +442,13 @@ router.get("/dashboard/day", async (req, res, next) => {
     readDayDisk();
     const cached = dayCache.get(date);
     const freshFor = date === today ? 2 * 60_000 : 6 * 60 * 60_000;
-    if (cached && Date.now() - cached.savedAt < freshFor) {
+    if (cached && (catalogSyncing() || Date.now() - cached.savedAt < freshFor)) {
       res.json(cached.body);
       return;
     }
     if (cached) {
       res.json(cached.body);
-      void loadDay(date).catch(() => undefined);
+      if (!catalogSyncing()) void loadDay(date).catch(() => undefined);
       return;
     }
     res.json(await loadDay(date));
@@ -469,22 +515,30 @@ router.post("/products", async (req, res, next) => {
   try {
     const name = String(req.body?.name ?? "").trim();
     const code = String(req.body?.code ?? "").trim();
-    const article = String(req.body?.article ?? "").trim();
-    const barcode = String(req.body?.barcode ?? "").trim();
+    const article = String(req.body?.article ?? "").trim() || code;
+    const catalog = peekCatalog() ?? await loadCatalog();
+    let barcode = String(req.body?.barcode ?? "").trim();
+    if (!barcode) barcode = nextInternalEan13(catalog, new Set());
     const prices = {
       Exclusive: som(req.body?.priceExclusive ?? req.body?.price),
       Premium: som(req.body?.pricePremium),
       Standard: som(req.body?.priceStandard),
     };
-    const cost = som(req.body?.cost);
+    let cost = som(req.body?.cost);
+    if (prices.Exclusive == null && cost != null) prices.Exclusive = cost;
+    if (cost == null && prices.Exclusive != null) cost = prices.Exclusive;
+    const packSize = Math.max(0, Math.round(Number(req.body?.packSize) || 0));
     if (name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
       res.status(400).json({ error: "rejected" });
       return;
     }
-    const payload: Record<string, unknown> = { name };
+    const uomMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/19f1edc0-fc42-4001-94cb-c9ec9c62ec10", type: "uom", mediaType: "application/json" };
+    const pachkaMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/2061e032-0683-11f1-0a80-00e70010dbf7", type: "uom", mediaType: "application/json" };
+    const payload: Record<string, unknown> = { name, uom: { meta: uomMeta } };
     if (code) payload.code = code;
     if (article) payload.article = article;
     if (barcode) payload.barcodes = [ean13(barcode) ? { ean13: barcode } : { code128: barcode }];
+    if (packSize > 1) payload.packs = [{ quantity: packSize, uom: { meta: pachkaMeta } }];
     const folderId = String(req.body?.folderId ?? "").trim();
     const supplierId = String(req.body?.supplierId ?? "").trim();
     let folderName: string | null = null;
@@ -528,6 +582,24 @@ router.post("/products", async (req, res, next) => {
       if (cost != null) payload.buyPrice = { value: Math.round(cost * 100), currency: { meta: currency } };
     }
     const created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
+    try {
+      const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
+      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+      const sale = prices.Exclusive ?? cost ?? 0;
+      const asMeta = (id: string, type: string) => id ? { href: `https://api.moysklad.ru/api/remap/1.2/entity/${type}/${id}`, type, mediaType: "application/json" } : null;
+      if (currency) {
+        await writeProductCard(created.id, sale, prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "", currency, {
+          article,
+          supplierMeta: asMeta(supplierId, "counterparty"),
+          folderMeta: asMeta(folderId, "productfolder"),
+          packSize,
+        });
+      } else if (packSize > 1) {
+        await ensurePachka(created.id, packSize);
+      }
+    } catch (error) {
+      logger.warn({ productId: created.id, err: error instanceof Error ? error.message : error }, "MoySklad product card finish skipped");
+    }
     addCatalogProduct({
       id: created.id,
       name: created.name,
@@ -537,8 +609,8 @@ router.post("/products", async (req, res, next) => {
       factory: supplierName,
       category: folderName,
       unit: "шт",
-      packType: null,
-      packSize: 1,
+      packType: packSize > 1 ? "pachka" : null,
+      packSize: packSize > 1 ? packSize : 1,
       imageUrl: null,
       stock: 0,
       available: 0,
@@ -598,6 +670,59 @@ router.get("/products/suppliers", async (req, res, next) => {
     }
     const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(search)}`);
     res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: row.name })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/next-barcode", async (_req, res, next) => {
+  try {
+    const catalog = peekCatalog() ?? await loadCatalog();
+    res.json({ barcode: nextInternalEan13(catalog, new Set()) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/suggest", async (req, res, next) => {
+  try {
+    const code = String(req.query.code ?? "").trim();
+    if (code.length < 2) {
+      res.json({ folderId: "", folderName: "", supplierId: "", supplierName: "", article: "", cost: null, priceExclusive: null, packSize: null });
+      return;
+    }
+    const catalog = peekCatalog() ?? await loadCatalog();
+    const needle = code.toLowerCase();
+    const exact = catalog.products.filter((product) => product.code?.toLowerCase() === needle || product.article?.toLowerCase() === needle);
+    const sample = exact.find((product) => product.category || product.factory || product.cost || product.salePrice) || exact[0] || null;
+    const folders = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
+    const folderRows = folders.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id as string, name: row.name as string, pathName: row.pathName }));
+    const byCategory = sample?.category
+      ? folderRows.find((folder) => folder.pathName === sample.category || folder.name === sample.category)
+      : null;
+    const byCode = matchProductFolder(folderRows, code);
+    const folder = byCategory || byCode;
+    let supplierId = "";
+    let supplierName = sample?.factory || "";
+    if (supplierName.length >= 2) {
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(supplierName)}`);
+      const hit = page.rows.find((row) => row.id && row.name && row.name.trim().toLowerCase() === supplierName.trim().toLowerCase())
+        || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
+      if (hit?.id && hit.name) {
+        supplierId = hit.id;
+        supplierName = hit.name;
+      }
+    }
+    res.json({
+      folderId: folder?.id || "",
+      folderName: folder ? (folder.pathName || folder.name) : "",
+      supplierId,
+      supplierName: supplierId ? supplierName : "",
+      article: sample?.article || code,
+      cost: sample?.cost ?? null,
+      priceExclusive: sample?.salePrice ?? sample?.cost ?? null,
+      packSize: sample && sample.packSize > 1 ? sample.packSize : null,
+    });
   } catch (error) {
     next(error);
   }

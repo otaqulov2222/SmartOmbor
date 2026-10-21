@@ -17,7 +17,7 @@ import {
   useCreateTask, useGetCurrentUser, useGetDashboard,
   useGetMoyskladStatus, useGetNonMovingProducts, useGetPurchaseRecommendations, useGetSalesAnalytics,
   useListAuditEvents, useListDocuments, useListProducts, useListStock, useListTasks, useListUsers,
-  useListWarehouses, useSyncMoysklad, useUpdateTask,
+  useListWarehouses, useUpdateTask,
   useUpdateUserRole,
 } from '@workspace/api-client-react';
 import type {
@@ -25,7 +25,7 @@ import type {
 } from '@workspace/api-client-react';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TKey } from '@/i18n';
-import { AutoRefresh, AUTO_REFRESH_MS } from '@/auto-refresh';
+import { AutoRefresh, AUTO_REFRESH_MS, useCatalogRefresh } from '@/auto-refresh';
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
@@ -388,7 +388,7 @@ function DashboardPage() {
   const { t, lang, fmt, money, date, dateTime } = useI18n(); const docKind = useDocKind();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [day, setDay] = useState(today);
-  const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useSyncMoysklad(); const cache = useQueryClient();
+  const q = useGetDashboard({ query: { refetchInterval: AUTO_REFRESH_MS } }); const status = useGetMoyskladStatus(); const sync = useCatalogRefresh();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const r = await fetch('/api/dashboard/warehouses'); if (!r.ok) throw new Error(t('dash.warehouses.failed')); return r.json(); }, refetchInterval: AUTO_REFRESH_MS });
   const chosen = useQuery<DayView>({ queryKey: ['dashboard-day', day], queryFn: async () => { const r = await fetch(`/api/dashboard/day?date=${day}`); if (!r.ok) throw new Error(t('common.loadFailedHint')); return r.json(); }, retry: 1, refetchInterval: AUTO_REFRESH_MS });
   const sales = useGetSalesAnalytics({ period: '7d' }, { query: { enabled: day === today } });
@@ -401,7 +401,7 @@ function DashboardPage() {
   const maxSale = Math.max(1, ...trend.map(x => x.amount));
   const recentDocs = chosen.data?.documents ?? [];
   const liveReady = chosen.data?.date === day;
-  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const refresh = sync.refresh;
   const attention = d ? [
     { href: '/products', icon: CircleAlert, tone: 'tone-amber', label: t('dash.attention.low'), note: t('dash.attention.low.note'), value: d.lowStockCount as number | null },
     { href: '/non-moving', icon: Clock3, tone: 'tone-slate', label: t('dash.attention.idle'), note: t('dash.attention.idle.note'), value: d.nonMovingCount as number | null },
@@ -411,13 +411,13 @@ function DashboardPage() {
   const syncKept = sync.isSuccess && sync.data?.error === 'kept-cache';
   const syncFresh = sync.isSuccess && sync.data?.error === 'already-fresh';
   return <div className="dash">
-    <header className="page-head"><div><h1>{t('dash.title')}</h1>{d?.lastSync ? <p>{t('dash.catalog.asOf', { date: dateTime(d.lastSync) })}</p> : null}</div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={sync.isPending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
+    <header className="page-head"><div><h1>{t('dash.title')}</h1>{d?.lastSync ? <p>{t('dash.catalog.asOf', { date: dateTime(d.lastSync) })}</p> : null}</div><div className="page-actions"><label className="dash-day"><input className="input" type="date" max={today} value={day} onChange={event => setDay(event.target.value && event.target.value <= today ? event.target.value : today)} data-testid="input-dashboard-date" aria-label={t('dash.day')}/></label><ExportButton kind="dashboard" defaultPeriod="today" testId="button-export-dashboard"/><button type="button" className="btn btn-secondary" disabled={sync.pending} onClick={refresh} data-testid="button-sync-dashboard"><RefreshCw size={15} className={sync.pending ? 'spin' : ''}/>{sync.pending ? t('common.refreshing') : t('common.refresh')}</button></div></header>
     <QueryError q={q} id="dashboard"/>
     {status.isError && <Notice kind="error" title={t('dash.notice.statusFailed')} testId="status-integration-error"/>}
     {!status.isLoading && !connected && !status.isError && <Notice kind={status.data?.configured ? 'error' : 'info'} title={status.data?.configured ? t('dash.notice.disconnected') : t('dash.notice.unconfigured')} testId="status-integration-unconfigured">{status.data?.error || t('dash.notice.unconfiguredBody')} <Link href="/settings" className="notice-link" data-testid="link-settings-integration">{t('nav.settings')} <ArrowRight size={14}/></Link></Notice>}
-    {syncFresh && <Notice kind="info" title={t('dash.sync.fresh')} testId="status-sync-fresh"/>}
-    {syncKept && <Notice kind="warning" title={t('dash.sync.kept')} testId="status-sync-kept"/>}
-    {sync.isError && <Notice kind="error" title={t('dash.sync.failed')} testId="status-sync-error">{(() => { const raw = sync.error instanceof Error ? sync.error.message : ''; return /503|502|504|band|unavailable|javob bermadi|kept-cache/i.test(raw) ? t('dash.sync.busy') : (raw || t('common.tryAgain')); })()}</Notice>}
+    {!sync.pending && syncFresh && <Notice kind="info" title={t('dash.sync.fresh')} testId="status-sync-fresh"/>}
+    {!sync.pending && syncKept && <Notice kind="warning" title={t('dash.sync.kept')} testId="status-sync-kept"/>}
+    {!sync.pending && sync.isError && <Notice kind="error" title={t('dash.sync.failed')} testId="status-sync-error">{(() => { const raw = sync.error instanceof Error ? sync.error.message : ''; return /503|502|504|band|unavailable|javob bermadi|kept-cache|HTTP 429/i.test(raw) ? t('dash.sync.busy') : (raw || t('common.tryAgain')); })()}</Notice>}
     {q.isLoading ? <LoadingRows count={3}/> : d ? <>
       <section className="kpis" aria-label={t('dash.title')}>
         <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Box size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
@@ -454,19 +454,29 @@ function moneyDigits(value: string) {
   return value.replace(/[^\d]/g, '');
 }
 
+const PRODUCT_ADD_MEMORY = 'bordo.product-add';
+type ProductAddMemory = { folderId?: string; supplierId?: string; supplierName?: string; packSize?: string };
+function readProductAddMemory(): ProductAddMemory {
+  try { return JSON.parse(localStorage.getItem(PRODUCT_ADD_MEMORY) || '{}') as ProductAddMemory; } catch { return {}; }
+}
+
 function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (name: string) => void }) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '', cost: '', size: '' });
+  const remembered = readProductAddMemory();
+  const [draft, setDraft] = useState({ name: '', code: '', article: '', priceExclusive: '', pricePremium: '', priceStandard: '', barcode: '', cost: '', size: '', packSize: remembered.packSize || '' });
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState('');
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
-  const [folderId, setFolderId] = useState('');
+  const [folderId, setFolderId] = useState(remembered.folderId || '');
   const [supplierQuery, setSupplierQuery] = useState('');
   const [supplierHits, setSupplierHits] = useState<Array<{ id: string; name: string }>>([]);
-  const [supplierId, setSupplierId] = useState('');
-  const [supplierName, setSupplierName] = useState('');
+  const [supplierId, setSupplierId] = useState(remembered.supplierId || '');
+  const [supplierName, setSupplierName] = useState(remembered.supplierName || '');
   useEffect(() => {
     void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
+    void fetch('/api/products/next-barcode').then(response => response.json()).then((data: { barcode?: string }) => {
+      if (data.barcode) setDraft(current => current.barcode ? current : { ...current, barcode: data.barcode || '' });
+    }).catch(() => undefined);
   }, []);
   useEffect(() => {
     const text = supplierQuery.trim();
@@ -476,15 +486,37 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     }, 250);
     return () => window.clearTimeout(timer);
   }, [supplierQuery]);
+  useEffect(() => {
+    const code = draft.code.trim();
+    if (code.length < 2) return;
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/products/suggest?code=${encodeURIComponent(code)}`).then(response => response.json()).then((data: { folderId?: string; supplierId?: string; supplierName?: string; article?: string; cost?: number | null; priceExclusive?: number | null; packSize?: number | null }) => {
+        setDraft(current => ({
+          ...current,
+          article: current.article || data.article || '',
+          cost: current.cost || (data.cost ? String(data.cost) : ''),
+          priceExclusive: current.priceExclusive || (data.priceExclusive ? String(data.priceExclusive) : ''),
+          packSize: current.packSize || (data.packSize ? String(data.packSize) : ''),
+        }));
+        if (data.folderId) setFolderId(current => current || data.folderId || '');
+        if (data.supplierId && data.supplierName) {
+          setSupplierId(current => current || data.supplierId || '');
+          setSupplierName(current => current || data.supplierName || '');
+        }
+      }).catch(() => undefined);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [draft.code]);
   const saveProduct = async () => {
-    let name = draft.name.trim();
+    let name = draft.name.trim() || draft.code.trim();
     if (name.length < 2) return;
     if (draft.size && !name.includes(draft.size)) name = `${name} ${draft.size}`;
     const amount = (value: string) => value.trim() ? Number(value) : null;
-    const priceExclusive = amount(draft.priceExclusive);
+    const cost = amount(draft.cost);
+    const priceExclusive = amount(draft.priceExclusive) ?? cost;
     const pricePremium = amount(draft.pricePremium);
     const priceStandard = amount(draft.priceStandard);
-    const cost = amount(draft.cost);
+    const packSize = amount(draft.packSize);
     if ([priceExclusive, pricePremium, priceStandard, cost].some(price => price != null && (!Number.isFinite(price) || price < 0))) {
       setAddError(t('products.addFailed'));
       return;
@@ -492,23 +524,25 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     setSaving(true);
     setAddError('');
     try {
-      const response = await fetch('/api/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, code: draft.code.trim(), article: draft.article.trim(), priceExclusive, pricePremium, priceStandard, cost, barcode: draft.barcode.trim(), folderId, supplierId }) });
+      const response = await fetch('/api/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, code: draft.code.trim(), article: draft.article.trim() || draft.code.trim(), priceExclusive, pricePremium, priceStandard, cost: cost ?? priceExclusive, barcode: draft.barcode.trim(), folderId, supplierId, packSize }) });
       if (!response.ok) throw new Error(t('products.addFailed'));
+      localStorage.setItem(PRODUCT_ADD_MEMORY, JSON.stringify({ folderId, supplierId, supplierName, packSize: draft.packSize }));
       onSaved(name);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : t('products.addFailed'));
     } finally { setSaving(false); }
   };
-  const setText = (key: 'name' | 'code' | 'article' | 'barcode') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: event.target.value }));
+  const setText = (key: 'name' | 'code' | 'article' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: event.target.value }));
   const setMoney = (key: 'priceExclusive' | 'pricePremium' | 'priceStandard' | 'cost') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: moneyDigits(event.target.value) }));
   return createPortal(<div className="backdrop" onClick={() => { if (!saving) onClose(); }}><form className="modal product-add" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title">
     <div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div>
     <div className="form-grid">
-      <label className="field span-2">{t('products.field.name')}<TextInput testId="input-product-name" value={draft.name} onChange={setText('name')} autoFocus required/></label>
+      <label className="field span-2">{t('products.field.name')}<TextInput testId="input-product-name" value={draft.name} onChange={setText('name')} autoFocus/></label>
       <label className="field">{t('products.field.code')}<TextInput testId="input-product-code" value={draft.code} onChange={setText('code')}/></label>
       <label className="field">{t('products.field.article')}<TextInput testId="input-product-article" value={draft.article} onChange={setText('article')}/></label>
       <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
-      <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')}/></label>
+      <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')} placeholder={t('products.barcodeAuto')}/></label>
+      <label className="field">{t('products.field.pack')}<TextInput testId="input-product-pack" inputMode="numeric" value={draft.packSize} onChange={setText('packSize')}/></label>
       <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={setMoney('cost')}/></label>
       <label className="field">{t('products.field.priceExclusive')}<TextInput testId="input-product-price-exclusive" inputMode="numeric" value={draft.priceExclusive} onChange={setMoney('priceExclusive')}/></label>
       <label className="field">{t('products.field.pricePremium')}<TextInput testId="input-product-price-premium" inputMode="numeric" value={draft.pricePremium} onChange={setMoney('pricePremium')}/></label>
@@ -517,7 +551,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       <label className="field">{t('products.field.supplier')}<input className="input" value={supplierName || supplierQuery} placeholder={t('products.supplierSearch')} onChange={event => { setSupplierId(''); setSupplierName(''); setSupplierQuery(event.target.value); }} data-testid="input-product-supplier"/>{supplierHits.length > 0 && <ul className="suggest">{supplierHits.map(item => <li key={item.id}><button type="button" onClick={() => { setSupplierId(item.id); setSupplierName(item.name); setSupplierHits([]); }}>{item.name}</button></li>)}</ul>}</label>
     </div>
     {addError && <p className="error-text" data-testid="status-product-add-error">{addError}</p>}
-    <div className="form-actions"><Button testId="button-save-product" type="submit" disabled={saving || draft.name.trim().length < 2}>{saving ? t('products.saving') : t('products.saved')}</Button><Button variant="secondary" testId="button-cancel-product" disabled={saving} onClick={onClose}>{t('common.cancel')}</Button></div>
+    <div className="form-actions"><Button testId="button-save-product" type="submit" disabled={saving || (draft.name.trim().length < 2 && draft.code.trim().length < 2)}>{saving ? t('products.saving') : t('products.saved')}</Button><Button variant="secondary" testId="button-cancel-product" disabled={saving} onClick={onClose}>{t('common.cancel')}</Button></div>
   </form></div>, document.body);
 }
 
@@ -542,9 +576,9 @@ function ProductsPage() {
   }, [productId]);
   const params = useMemo(() => ({ search: search || undefined, stockStatus: stockStatus as 'all'|'low'|'available'|'out', page, pageSize: 25 }), [search, stockStatus, page]);
   const q = useListProducts(params); const cache = useQueryClient();
-  const dash = useGetDashboard(); const sync = useSyncMoysklad();
+  const dash = useGetDashboard(); const sync = useCatalogRefresh();
   const [adding, setAdding] = useState(false);
-  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const refresh = sync.refresh;
   return <>
     <PageHead title={t('products.title')}/>
     {dash.data && <div className="product-kpis">
@@ -553,7 +587,7 @@ function ProductsPage() {
       <div><span>{t('status.non_moving')}</span><b>{fmt(dash.data.nonMovingCount)}</b></div>
       <div><span>{t('dash.kpi.value')}</span><b>{money(dash.data.stockValue)}</b></div>
     </div>}
-    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button testId="button-add-product" onClick={() => setAdding(true)}><Plus size={15}/>{t('products.add')}</Button><Button variant="secondary" testId="button-products-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
+    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-products-search" type="search" placeholder={t('products.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Filter size={15}/><SelectInput testId="select-products-status" value={stockStatus} onChange={v => { setStatus(v); setPage(1); }}><option value="all">{t('products.filter.all')}</option><option value="low">{t('products.filter.low')}</option><option value="available">{t('products.filter.available')}</option><option value="out">{t('products.filter.out')}</option></SelectInput></label><ExportButton kind="products"/><Button testId="button-add-product" onClick={() => setAdding(true)}><Plus size={15}/>{t('products.add')}</Button><Button variant="secondary" testId="button-products-refresh" disabled={sync.pending} onClick={refresh}><RefreshCw size={15} className={sync.pending ? 'spin' : ''}/>{sync.pending ? t('common.refreshing') : t('common.refresh')}</Button></div>
     <QueryError q={q} id="products"/>
     <Card className="table-card" title={t('products.catalog')} meta={q.data ? t('products.results', { count: fmt(q.data.total) }) : ''}>
       {q.isLoading ? <LoadingRows/> : q.data?.items.length ? <><ProductTable products={q.data.items} onOpen={setSelected}/><div className="pager"><span>{t('products.range', { total: fmt(q.data.total), from: fmt(Math.min((page - 1) * q.data.pageSize + 1, q.data.total)), to: fmt(Math.min(page * q.data.pageSize, q.data.total)) })}</span><div className="pager-nav"><button className="icon-btn" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label={t('common.prevPage')} data-testid="button-products-prev"><ChevronLeft size={17}/></button><span>{page}</span><button className="icon-btn" disabled={page * q.data.pageSize >= q.data.total} onClick={() => setPage(page + 1)} aria-label={t('common.nextPage')} data-testid="button-products-next"><ChevronRight size={17}/></button></div></div></> : <EmptyState title={search ? t('products.empty.search') : t('products.empty.title')} body={search ? t('products.empty.searchBody') : t('products.empty.body')}/>}
@@ -598,12 +632,11 @@ function StockPage() {
   useEffect(() => { setSearch(urlSearch); setPage(1); }, [urlSearch]);
   const params = useMemo(() => ({ warehouseId: warehouseId || undefined, search: search || undefined, page, pageSize: 50 }), [warehouseId, search, page]);
   const q = useListStock(params);
-  const cache = useQueryClient();
-  const sync = useSyncMoysklad();
+  const sync = useCatalogRefresh();
   const warehouses = useQuery<WarehouseTotal[]>({ queryKey: ['dashboard-warehouses'], queryFn: async () => { const response = await fetch('/api/dashboard/warehouses'); if (!response.ok) throw new Error('warehouses'); return response.json(); } });
   const chosen = warehouses.data?.find(item => item.id === warehouseId);
   const summary = chosen ?? (warehouses.data ? warehouses.data.reduce((sum, item) => ({ id: 'all', name: '', units: sum.units + item.units, products: sum.products + item.products, inTransit: sum.inTransit + item.inTransit, value: sum.value + item.value }), { id: 'all', name: '', units: 0, products: 0, inTransit: 0, value: 0 }) : null);
-  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const refresh = sync.refresh;
   const chooseWarehouse = (id: string) => { setPage(1); setLocation(id ? `/stock?warehouseId=${encodeURIComponent(id)}` : '/stock'); };
   return <>
     <PageHead title={t('stock.title')}/>
@@ -613,7 +646,7 @@ function StockPage() {
       <div><span>{t('stock.col.inTransit')}</span><b>{fmt(summary.inTransit)}</b></div>
       <div><span>{t('stock.col.value')}</span><b>{money(summary.value)}</b></div>
     </div>}
-    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-stock-search" placeholder={t('stock.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouseId} onChange={chooseWarehouse} testId="select-stock-warehouse"/></label><ExportButton kind="stock"/><Button variant="secondary" testId="button-stock-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></div>
+    <div className="toolbar"><label className="search"><Search size={17}/><TextInput testId="input-stock-search" placeholder={t('stock.searchPlaceholder')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/></label><label className="select-wrap"><Warehouse size={16}/><WarehousesSelect value={warehouseId} onChange={chooseWarehouse} testId="select-stock-warehouse"/></label><ExportButton kind="stock"/><Button variant="secondary" testId="button-stock-refresh" disabled={sync.pending} onClick={refresh}><RefreshCw size={15} className={sync.pending ? 'spin' : ''}/>{sync.pending ? t('common.refreshing') : t('common.refresh')}</Button></div>
     <QueryError q={q} id="stock"/>
     <Card className="table-card" title={t('stock.panel')} meta={q.data ? t('stock.rows', { count: fmt(q.data.total) }) : ''}>
       {q.isLoading ? <LoadingRows/> : q.data?.items.length ? <><Table testId="table-stock" numeric={[2, 3, 4]} columns={[t('common.product'), t('stock.col.warehouse'), t('stock.col.quantity'), t('stock.col.inTransit'), t('stock.col.value'), t('common.status')]} rows={q.data.items.map(row => ({ key: `${row.product.id}-${row.warehouse.id}`, testId: `row-stock-${row.product.id}-${row.warehouse.id}`, cells: [<ProductTitle product={row.product} href={`/products?search=${encodeURIComponent(row.product.code || row.product.name)}`}/>, <span className="cell-two"><b>{row.warehouse.name}</b>{(row.warehouse.code || row.warehouse.address) && <small>{row.warehouse.code || row.warehouse.address}</small>}</span>, <span className={row.quantity < 0 ? 'qty-neg' : ''}>{fmt(row.quantity)} {unit(row.product.unit)}</span>, `${fmt(row.inTransit)} ${unit(row.product.unit)}`, money(row.value), <Badge value={stockRowStatus(row.quantity, row.product.stockStatus)}/>] }))}/><div className="pager"><span>{t('products.range', { total: fmt(q.data.total), from: fmt(Math.min((page - 1) * q.data.pageSize + 1, q.data.total)), to: fmt(Math.min(page * q.data.pageSize, q.data.total)) })}</span><div className="pager-nav"><button className="icon-btn" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label={t('common.prevPage')} data-testid="button-stock-prev"><ChevronLeft size={17}/></button><span>{page}</span><button className="icon-btn" disabled={page * q.data.pageSize >= q.data.total} onClick={() => setPage(page + 1)} aria-label={t('common.nextPage')} data-testid="button-stock-next"><ChevronRight size={17}/></button></div></div></> : <EmptyState title={t('stock.empty.title')} body={t('stock.empty.body')} icon={Warehouse}/>}
@@ -885,8 +918,7 @@ type DocDetail = { description: string | null; quantity: number; lines: DocLine[
 function DocumentsPage({ kind }: { kind: 'receipt'|'transfer' }) {
   const { t, fmt, date, money } = useI18n(); const docKind = useDocKind();
   const q = useListDocuments({ kind });
-  const cache = useQueryClient();
-  const sync = useSyncMoysklad();
+  const sync = useCatalogRefresh();
   const isReceipt = kind === 'receipt';
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
@@ -922,9 +954,9 @@ function DocumentsPage({ kind }: { kind: 'receipt'|'transfer' }) {
   });
   const open = q.data?.find(doc => doc.id === selected);
   const statusText = (value: string) => value === 'posted' ? t(isReceipt ? 'docs.status.accepted' : 'docs.status.moved') : t('status.draft');
-  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const refresh = sync.refresh;
   return <>
-    <PageHead title={isReceipt ? t('docs.receipts.title') : t('docs.transfers.title')} subtitle={isReceipt ? t('docs.receipts.sub') : t('docs.transfers.sub')} actions={<><ExportButton kind={isReceipt ? 'receipts' : 'transfers'} defaultPeriod="today"/><Button variant="secondary" testId={`button-${kind}-refresh`} disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
+    <PageHead title={isReceipt ? t('docs.receipts.title') : t('docs.transfers.title')} subtitle={isReceipt ? t('docs.receipts.sub') : t('docs.transfers.sub')} actions={<><ExportButton kind={isReceipt ? 'receipts' : 'transfers'} defaultPeriod="today"/><Button variant="secondary" testId={`button-${kind}-refresh`} disabled={sync.pending} onClick={refresh}><RefreshCw size={15} className={sync.pending ? 'spin' : ''}/>{sync.pending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
     {q.data && <div className="product-kpis">
       <div><span>{t('docs.kpi.count')}</span><b>{fmt(rows.length)}</b></div>
       <div><span>{statusText('posted')}</span><b>{fmt(posted)}</b></div>
@@ -963,8 +995,7 @@ type InventoryDetail = { description: string | null; lineTotal: number; diffCoun
 function InventoryPage() {
   const { t, fmt, date, money } = useI18n();
   const q = useListDocuments({ kind: 'inventory' });
-  const cache = useQueryClient();
-  const sync = useSyncMoysklad();
+  const sync = useCatalogRefresh();
   const [search, setSearch] = useState('');
   const [place, setPlace] = useState('all');
   const [selected, setSelected] = useState<string | null>(null);
@@ -988,9 +1019,9 @@ function InventoryPage() {
     },
   });
   const open = q.data?.find(doc => doc.id === selected);
-  const refresh = () => sync.mutate(undefined, { onSuccess: () => { void cache.invalidateQueries(); } });
+  const refresh = sync.refresh;
   return <>
-    <PageHead title={t('inv.title')} subtitle={t('inv.sub')} actions={<><ExportButton kind="inventory" defaultPeriod="thisMonth"/><Button variant="secondary" testId="button-inventory-refresh" disabled={sync.isPending} onClick={refresh}><RefreshCw size={15} className={sync.isPending ? 'spin' : ''}/>{sync.isPending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
+    <PageHead title={t('inv.title')} subtitle={t('inv.sub')} actions={<><ExportButton kind="inventory" defaultPeriod="thisMonth"/><Button variant="secondary" testId="button-inventory-refresh" disabled={sync.pending} onClick={refresh}><RefreshCw size={15} className={sync.pending ? 'spin' : ''}/>{sync.pending ? t('common.refreshing') : t('common.refresh')}</Button></>}/>
     {q.data && <div className="product-kpis">
       <div><span>{t('docs.kpi.count')}</span><b>{fmt(rows.length)}</b></div>
       <div><span>{t('status.posted')}</span><b>{fmt(posted)}</b></div>

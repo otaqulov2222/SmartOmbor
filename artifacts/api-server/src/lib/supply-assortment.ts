@@ -60,7 +60,7 @@ function packBody(pack: GoodsPack, quantity = pack.quantity) {
   return { id: pack.id, quantity, uom: { meta: pack.uom?.meta ?? uomMeta(PACHKA_UOM) } };
 }
 
-async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
+export async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
   try {
     const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
     const packs = current.packs ?? [];
@@ -132,18 +132,18 @@ function samePriceType(left: string, right: string) {
   return left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
-async function writeProductCard(
+export async function writeProductCard(
   productId: string,
   som: number,
   priceType: string,
   currencyMeta: Meta,
-  extras: { article?: string; supplierMeta?: Meta | null; description?: string } = {},
+  extras: { article?: string; supplierMeta?: Meta | null; description?: string; folderMeta?: Meta | null; packSize?: number } = {},
 ) {
   if (!productId) return;
   const kopecks = som > 0 ? Math.round(som * 100) : 0;
-  let current: { salePrices?: Price[]; article?: string; description?: string; supplier?: { meta?: Meta }; uom?: { meta?: Meta } } = {};
+  let current: { salePrices?: Price[]; article?: string; description?: string; supplier?: { meta?: Meta }; uom?: { meta?: Meta }; productFolder?: { meta?: Meta } } = {};
   try {
-    current = await moysklad(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType,supplier,uom`);
+    current = await moysklad(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType,supplier,uom,productFolder`);
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError && error.status === 404)) throw error;
   }
@@ -154,6 +154,7 @@ async function writeProductCard(
     ...(article && !current.article?.trim() ? { article } : {}),
     ...(description && !current.description?.trim() ? { description } : {}),
     ...(extras.supplierMeta && !current.supplier?.meta?.href ? { supplier: { meta: extras.supplierMeta } } : {}),
+    ...(extras.folderMeta && !current.productFolder?.meta?.href ? { productFolder: { meta: extras.folderMeta } } : {}),
     ...(!current.uom ? { uom: { meta: uomMeta(PIECE_UOM) } } : {}),
   };
   if (Object.keys(card).length) {
@@ -163,6 +164,7 @@ async function writeProductCard(
       { productId },
     );
   }
+  if (extras.packSize && extras.packSize > 1) await ensurePachka(productId, extras.packSize);
   if (!(kopecks > 0) || !priceType) return;
   const listed = await listedPrices(current.salePrices, priceType, som, currencyMeta);
   if (!listed) {
@@ -342,8 +344,9 @@ async function colorNamedProduct(
       article: extras.article,
       supplierMeta: extras.supplierMeta,
       description: extras.description,
+      folderMeta: extras.folder?.meta ?? null,
+      packSize: extras.packSize,
     });
-    if (extras.packSize > 1) await ensurePachka(existing.id, extras.packSize);
     return existing;
   }
   const listed = extras.price > 0 ? await listedPrices(undefined, extras.priceType, extras.price, extras.currencyMeta) : null;
@@ -367,8 +370,9 @@ async function colorNamedProduct(
     article: extras.article,
     supplierMeta: extras.supplierMeta,
     description: extras.description,
+    folderMeta: extras.folder?.meta ?? null,
+    packSize,
   });
-  if (packSize) await ensurePachka(created.id, packSize);
   return created;
 }
 
@@ -467,7 +471,7 @@ function ean13Check(digits12: string): string {
   return String((10 - (sum % 10)) % 10);
 }
 
-function nextInternalEan13(catalog: Catalog, used: Set<string>): string {
+export function nextInternalEan13(catalog: Catalog, used: Set<string>): string {
   let max = 0;
   for (const product of catalog.products) {
     for (const code of product.barcodes) {
@@ -550,6 +554,7 @@ export async function stampWaybillCardPrices(
       article: line.productCode.trim(),
       supplierMeta: scope.supplierMeta,
       description: cardDescription(line),
+      packSize: line.pairs > 1 ? line.pairs : 0,
     });
   }
 }
@@ -637,6 +642,7 @@ export async function buildSupplyPositions(
     if (!product.barcodes.length) product.barcodes = await ensureBarcodes("product", product.id, scope.catalog, usedBarcodes);
     const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
     if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
+    if (item.folder) await placeInFolder(product.id, item.folder);
     item.parent = product;
     parents.set(product.id, product);
     byIdentity.set(item.key, product);
@@ -659,6 +665,8 @@ export async function buildSupplyPositions(
         article: item.line.productCode.trim(),
         supplierMeta: scope.supplierMeta,
         description: cardDescription(item.line),
+        folderMeta: item.folder?.meta ?? null,
+        packSize: item.line.pairs > 1 ? item.line.pairs : 0,
       });
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
