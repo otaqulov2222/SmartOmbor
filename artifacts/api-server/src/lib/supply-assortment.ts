@@ -307,6 +307,15 @@ function saleTypeOf(line: ShipmentLine): string {
   return line.price > 0 ? "Standard" : "";
 }
 
+function productIdentity(line: ShipmentLine, factoryCode: string) {
+  return [
+    (line.factoryCode || factoryCode).trim().toLowerCase(),
+    line.sectionCode.trim().toLowerCase(),
+    line.productCode.trim().toLowerCase(),
+    line.size.trim().toLowerCase(),
+  ].join("\0");
+}
+
 export async function buildSupplyPositions(
   lines: ShipmentLine[],
   currencyMeta: Meta,
@@ -316,7 +325,7 @@ export async function buildSupplyPositions(
   const variantCache = new Map<string, VariantRow[]>();
   const packCache = new Map<string, GoodsPack | null>();
   const usedBarcodes = new Set<string>();
-  const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string; folder: FolderRow | null }> = [];
+  const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string; key: string; folder: FolderRow | null }> = [];
   const created: ProductRow[] = [];
   const folders = await productFolders();
 
@@ -324,6 +333,7 @@ export async function buildSupplyPositions(
     const parts = receiptParts(line);
     if (!parts.length) continue;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const key = productIdentity(line, scope.factoryCode);
     const exact = scope.catalog.products.find((product) => product.name.trim() === name);
     const catalogMatch = exact
       ? { id: exact.id, name: exact.name }
@@ -341,19 +351,19 @@ export async function buildSupplyPositions(
     if (!parent && (!line.productCode.trim() || name.length < 2)) {
       throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
     }
-    resolved.push({ line, parent, name, folder });
+    resolved.push({ line, parent, name, key, folder });
   }
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
-  const byName = new Map<string, ProductRow>();
+  const byIdentity = new Map<string, ProductRow>();
   for (const item of resolved) {
-    const known = item.parent || byName.get(item.name) || null;
+    const known = item.parent || byIdentity.get(item.key) || null;
     if (known) {
       item.parent = known;
       if (item.folder) await placeInFolder(known.id, item.folder);
       known.barcodes = await ensureBarcodes("product", known.id, scope.catalog, usedBarcodes);
       parents.set(known.id, known);
-      byName.set(item.name, known);
+      byIdentity.set(item.key, known);
       continue;
     }
     const code = item.line.productCode.trim();
@@ -388,7 +398,7 @@ export async function buildSupplyPositions(
     if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
     item.parent = product;
     parents.set(product.id, product);
-    byName.set(item.name, product);
+    byIdentity.set(item.key, product);
     created.push(product);
   }
 

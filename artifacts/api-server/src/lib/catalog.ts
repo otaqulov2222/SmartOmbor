@@ -715,15 +715,13 @@ export function matchWaybillProduct(
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
     if (!wholeToken(product.name, code, 1)) return false;
     if (group.length >= 3 && !wholeToken(product.name, group)) return false;
-    if (size && !product.name.includes(size)) return false;
+    if (size && !product.name.trim().endsWith(size)) return false;
     return !/\([^)]*\)\s*$/.test(product.name);
   });
-  const exact = size ? bases.filter((product) => product.name.trim().endsWith(size)) : bases;
-  const pool = exact.length ? exact : bases;
-  if (pool.length === 1) return { id: pool[0].id, name: pool[0].name };
-  if (pool.length < 2) return null;
-  const shortest = Math.min(...pool.map((product) => product.name.length));
-  const names = pool.filter((product) => product.name.length === shortest);
+  if (bases.length === 1) return { id: bases[0].id, name: bases[0].name };
+  if (bases.length < 2) return null;
+  const shortest = Math.min(...bases.map((product) => product.name.length));
+  const names = bases.filter((product) => product.name.length === shortest);
   return names.length === 1 ? { id: names[0].id, name: names[0].name } : null;
 }
 
