@@ -206,6 +206,11 @@ function kopecks(som: number) {
   return Math.round(som * 100);
 }
 
+function supplyGone(error: unknown) {
+  if (!(error instanceof MoySkladError)) return false;
+  return error.status === 404 || /корзин|recycle|trash|удален/i.test(error.message);
+}
+
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
   const raw = name.trim();
   const color = raw.match(/\(([^)]+)\)\s*$/)?.[1]?.trim().toLowerCase() || "";
@@ -226,7 +231,8 @@ function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sect
 }
 
 async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
-  const doc = await moysklad<{ applicable?: boolean; sum?: number }>(`/entity/supply/${encodeURIComponent(supplyId)}`);
+  const doc = await moysklad<{ applicable?: boolean; sum?: number; deleted?: string }>(`/entity/supply/${encodeURIComponent(supplyId)}`);
+  if (doc.deleted) throw new MoySkladError("Операция находится в корзине. Обновление операции запрещено.", 400);
   const page = await moysklad<{ rows: Array<{ id: string; price?: number; assortment?: { name?: string; meta?: { href?: string; type?: string } } }> }>(
     `/entity/supply/${encodeURIComponent(supplyId)}/positions?expand=assortment&limit=100`,
   );
@@ -287,7 +293,10 @@ async function postSupplyDocument(
     } catch (error) {
       last = error;
       const retry = permissionDenied(error)
-        || (error instanceof MoySkladError && /pack|uom|barcode|applicable/i.test(`${error.parameter || ""} ${error.message}`));
+        || (error instanceof MoySkladError && /pack|uom|barcode|applicable|уникал|unique|уже существ|корзин/i.test(`${error.parameter || ""} ${error.message}`));
+      if (retry && /уникал|unique|уже существ|корзин/i.test(error instanceof Error ? error.message : "")) {
+        delete core.name;
+      }
       logger.warn({ label: attempt.label, err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
       if (!retry) throw error;
     }
@@ -365,13 +374,18 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     if (shipment.moyskladId) {
-      const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
-      if (filled) {
-        res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
+      try {
+        const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
+        if (filled) {
+          res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, repaired: true });
+          return;
+        }
+        res.status(409).json({ error: "posted" });
         return;
+      } catch (error) {
+        if (!supplyGone(error)) throw error;
+        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");
       }
-      res.status(409).json({ error: "posted" });
-      return;
     }
     const account = getAccount(shipment.factoryId);
     let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
