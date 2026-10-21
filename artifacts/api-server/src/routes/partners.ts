@@ -263,15 +263,11 @@ async function replaceZeroSupply(supplyId: string) {
   }
 }
 
-async function postSupplyDocument(
-  core: Record<string, unknown>,
-  packed: Array<Record<string, unknown>>,
-  unpacked: Array<Record<string, unknown>>,
-) {
-  const attempts: Array<{ applicable: boolean; positions: Array<Record<string, unknown>>; label: string }> = [
-    { applicable: true, positions: packed, label: "packed" },
-    { applicable: true, positions: unpacked, label: "unpacked" },
-    { applicable: false, positions: unpacked, label: "draft" },
+async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>) {
+  const attempts: Array<{ applicable: boolean; label: string }> = [
+    { applicable: true, label: "posted" },
+    { applicable: true, label: "posted-retry" },
+    { applicable: false, label: "draft" },
   ];
   let last: unknown;
   for (const attempt of attempts) {
@@ -279,15 +275,19 @@ async function postSupplyDocument(
       return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
         ...core,
         applicable: attempt.applicable,
-        positions: attempt.positions,
+        positions,
       });
     } catch (error) {
       last = error;
-      const retry = permissionDenied(error)
-        || (error instanceof MoySkladError && /pack|uom|barcode|applicable|уникал|unique|уже существ|корзин/i.test(`${error.parameter || ""} ${error.message}`));
-      if (retry && /уникал|unique|уже существ|корзин/i.test(error instanceof Error ? error.message : "")) {
-        delete core.name;
+      const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
+      if (/incoming|входящ/i.test(text)) {
+        delete core.incomingNumber;
+        delete core.incomingDate;
       }
+      if (/externalcode|external/i.test(text)) delete core.externalCode;
+      if (/уникал|unique|уже существ|корзин/i.test(text)) delete core.name;
+      const retry = permissionDenied(error)
+        || /pack|uom|barcode|applicable|incoming|входящ|уникал|unique|уже существ|корзин|external/i.test(text);
       logger.warn({ label: attempt.label, err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
       if (!retry) throw error;
     }
@@ -489,24 +489,22 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         inTransit: 0,
       });
     }
-    const supplyCore = {
+    const when = /^\d{4}-\d{2}-\d{2}/.test(shipment.date) ? `${shipment.date.slice(0, 10)} 12:00:00` : `${new Date().toISOString().slice(0, 10)} 12:00:00`;
+    const supplyCore: Record<string, unknown> = {
       name: shipment.number,
-      moment: `${shipment.date} 12:00:00`,
+      moment: when,
+      incomingNumber: shipment.number,
+      incomingDate: when,
+      vatEnabled: false,
+      vatIncluded: false,
+      externalCode: shipment.id,
       organization: { meta: company.meta },
       agent: { meta: agentMeta },
       store: { meta: meta(`${base}/entity/store/${store.id}`, "store") },
       rate: { currency: { meta: currency.meta } },
+      ...(shipment.note.trim() ? { description: shipment.note.trim() } : { description: `Yuk xati ${shipment.number}` }),
     };
-    const packed = planned.positions.map((item) => ({
-      quantity: item.quantity,
-      price: item.price,
-      discount: 0,
-      vat: 0,
-      vatEnabled: false,
-      assortment: item.assortment,
-      ...(item.pack ? { pack: item.pack } : {}),
-    }));
-    const unpacked = planned.positions.map((item) => ({
+    const supplyPositions = planned.positions.map((item) => ({
       quantity: item.quantity,
       price: item.price,
       discount: 0,
@@ -514,7 +512,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       vatEnabled: false,
       assortment: item.assortment,
     }));
-    const created = await postSupplyDocument(supplyCore, packed, unpacked);
+    const created = await postSupplyDocument(supplyCore, supplyPositions);
     try {
       await fillZeroSupplyPrices(created.id, shipment.lines);
     } catch (error) {

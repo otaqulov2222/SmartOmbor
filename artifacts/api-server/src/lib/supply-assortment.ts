@@ -106,23 +106,48 @@ export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quant
   return [{ color: null, quantity: total }];
 }
 
-async function writeProductPrices(productId: string, som: number, priceType: string, currencyMeta: Meta) {
-  if (!(som > 0) || !productId) return;
-  const kopecks = Math.round(som * 100);
-  let current: Price[] | undefined;
+function cardDescription(line: Pick<ShipmentLine, "model" | "note">) {
+  return [line.model, line.note].map((value) => value.trim()).filter(Boolean).join(". ");
+}
+
+function requireWaybillLine(line: ShipmentLine) {
+  const label = [line.productCode, line.size].filter((value) => value.trim()).join(" ") || "qator";
+  if (!line.productCode.trim()) throw new MoySkladError("Mahsulot kodi kiritilmagan", 400);
+  if (!line.size.trim()) throw new MoySkladError(`Razmer tanlanmagan (${label})`, 400);
+  if (!(line.price > 0)) throw new MoySkladError(`Narx kiritilmagan (${label})`, 400);
+  if (pieceCount(line) <= 0) throw new MoySkladError(`Miqdor yo‘q (${label})`, 400);
+}
+
+async function writeProductCard(
+  productId: string,
+  som: number,
+  priceType: string,
+  currencyMeta: Meta,
+  extras: { article?: string; supplierMeta?: Meta | null; description?: string } = {},
+) {
+  if (!productId) return;
+  const kopecks = som > 0 ? Math.round(som * 100) : 0;
+  let current: { salePrices?: Price[]; article?: string; description?: string; supplier?: { meta?: Meta }; uom?: { meta?: Meta } } = {};
   try {
-    const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType`);
-    current = loaded.salePrices;
+    current = await moysklad(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType,supplier,uom`);
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError && error.status === 404)) throw error;
   }
-  const listed = await listedPrices(current, priceType, som, currencyMeta);
+  const listed = kopecks > 0 ? await listedPrices(current.salePrices, priceType, som, currencyMeta) : null;
+  const article = extras.article?.trim();
+  const description = extras.description?.trim();
+  const patch: Record<string, unknown> = {
+    ...(kopecks > 0 ? { buyPrice: { value: kopecks, currency: { meta: currencyMeta } } } : {}),
+    ...(listed ? { salePrices: priceBody(listed) } : {}),
+    ...(article && !current.article?.trim() ? { article } : {}),
+    ...(description && !current.description?.trim() ? { description } : {}),
+    ...(extras.supplierMeta && !current.supplier?.meta?.href ? { supplier: { meta: extras.supplierMeta } } : {}),
+    ...(!current.uom ? { uom: { meta: uomMeta(PIECE_UOM) } } : {}),
+  };
+  if (!Object.keys(patch).length) return;
   await optionalWrite(
-    () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, {
-      buyPrice: { value: kopecks, currency: { meta: currencyMeta } },
-      ...(listed ? { salePrices: priceBody(listed) } : {}),
-    }, "PUT"),
-    "MoySklad product prices skipped",
+    () => moyskladSend(`/entity/product/${encodeURIComponent(productId)}`, patch, "PUT"),
+    "MoySklad product card skipped",
     { productId },
   );
 }
@@ -280,17 +305,28 @@ async function colorNamedProduct(
     price: number;
     priceType: string;
     article: string;
+    description?: string;
+    packSize: number;
     catalog: Catalog;
     used: Set<string>;
   },
 ): Promise<ProductRow> {
   const name = `${parent.name || ""} ${color}`.trim();
   const existing = await productByName(name);
-  if (existing) return existing;
+  if (existing) {
+    await writeProductCard(existing.id, extras.price, extras.priceType, extras.currencyMeta, {
+      article: extras.article,
+      supplierMeta: extras.supplierMeta,
+      description: extras.description,
+    });
+    if (extras.packSize > 1) await ensurePachka(existing.id, extras.packSize);
+    return existing;
+  }
   const listed = extras.price > 0 ? await listedPrices(undefined, extras.priceType, extras.price, extras.currencyMeta) : null;
   const barcode = nextInternalEan13(extras.catalog, extras.used);
   extras.used.add(barcode);
-    const created = await createProduct({
+  const packSize = extras.packSize > 1 ? extras.packSize : 0;
+  const created = await createProduct({
     name,
     uom: { meta: uomMeta(PIECE_UOM) },
     barcodes: [{ ean13: barcode }],
@@ -298,11 +334,17 @@ async function colorNamedProduct(
     ...(extras.folder ? { productFolder: { meta: extras.folder.meta } } : {}),
     ...(extras.supplierMeta ? { supplier: { meta: extras.supplierMeta } } : {}),
     ...(extras.article ? { article: extras.article } : {}),
+    ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
     ...(extras.price > 0 ? { buyPrice: { value: Math.round(extras.price * 100), currency: { meta: extras.currencyMeta } } } : {}),
   });
   if (listed) created.salePrices = listed;
   created.barcodes = barcodeValues(created.barcodes);
-  if (extras.price > 0) await writeProductPrices(created.id, extras.price, extras.priceType, extras.currencyMeta);
+  await writeProductCard(created.id, extras.price, extras.priceType, extras.currencyMeta, {
+    article: extras.article,
+    supplierMeta: extras.supplierMeta,
+    description: extras.description,
+  });
+  if (packSize) await ensurePachka(created.id, packSize);
   return created;
 }
 
@@ -447,7 +489,7 @@ function saleTypeOf(line: ShipmentLine): string {
 export async function stampWaybillCardPrices(
   lines: ShipmentLine[],
   currencyMeta: Meta,
-  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog; supplierMeta?: Meta | null },
 ) {
   const seen = new Set<string>();
   for (const line of lines) {
@@ -465,7 +507,11 @@ export async function stampWaybillCardPrices(
         });
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
-    await writeProductPrices(matched.id, line.price, saleTypeOf(line), currencyMeta);
+    await writeProductCard(matched.id, line.price, saleTypeOf(line), currencyMeta, {
+      article: line.productCode.trim(),
+      supplierMeta: scope.supplierMeta,
+      description: cardDescription(line),
+    });
   }
 }
 
@@ -494,6 +540,7 @@ export async function buildSupplyPositions(
   for (const line of lines) {
     const parts = receiptParts(line);
     if (!parts.length) continue;
+    requireWaybillLine(line);
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
     const key = productIdentity(line, scope.factoryCode);
     const exact = scope.catalog.products.find((product) => product.name.trim() === name);
@@ -568,7 +615,13 @@ export async function buildSupplyPositions(
       if (loaded) parents.set(full.id, loaded);
     }
     const product = parents.get(parent.id) ?? full;
-    if (item.line.price > 0) await writeProductPrices(product.id, item.line.price, saleTypeOf(item.line), currencyMeta);
+    if (item.line.price > 0) {
+      await writeProductCard(product.id, item.line.price, saleTypeOf(item.line), currencyMeta, {
+        article: item.line.productCode.trim(),
+        supplierMeta: scope.supplierMeta,
+        description: cardDescription(item.line),
+      });
+    }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
@@ -603,12 +656,20 @@ export async function buildSupplyPositions(
             if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
           }
           const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
-          if (listed) {
-            await optionalWrite(
-              () => moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { salePrices: priceBody(listed) }, "PUT"),
-              "MoySklad variant price skipped",
-              { color: part.color },
-            );
+          const saleBody = listed ? { salePrices: priceBody(listed) } : {};
+          const buyBody = item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {};
+          if (listed || item.line.price > 0) {
+            try {
+              await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { ...buyBody, ...saleBody }, "PUT");
+            } catch (error) {
+              if (listed) {
+                await optionalWrite(
+                  () => moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, saleBody, "PUT"),
+                  "MoySklad variant price skipped",
+                  { color: part.color },
+                );
+              } else if (!permissionDenied(error)) throw error;
+            }
           }
         }
         assortment = { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") };
@@ -621,6 +682,8 @@ export async function buildSupplyPositions(
           price: item.line.price,
           priceType: saleTypeOf(item.line),
           article: item.line.productCode.trim(),
+          description: cardDescription(item.line),
+          packSize,
           catalog: scope.catalog,
           used: usedBarcodes,
         });

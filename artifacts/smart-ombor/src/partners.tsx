@@ -104,11 +104,9 @@ function receiptParts(line: Line) {
   const pack = line.pairs > 0 ? line.pairs : 0;
   const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
   if (pack > 0 && colors.length) return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity * pack }));
-  if (pack > 0 && line.boxes > 0) return [{ color: null as string | null, quantity: pack * line.boxes }];
-  const total = line.quantity > 0 ? line.quantity : pack;
+  const total = lineUnits(line);
   if (total <= 0) return [];
-  if (!colors.length) return [{ color: null, quantity: total }];
-  return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity }));
+  return [{ color: null as string | null, quantity: total }];
 }
 
 function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
