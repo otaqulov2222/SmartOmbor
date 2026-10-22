@@ -45,34 +45,69 @@ function markedSale(cost: number, priceType: string) {
 function sameFactoryCode(left: string, right: string) {
   const a = left.trim().toUpperCase();
   const b = right.trim().toUpperCase();
-  if (!a || !b) return false;
-  if (a === b) return true;
-  return a.replace(/^0+/, "") === b.replace(/^0+/, "") && a.replace(/^0+/, "").length > 0;
+  return Boolean(a && b && a === b);
+}
+
+function labelTokens(label: string) {
+  return label.toUpperCase().split(/[^0-9A-Z]+/).filter(Boolean);
+}
+
+function codeInLabel(label: string, code: string) {
+  const wanted = code.trim().toUpperCase();
+  if (!wanted) return false;
+  if (sameFactoryCode(label, wanted)) return true;
+  return labelTokens(label).includes(wanted);
+}
+
+function pickByFactoryCode<T>(rows: T[], labelOf: (row: T) => string, code: string) {
+  const hits = rows.filter((row) => codeInLabel(labelOf(row), code));
+  if (hits.length <= 1) return hits[0] ?? null;
+  const wanted = code.trim().toUpperCase();
+  const exact = hits.filter((row) => labelTokens(labelOf(row)).includes(wanted));
+  if (exact.length === 1) return exact[0];
+  const ending = hits.filter((row) => labelOf(row).trim().toUpperCase().endsWith(wanted));
+  return ending.length === 1 ? ending[0] : exact[0] ?? hits[0];
+}
+
+async function findCounterparty(query: string, code: string, factoryName: string) {
+  const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
+  const name = factoryName.trim().toUpperCase();
+  const hit = page.rows.find((row) => {
+    const label = (row.name || "").trim().toUpperCase();
+    return Boolean(row.id && (label === name || codeInLabel(label, code)));
+  }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
+  return hit?.id && hit.name ? { id: hit.id, name: hit.name } : null;
 }
 
 async function resolvePartnerFactory(code: string) {
-  const account = listAccounts().find((item) => sameFactoryCode(item.code, code));
-  if (!account) return null;
-  let supplierId = account.counterpartyId || "";
-  let supplierName = account.counterpartyName || account.name;
+  const wanted = code.trim();
+  if (wanted.length < 2) return null;
+  const accounts = listAccounts();
+  const account = accounts.find((item) => sameFactoryCode(item.code, wanted))
+    || pickByFactoryCode(accounts, (item) => `${item.code} ${item.name} ${item.catalogName}`, wanted);
+  const catalog = peekCatalog() ?? await loadCatalog();
+  const factoryNames = [...new Set((catalog?.products ?? []).map((product) => product.factory?.trim()).filter((name): name is string => Boolean(name)))];
+  const catalogName = account ? null : pickByFactoryCode(factoryNames, (name) => name, wanted);
+  if (!account && !catalogName) return null;
+  const name = account?.name || catalogName || wanted;
+  let supplierId = account?.counterpartyId || "";
+  let supplierName = account?.counterpartyName || name;
   if (!supplierId) {
-    try {
-      const query = supplierName || account.code;
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/counterparty?limit=15&search=${encodeURIComponent(query)}`);
-      const needle = account.code.toUpperCase();
-      const hit = page.rows.find((row) => {
-        const label = (row.name || "").toUpperCase();
-        return Boolean(row.id && (sameFactoryCode(label, account.code) || label.includes(needle) || label.includes(account.name.toUpperCase())));
-      }) || (page.rows.length === 1 && page.rows[0].id ? page.rows[0] : null);
-      if (hit?.id && hit.name) {
-        supplierId = hit.id;
-        supplierName = hit.name;
+    const queries = [...new Set([supplierName, name, account?.code, wanted].filter((item): item is string => Boolean(item && item.trim())))];
+    for (const query of queries) {
+      try {
+        const hit = await findCounterparty(query, wanted, name);
+        if (hit) {
+          supplierId = hit.id;
+          supplierName = hit.name;
+          break;
+        }
+      } catch {
+        /* try next query */
       }
-    } catch {
-      /* partner exists; supplier can stay empty */
     }
   }
-  return { code: account.code, name: account.name, supplierId, supplierName };
+  return { code: (account?.code || wanted).toUpperCase(), name, supplierId, supplierName };
 }
 
 const router: IRouter = Router();
