@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, idleDays, loadCatalog, matchProductFolder, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, loadCatalog, matchProductFolder, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { ensurePachka, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
@@ -642,7 +642,7 @@ router.post("/products", async (req, res, next) => {
       supplierId = partner.supplierId;
       supplierName = partner.supplierName;
     }
-    if (!folderId && groupCode.length >= 3) {
+    if (groupCode.length >= 3) {
       const folders = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
       const matched = matchProductFolder(folders.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id as string, name: row.name as string, pathName: row.pathName })), groupCode);
       if (matched?.id) folderId = matched.id;
@@ -761,7 +761,7 @@ async function uzsSalePrices(quoted: Array<[string, number]>) {
 router.get("/products/folders", async (_req, res, next) => {
   try {
     const page = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
-    res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: row.pathName || row.name })) });
+    res.json({ items: page.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id, name: folderLabel(row) })) });
   } catch (error) {
     next(error);
   }
@@ -825,7 +825,7 @@ router.get("/products/suggest", async (req, res, next) => {
       ? folderRows.find((folder) => folder.pathName === sample.category || folder.name === sample.category)
       : null;
     const byCode = matchProductFolder(folderRows, code);
-    const folder = byCategory || byCode;
+    const folder = byCode || byCategory;
     let supplierId = "";
     let supplierName = sample?.factory || "";
     if (supplierName.length >= 2) {
@@ -839,7 +839,7 @@ router.get("/products/suggest", async (req, res, next) => {
     }
     res.json({
       folderId: folder?.id || "",
-      folderName: folder ? (folder.pathName || folder.name) : "",
+      folderName: folder ? folderLabel(folder) : "",
       supplierId,
       supplierName: supplierId ? supplierName : "",
       article: sample?.article || code,

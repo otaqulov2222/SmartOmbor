@@ -702,6 +702,14 @@ export function productBelongsToFactory(product: { name: string; factory: string
   return code.length >= 3 && wholeToken(`${product.factory || ""} ${product.name}`.toLowerCase(), code);
 }
 
+export function folderLabel(row: { name?: string; pathName?: string }) {
+  const name = (row.name || "").trim();
+  const pathName = (row.pathName || "").trim();
+  if (!pathName || pathName === name) return name;
+  if (pathName.endsWith(name) || pathName.endsWith(`/${name}`)) return pathName;
+  return `${pathName}/${name}`;
+}
+
 export function matchProductFolder<T extends { name: string; pathName?: string }>(folders: T[], groupCode: string): T | null {
   const code = groupCode.trim();
   if (code.length < 3) return null;
