@@ -337,6 +337,7 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
   const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
+  if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
   const seq = store.shipments.filter((item) => item.factoryId === factoryId).length + 1;
   const shipment: Shipment = {
     id: randomBytes(8).toString("hex"),
@@ -384,6 +385,7 @@ export function updateShipment(id: string, input: { date?: string; note?: string
     return next;
   }).filter((line) => line.productCode || line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
+  if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   if (input.date) shipment.date = String(input.date).slice(0, 10);
   shipment.note = String(input.note ?? shipment.note).trim();

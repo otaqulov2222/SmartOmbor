@@ -9,6 +9,7 @@ type Shipment = { id: string; number: string; date: string; status: string; note
 type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; model: string; size: string; pairs: string; boxes: string; price: string; priceType: string; colors: ColorLine[] };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
+const LINE_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'] as const;
 
 function blank(factoryCode: string): Draft {
   return { key: Math.random().toString(36).slice(2), factoryCode, groupCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', price: '', priceType: '', colors: [] };
@@ -188,6 +189,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     const filled = lines.filter(started);
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
     if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needCode')); return; }
+    if (filled.some(line => !line.size.trim())) { setError(t('zavod.needSize')); return; }
     if (filled.some(line => num(line.pairs) <= 0 || num(line.boxes) <= 0 || num(line.price) <= 0)) { setError(t('zavod.needQty')); return; }
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
     const payload = filled.map(line => ({
@@ -213,7 +215,11 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ date, note, lines: payload }),
       });
-      if (!response.ok) { setError(t('zavod.needQty')); return; }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: '' })) as { error?: string };
+        setError(body.error === 'need_size' ? t('zavod.needSize') : t('zavod.needQty'));
+        return;
+      }
       const body = await response.json();
       setFlash(`${editingStatus === 'declined' ? t('zavod.resend') : t('zavod.sent')} · ${body.number}`);
       resetForm();
@@ -277,7 +283,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
     <div className="yx-sheet factory-sheet">
-      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
+      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
         return <div className="yx-sheet-row factory-row" key={line.key}>
@@ -285,6 +291,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
           <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
+          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => patch(line.key, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!LINE_SIZES.includes(line.size as typeof LINE_SIZES[number]) && line.size ? <option value={line.size}>{line.size}</option> : null}{LINE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
           <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })}/></label>
@@ -316,7 +323,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           {(['all', 'sent', 'accepted', 'declined'] as const).map(status => <button type="button" key={status} className={historyStatus === status ? 'is-active' : ''} onClick={() => setHistoryStatus(status)}>{status === 'all' ? t('zavod.filter.all') : statusLabel(status)}</button>)}
         </div>
       </div>
-      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{['Bordo', line.factoryCode, line.sectionCode, line.productCode].filter(Boolean).join(' ')}</b><span data-label={t('zavod.size')}>{line.size || '—'}</span><span data-label={`${t('zavod.pairs')} / ${t('zavod.boxes')}`}>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</span><span data-label={t('zavod.sum')}>{money(piecesOf(line) * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
+      {shown.length ? <div className="shipment-list">{shown.map(item => <article key={item.id} className="shipment"><header><button type="button" className="shipment-open" onClick={() => setOpenId(openId === item.id ? null : item.id)}><div><b>{item.number}</b><small>{dateLabel(item.date)} · {fmt(item.pairs)} {t('zavod.totalPairs').toLowerCase()} · {fmt(item.boxes)} {t('zavod.boxes').toLowerCase()}</small></div><span className={`badge ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><strong>{money(item.amount)}</strong></button>{item.status !== 'accepted' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => beginRevise(item)}><Pencil size={14}/>{item.status === 'declined' ? t('zavod.resend') : t('partners.edit')}</button>}</header>{openId === item.id && <ul className="yx-history-lines">{item.lines.map(line => <li key={line.id}><b>{['Bordo', line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(' ')}</b><span data-label={t('zavod.size')}>{line.size || '—'}</span><span data-label={`${t('zavod.pairs')} / ${t('zavod.boxes')}`}>{fmt(line.pairs)} / {fmt(line.boxes)}</span><span data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</span><span data-label={t('zavod.sum')}>{money(piecesOf(line) * line.price)}</span></li>)}</ul>}{openId === item.id && item.note && <p className="muted">{item.note}</p>}</article>)}</div> : <p className="muted">{shipments.length ? t('zavod.emptyFilter') : t('zavod.emptyHistory')}</p>}
     </section>}
     {section === 'profile' && <section className="cabinet-profile">
       <article><span>{t('zavod.profile.name')}</span><b>{account.name}</b></article>
