@@ -26,7 +26,7 @@ import {
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
 import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
-import { ensurePachka, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
+import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
@@ -627,13 +627,10 @@ router.post("/products", async (req, res, next) => {
       res.status(400).json({ error: "factory_missing" });
       return;
     }
-    const existing = matchWaybillProduct(catalog, {
-      factoryCode,
-      factoryName: partner.name,
-      groupCode,
-      productCode,
-      size,
-    });
+    const existing = await findExistingBordoProduct(
+      { factoryCode, sectionCode: groupCode, productCode, size },
+      { factoryCode, factoryName: partner.name, catalog },
+    );
     if (existing?.id) {
       const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
       const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;

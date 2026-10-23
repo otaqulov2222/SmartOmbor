@@ -1,4 +1,4 @@
-import { matchProductFolder, matchWaybillProduct, parseBordoName, type Catalog } from "./catalog";
+import { matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, type Catalog } from "./catalog";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
 import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
@@ -565,7 +565,7 @@ export async function stampWaybillCardPrices(
   for (const line of lines) {
     if (!(line.price > 0)) continue;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-    const matched = await findExistingParent(line, scope, name);
+    const matched = await findExistingBordoProduct(line, scope);
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
     await writeProductCard(matched.id, line.price, saleTypeOf(line), currencyMeta, {
@@ -594,22 +594,24 @@ function parentIdentity(line: ShipmentLine, factoryCode: string) {
   ].join("\0");
 }
 
-async function findExistingParent(
-  line: ShipmentLine,
+export async function findExistingBordoProduct(
+  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
-  name: string,
 ): Promise<ProductRow | null> {
   if (line.productId) {
     const byId = await productById(line.productId);
     if (byId) return byId;
   }
+  const factory = line.factoryCode || scope.factoryCode;
+  const groupCode = line.sectionCode || "";
+  const name = ["Bordo", factory, groupCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
   const exact = scope.catalog.products.find((product) => product.name.trim() === name);
   const catalogMatch = exact
     ? { id: exact.id, name: exact.name }
     : matchWaybillProduct(scope.catalog, {
-        factoryCode: line.factoryCode || scope.factoryCode,
+        factoryCode: factory,
         factoryName: scope.factoryName,
-        groupCode: line.sectionCode,
+        groupCode,
         productCode: line.productCode,
         size: line.size,
       });
@@ -617,10 +619,9 @@ async function findExistingParent(
     const row = await productById(catalogMatch.id);
     if (row) return row;
   }
-  const factory = line.factoryCode || scope.factoryCode;
   const names = [...new Set([
     name,
-    ["Bordo", factory, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim(),
+    ["Bordo", factory, groupCode, line.productCode, line.size].filter(Boolean).join(" ").trim(),
     ["Bordo", factory, line.productCode, line.size].filter(Boolean).join(" ").trim(),
   ])].filter((item) => item.length >= 2);
   for (const candidate of names) {
@@ -631,18 +632,15 @@ async function findExistingParent(
   if (query.length < 3) return null;
   try {
     const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
-    const hits = page.rows.filter((row) => {
-      if (!row.id || !row.name) return false;
-      const parts = parseBordoName(row.name);
-      if (!parts || parts.color) return false;
-      if (parts.productCode.toLowerCase() !== line.productCode.trim().toLowerCase()) return false;
-      if (line.size.trim() && parts.size !== line.size.trim()) return false;
-      if (line.sectionCode.trim() && parts.groupCode && parts.groupCode.toLowerCase() !== line.sectionCode.trim().toLowerCase()) return false;
-      return parts.factoryCode.toLowerCase() === factory.trim().toLowerCase();
+    const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
+    const matched = matchNamedProducts(rows, {
+      factoryCode: factory,
+      factoryName: scope.factoryName,
+      groupCode,
+      productCode: line.productCode,
+      size: line.size,
     });
-    const grouped = hits.filter((row) => parseBordoName(row.name || "")?.groupCode);
-    const chosen = (line.sectionCode.trim() ? hits : grouped.length ? grouped : hits)[0];
-    return chosen?.id ? productById(chosen.id) : null;
+    return matched?.id ? productById(matched.id) : null;
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
     logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
@@ -668,7 +666,7 @@ export async function buildSupplyPositions(
     if (!parts.length) continue;
     requireWaybillLine(line);
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-    const parent = await findExistingParent(line, scope, name);
+    const parent = await findExistingBordoProduct(line, scope);
     if (parent?.name) {
       const parts = parseBordoName(parent.name);
       if (parts?.groupCode) line.sectionCode = parts.groupCode;

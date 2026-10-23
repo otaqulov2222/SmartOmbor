@@ -831,6 +831,16 @@ export function matchWaybillProduct(
   return pickPassport(withGroup.length ? withGroup : ungrouped);
 }
 
+export function matchNamedProducts(
+  rows: Array<{ id: string; name: string; factory?: string | null }>,
+  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },
+): { id: string; name: string } | null {
+  return matchWaybillProduct(
+    { products: rows.map((row) => emptyProduct({ id: row.id, name: row.name, factory: row.factory ?? input.factoryName })) } as Catalog,
+    input,
+  );
+}
+
 export function findProductsByBarcode(catalog: Catalog, raw: string): CatalogProduct[] {
   if (indexedCatalog !== catalog) {
     const next = new Map<string, CatalogProduct[]>();
