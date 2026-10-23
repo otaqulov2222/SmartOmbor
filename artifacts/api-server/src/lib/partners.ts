@@ -314,9 +314,9 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
   const quantity = Math.max(0, Number(raw.quantity) || 0) || (pairs > 0 ? 0 : colorQty);
   return {
     id: randomBytes(6).toString("hex"),
-    factoryCode: String(raw.factoryCode || factoryCode).trim().toUpperCase(),
-    sectionCode: String(raw.sectionCode ?? "").trim(),
-    productCode: String(raw.productCode ?? "").trim(),
+    factoryCode: String(raw.factoryCode || factoryCode).trim().toLocaleUpperCase("ru-RU"),
+    sectionCode: String(raw.sectionCode ?? "").trim().toLocaleUpperCase("ru-RU"),
+    productCode: String(raw.productCode ?? "").trim().toLocaleUpperCase("ru-RU"),
     model: String(raw.model ?? "").trim(),
     size: String(raw.size ?? "").trim(),
     pairs,

@@ -35,6 +35,10 @@ function digits(value: string) {
   return value.replace(/\D/g, '');
 }
 
+function codeInput(value: string) {
+  return value.replace(/\s+/g, '').toLocaleUpperCase('ru-RU');
+}
+
 function unitsOf(line: Draft) {
   const pack = num(line.pairs);
   const boxes = num(line.boxes);
@@ -164,7 +168,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       if (!data?.found) { if (next) patch(line.key, next); return; }
       patch(line.key, {
         ...next,
-        ...(!merged.groupCode.trim() && data.groupCode ? { groupCode: data.groupCode } : {}),
+        ...(!merged.groupCode.trim() && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
         ...(!merged.size.trim() && data.size ? { size: data.size } : {}),
         ...(!merged.pairs.trim() && data.packSize && data.packSize > 1 ? { pairs: String(data.packSize) } : {}),
         ...(!merged.price.trim() && (data.cost || data.salePrice) ? { price: String(data.cost || data.salePrice) } : {}),
@@ -214,10 +218,10 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     const payload = filled.map(line => ({
       id: editingId ? line.key : undefined,
       factoryCode: account.code,
-      sectionCode: line.groupCode.trim(),
+      sectionCode: codeInput(line.groupCode),
       productId: null,
       productName: null,
-      productCode: line.productCode.trim(),
+      productCode: codeInput(line.productCode),
       model: line.model,
       size: line.size.trim(),
       pairs: num(line.pairs),
@@ -309,7 +313,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
-          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })} onBlur={e => fillPassport(line, { productCode: digits(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
+          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillPassport(line, { productCode: codeInput(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
           <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!LINE_SIZES.includes(line.size as typeof LINE_SIZES[number]) && line.size ? <option value={line.size}>{line.size}</option> : null}{LINE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
           <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>

@@ -85,6 +85,10 @@ function asNumber(value: string) {
   return Math.max(0, Number(value.replace(',', '.')) || 0);
 }
 
+function codeInput(value: string) {
+  return value.replace(/\s+/g, '').toLocaleUpperCase('ru-RU');
+}
+
 type Passport = {
   found: boolean;
   productId?: string;
@@ -185,15 +189,15 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
   const preview = lineUnits({ ...line, pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
   const commit = (next?: Partial<Line>) => {
     const patch: Partial<Line> = {
-      factoryCode: factoryCode.trim(),
-      sectionCode: sectionCode.trim(),
-      productCode: productCode.trim(),
       size,
       pairs: asNumber(pairs),
       boxes: asNumber(boxes),
       price: asNumber(price),
       priceType,
       ...next,
+      factoryCode: codeInput(next?.factoryCode ?? factoryCode),
+      sectionCode: codeInput(next?.sectionCode ?? sectionCode),
+      productCode: codeInput(next?.productCode ?? productCode),
     };
     const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && (patch.priceType || '') === (line.priceType || '') && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
     if (unchanged) return;
@@ -213,12 +217,12 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
         price: next?.price != null ? String(next.price) : price,
         priceType: next?.priceType ?? priceType,
       }, data) : {};
-      if (extra.sectionCode) setSectionCode(extra.sectionCode);
+      if (extra.sectionCode) setSectionCode(codeInput(extra.sectionCode));
       if (extra.size) setSize(extra.size);
       if (extra.pairs) setPairs(String(extra.pairs));
       if (extra.price) setPrice(String(extra.price));
       if (extra.priceType) setPriceType(extra.priceType);
-      commit({ ...next, ...extra });
+      commit({ ...next, ...extra, ...(extra.sectionCode ? { sectionCode: codeInput(extra.sectionCode) } : {}) });
     }).catch(() => commit(next));
   };
   if (locked) {
@@ -238,9 +242,9 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
   }
   return <>
     <td data-label={t('zavod.brand')}><b>Bordo</b></td>
-    <td data-label={t('zavod.factoryCode')}><input className="input" aria-label={t('zavod.factoryCode')} value={factoryCode} onChange={event => setFactoryCode(event.target.value.replace(/[^0-9A-Za-z]/g, ''))} onBlur={() => applyPassport()}/></td>
-    <td data-label={t('zavod.groupCode')}><input className="input" aria-label={t('zavod.groupCode')} inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => applyPassport()}/></td>
-    <td data-label={t('zavod.product')}><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => applyPassport()}/></td>
+    <td data-label={t('zavod.factoryCode')}><input className="input" aria-label={t('zavod.factoryCode')} autoCapitalize="characters" value={factoryCode} onChange={event => setFactoryCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
+    <td data-label={t('zavod.groupCode')}><input className="input" aria-label={t('zavod.groupCode')} autoCapitalize="characters" value={sectionCode} onChange={event => setSectionCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
+    <td data-label={t('zavod.product')}><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
     <td className="waybill-size" data-label={t('zavod.size')}><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); applyPassport({ size: event.target.value }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
     <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
@@ -876,16 +880,16 @@ function LineEditor({ line, creating, onClose, onSave }: { shipment: Shipment; l
     if (!productCode.trim() || !sectionCode.trim() || !size.trim()) { setError(t('zavod.needProduct')); return; }
     if (!priceType) { setError(t('zavod.priceType')); return; }
     setBusy(true);
-    const ok = await onSave({ factoryCode: factoryCode.trim(), sectionCode: sectionCode.trim(), productCode: productCode.trim(), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), priceType });
+    const ok = await onSave({ factoryCode: codeInput(factoryCode), sectionCode: codeInput(sectionCode), productCode: codeInput(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), priceType });
     setBusy(false);
     if (!ok) setError(t('partners.shipmentInvalid'));
   };
   return createPortal(<div className="backdrop" onClick={onClose}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="line-edit-title">
     <div className="modal-top"><div><p className="eyebrow">Bordo</p><h2 id="line-edit-title">{creating ? t('zavod.addRow') : t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
     <div className="form-grid">
-      <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" value={factoryCode} onChange={event => setFactoryCode(event.target.value)} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.product')}</span><input className="input" inputMode="numeric" value={productCode} onChange={event => setProductCode(event.target.value.replace(/\D/g, ''))} onBlur={() => void fill()}/></label>
+      <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" autoCapitalize="characters" value={factoryCode} onChange={event => setFactoryCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
+      <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" autoCapitalize="characters" value={sectionCode} onChange={event => setSectionCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
+      <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.size')}</span><select className="input" value={size} onChange={event => { setSize(event.target.value); void loadPassport({ factory: factoryCode.trim(), code: productCode.trim(), size: event.target.value, group: sectionCode.trim() }).then(data => { if (!data?.found) return; const extra = fromPassport({ group: sectionCode, size: event.target.value, pack: pairs, price, priceType }, data); if (extra.sectionCode) setSectionCode(extra.sectionCode); if (extra.pairs) setPairs(String(extra.pairs)); if (extra.price) setPrice(String(extra.price)); if (extra.priceType) setPriceType(extra.priceType); }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
@@ -937,10 +941,10 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
           date,
           note,
           lines: filled.map(line => ({
-            factoryCode: line.factoryCode.trim(),
-            sectionCode: line.sectionCode.trim(),
+            factoryCode: codeInput(line.factoryCode),
+            sectionCode: codeInput(line.sectionCode),
             id: line.key,
-            productCode: line.productCode.trim(),
+            productCode: codeInput(line.productCode),
             model: line.model,
             size: line.size,
             pairs: asNumber(line.pairs),
@@ -967,9 +971,9 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
     {lines.map((line, index) => <article className="waybill-line" key={line.key}>
       <header><b>{String(index + 1).padStart(2, '0')}</b>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
       <div className="form-grid">
-        <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: e.target.value.replace(/[^0-9A-Za-z]/g, '') })} onBlur={e => fillLine(line, { factoryCode: e.target.value.replace(/[^0-9A-Za-z]/g, '') })}/></label>
-        <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" inputMode="numeric" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: e.target.value.replace(/\D/g, '') })} onBlur={e => fillLine(line, { sectionCode: e.target.value.replace(/\D/g, '') })}/></label>
-        <label className="field"><span>{t('zavod.product')}</span><input className="input" inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: e.target.value.replace(/\D/g, '') })} onBlur={e => fillLine(line, { productCode: e.target.value.replace(/\D/g, '') })}/></label>
+        <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" autoCapitalize="characters" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { factoryCode: codeInput(e.target.value) })}/></label>
+        <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" autoCapitalize="characters" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { sectionCode: codeInput(e.target.value) })}/></label>
+        <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { productCode: codeInput(e.target.value) })}/></label>
         <label className="field"><span>{t('zavod.size')}</span><select className="input" value={line.size} onChange={e => fillLine(line, { size: e.target.value })}><option value=""/>{!LINE_SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>

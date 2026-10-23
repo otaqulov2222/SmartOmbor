@@ -727,7 +727,7 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   const factoryCode = tokens[0];
   const productCode = tokens[tokens.length - 1];
   const middle = tokens.slice(1, -1);
-  const groupCode = middle.find((token) => /^\d{3,6}$/.test(token)) || "";
+  const groupCode = middle.find((token) => /^\d{3,6}$/.test(token)) || (middle.length === 1 ? middle[0] : "") || "";
   return { factoryCode, groupCode, productCode, size, color };
 }
 
@@ -752,10 +752,11 @@ export function folderLabel(row: { name?: string; pathName?: string }) {
 export function matchProductFolder<T extends { name: string; pathName?: string }>(folders: T[], groupCode: string): T | null {
   const code = groupCode.trim();
   if (code.length < 3) return null;
-  const hits = folders.filter((folder) => folder.name.trim() === code || lastNumericToken(folder.name) === code);
+  const folded = code.toLocaleUpperCase("ru-RU");
+  const hits = folders.filter((folder) => folder.name.trim().toLocaleUpperCase("ru-RU") === folded || lastNumericToken(folder.name) === code);
   if (hits.length === 1) return hits[0];
   if (!hits.length) return null;
-  const named = hits.filter((folder) => folder.name.trim() === code);
+  const named = hits.filter((folder) => folder.name.trim().toLocaleUpperCase("ru-RU") === folded);
   if (named.length === 1) return named[0];
   const pool = named.length ? named : hits;
   const shortest = Math.min(...pool.map((folder) => folder.name.length));

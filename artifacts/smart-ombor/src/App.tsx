@@ -565,17 +565,17 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       setAddError(error instanceof Error ? error.message : t('products.addFailed'));
     } finally { setSaving(false); }
   };
-  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'packSize' ? moneyDigits(event.target.value) : key === 'factoryCode' ? event.target.value.replace(/[^\dA-Za-z]/g, '').toUpperCase() : event.target.value }));
+  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'packSize' ? moneyDigits(event.target.value) : key === 'barcode' ? event.target.value : event.target.value.replace(/\s+/g, '').toLocaleUpperCase('ru-RU') }));
   const factoryMissing = factory.ready && draft.factoryCode.trim().length >= 2 && !factory.found;
   return createPortal(<div className="backdrop" onClick={() => { if (!saving) onClose(); }}><form className="modal product-add" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title">
     <div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div>
     <div className="form-grid">
       <label className="field span-2">{t('products.field.name')}<span className="name-lock"><TextInput testId="input-product-brand" className="input-locked" value={t('zavod.brand')} readOnly tabIndex={-1}/><TextInput testId="input-product-name" className="input-locked" value={nameRest} readOnly tabIndex={-1}/></span></label>
-      <label className="field">{t('zavod.factoryCode')}<TextInput testId="input-product-factory" value={draft.factoryCode} onChange={setText('factoryCode')} autoFocus/></label>
+      <label className="field">{t('zavod.factoryCode')}<TextInput testId="input-product-factory" value={draft.factoryCode} onChange={setText('factoryCode')} autoCapitalize="characters" autoFocus/></label>
       <label className="field">{t('products.field.supplier')}<TextInput testId="input-product-supplier" className="input-locked" value={factory.supplierName} readOnly tabIndex={-1}/></label>
       {factoryMissing ? <p className="field-note" data-testid="status-factory-missing">{t('products.factoryMissing')} <Link href="/partners" className="notice-link" onClick={onClose}>{t('products.factoryMissing.action')}</Link></p> : null}
-      <label className="field">{t('zavod.groupCode')}<TextInput testId="input-product-group" value={draft.groupCode} onChange={setText('groupCode')}/></label>
-      <label className="field">{t('zavod.product')}<TextInput testId="input-product-code" value={draft.productCode} onChange={setText('productCode')}/></label>
+      <label className="field">{t('zavod.groupCode')}<TextInput testId="input-product-group" value={draft.groupCode} onChange={setText('groupCode')} autoCapitalize="characters"/></label>
+      <label className="field">{t('zavod.product')}<TextInput testId="input-product-code" value={draft.productCode} onChange={setText('productCode')} autoCapitalize="characters"/></label>
       <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
       <label className="field">{t('products.field.pack')}<TextInput testId="input-product-pack" inputMode="numeric" value={draft.packSize} onChange={setText('packSize')}/></label>
       <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={event => setDraft(current => ({ ...current, cost: moneyDigits(event.target.value) }))}/></label>
