@@ -306,17 +306,18 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .markup-hint { margin: 0; font-size: .82rem; line-height: 1.4; }
 .markup-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: .75rem; align-items: end; }
 .markup-row .form-actions { margin: 0; }
-.pct-box { position: relative; display: block; min-width: 0; }
-.pct-box .input { padding-right: 1.7rem; }
-.pct-box > span:last-child { position: absolute; right: .7rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 700; pointer-events: none; }
-.price-type-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.6rem; gap: .5rem; align-items: center; }
-.price-type-row .pct-box .input { text-align: right; }
+.pct-box { display: flex; align-items: center; min-width: 5.6rem; height: 2.6rem; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); overflow: hidden; }
+.pct-box:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px rgb(47 84 235 / .14); }
+.pct-box .input, .pct-box .input:disabled { flex: 1 1 auto; width: auto; min-width: 0; height: 100%; border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0 .2rem 0 .7rem; text-align: right; }
+.pct-box .input:focus { outline: none; border-color: transparent; box-shadow: none; }
+.pct-box > span:last-child { flex: none; padding: 0 .7rem 0 .2rem; color: var(--muted); font-weight: 700; pointer-events: none; line-height: 1; }
+.pct-box:has(.input:disabled), .pct-box:has(.input-locked) { background: var(--surface-2); }
+.price-type-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.8rem; gap: .5rem; align-items: center; }
 .sale-triple { display: grid; gap: .45rem; }
-.sale-triple-row { display: grid; grid-template-columns: 6.6rem 5.6rem minmax(0, 1fr); gap: .5rem; align-items: center; margin: 0; }
+.sale-triple-row { display: grid; grid-template-columns: 6.6rem 5.8rem minmax(0, 1fr); gap: .5rem; align-items: center; margin: 0; }
 .sale-triple-row b { font-size: .82rem; }
-.sale-triple-row .pct-box .input { text-align: right; }
 .sale-triple.compact { gap: .28rem; }
-.sale-triple.compact .sale-triple-row { grid-template-columns: 5.2rem 4.6rem; }
+.sale-triple.compact .sale-triple-row { grid-template-columns: 6.2rem 5.8rem; }
 .input:disabled { background: var(--surface-2); color: var(--ink); }
 .form-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .access-create { margin-top: .15rem; justify-content: flex-start; }
@@ -360,7 +361,8 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 .modal { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; background: var(--surface); border-radius: var(--r-lg); padding: 1.2rem; display: grid; gap: 1rem; box-shadow: var(--shadow-lg); animation: pop-in .2s cubic-bezier(.2,.8,.2,1); }
 .product-add { width: min(760px, calc(100vw - 2rem)); align-content: start; }
 .product-add .form-grid { align-items: start; }
-.product-add .sale-triple-row { grid-template-columns: 7rem 5.8rem minmax(0, 1fr); }
+.product-add .sale-triple-row { grid-template-columns: 7rem 6.2rem minmax(0, 1fr); }
+.product-add .sale-triple-row .pct-box { height: 2.6rem; }
 .product-add .name-lock { display: grid; grid-template-columns: 5.6rem minmax(0, 1fr); gap: .5rem; }
 .product-add .input-locked { background: var(--surface-2); color: var(--ink); font-weight: 700; }
 .product-add .field-note { grid-column: 1 / -1; margin: -.35rem 0 0; font-size: .82rem; font-weight: 500; line-height: 1.4; color: var(--ink-2); }
@@ -807,7 +809,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 @media (max-width: 560px) {
   .markup-row { grid-template-columns: 1fr 1fr; }
   .markup-row .form-actions { grid-column: 1 / -1; }
-  .sale-triple-row, .product-add .sale-triple-row { grid-template-columns: 5.6rem 5.2rem minmax(0, 1fr); }
+  .sale-triple-row, .product-add .sale-triple-row { grid-template-columns: 5.8rem 5.8rem minmax(0, 1fr); }
   .kpis { grid-template-columns: 1fr; }
   .kpi { border-right: 0 !important; border-bottom: 1px solid var(--line); } .kpi:last-child { border-bottom: 0; }
   .metrics { grid-template-columns: 1fr; }
@@ -909,11 +911,13 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
 .waybill-table .waybill-size { min-width: 6.8rem; }
 .waybill-table .waybill-size .input { min-width: 6.8rem; }
-.waybill-table .waybill-type { min-width: 11.4rem; }
+.waybill-table .waybill-type { min-width: 13rem; }
 .waybill-table .waybill-type .price-type-row { min-width: 13.8rem; width: 100%; }
-.waybill-table .waybill-type .sale-triple { min-width: 11.4rem; width: 100%; }
+.waybill-table .waybill-type .sale-triple { min-width: 13rem; width: 100%; }
 .waybill-table .waybill-type .input { min-width: 0; height: 1.95rem; }
-.waybill-table .waybill-type .pct-box { min-width: 4.6rem; }
+.waybill-table .pct-box { height: 2.15rem; min-width: 5.8rem; }
+.waybill-table .waybill-type .pct-box { height: 1.95rem; min-width: 5.8rem; }
+.waybill-table .pct-box .input, .waybill-table .pct-box .input:disabled { width: auto; min-width: 0; height: 100%; padding: 0 .15rem 0 .45rem; text-align: right; }
 .waybill-table td.num { white-space: nowrap; }
 .waybill-table .waybill-line-tools { width: 6.6rem; white-space: nowrap; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
@@ -1160,7 +1164,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table td.waybill-line-tools::before { content: none; }
   .waybill-table td.waybill-line-tools { justify-content: flex-end; padding-top: .45rem; width: auto; }
   .waybill-table td .input, .waybill-table .waybill-size, .waybill-table .waybill-type, .waybill-table .waybill-size .input, .waybill-table .waybill-type .input { min-width: 0; width: min(100%, 11.5rem); max-width: 100%; }
-  .waybill-table .waybill-type .price-type-row, .waybill-table .waybill-type .price-type-row .input, .waybill-table .waybill-type .sale-triple { width: 100%; max-width: 100%; }
+  .waybill-table .waybill-type .price-type-row, .waybill-table .waybill-type .sale-triple, .waybill-table .waybill-type .pct-box { width: 100%; max-width: 100%; }
+  .waybill-table .waybill-type .pct-box .input { width: auto; max-width: none; }
   .waybill-table tr:has(> .waybill-colors) { padding: 0; border: 0; background: transparent; box-shadow: none; }
   .waybill-table td.waybill-colors { display: block; width: 100%; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: .9rem; }
   .waybill-table td.waybill-colors::before { content: none; }
