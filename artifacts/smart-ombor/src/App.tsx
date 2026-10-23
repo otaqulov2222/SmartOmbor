@@ -455,30 +455,46 @@ function moneyDigits(value: string) {
 }
 
 const PRODUCT_ADD_MEMORY = 'bordo.product-add';
-const SALE_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 } as const;
+const DEFAULT_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 };
 const SALE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
 type SaleType = typeof SALE_TYPES[number];
+type SaleMarkup = { Premium: number; Exclusive: number; Standard: number };
 type ProductAddMemory = { factoryCode?: string; packSize?: string; priceType?: string };
 function readProductAddMemory(): ProductAddMemory {
   try { return JSON.parse(localStorage.getItem(PRODUCT_ADD_MEMORY) || '{}') as ProductAddMemory; } catch { return {}; }
 }
-function markedSale(cost: number, priceType: string) {
-  const pct = SALE_MARKUP[priceType as SaleType];
+function markedSale(cost: number, priceType: string, markup: SaleMarkup) {
+  const pct = markup[priceType as SaleType];
   if (pct == null || !(cost > 0)) return 0;
   return Math.round(cost * (100 + pct) / 100);
+}
+function markupLabel(type: string, markup: SaleMarkup) {
+  const pct = markup[type as SaleType];
+  return pct == null ? type : `${type} +${pct}%`;
 }
 
 function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (name: string) => void }) {
   const { t } = useI18n();
   const remembered = readProductAddMemory();
   const [draft, setDraft] = useState({ factoryCode: remembered.factoryCode || '', groupCode: '', productCode: '', size: '', packSize: remembered.packSize || '', cost: '', barcode: '' });
-  const [priceType, setPriceType] = useState(remembered.priceType && remembered.priceType in SALE_MARKUP ? remembered.priceType : '');
+  const [markup, setMarkup] = useState<SaleMarkup>(DEFAULT_MARKUP);
+  const [priceType, setPriceType] = useState(remembered.priceType && remembered.priceType in DEFAULT_MARKUP ? remembered.priceType : '');
+  const [keptType, setKeptType] = useState(false);
+  const [keptSale, setKeptSale] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState('');
   const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
   const [folderId, setFolderId] = useState('');
   const [factory, setFactory] = useState({ found: false, ready: true, name: '', supplierId: '', supplierName: '' });
   useEffect(() => {
+    void fetch('/api/settings/markup').then(response => response.ok ? response.json() : null).then((data: Partial<SaleMarkup> | null) => {
+      if (!data) return;
+      setMarkup({
+        Premium: Number(data.Premium) || DEFAULT_MARKUP.Premium,
+        Exclusive: Number(data.Exclusive) || DEFAULT_MARKUP.Exclusive,
+        Standard: Number(data.Standard) || DEFAULT_MARKUP.Standard,
+      });
+    }).catch(() => undefined);
     void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
     void fetch('/api/products/next-barcode').then(response => response.json()).then((data: { barcode?: string }) => {
       if (data.barcode) setDraft(current => current.barcode ? current : { ...current, barcode: data.barcode || '' });
@@ -522,13 +538,43 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     }, 400);
     return () => window.clearTimeout(timer);
   }, [draft.groupCode, draft.productCode]);
+  useEffect(() => {
+    const factory = draft.factoryCode.trim();
+    const group = draft.groupCode.trim();
+    const code = draft.productCode.trim();
+    const size = draft.size.trim();
+    if (!factory || !code) {
+      setKeptType(false);
+      setKeptSale(null);
+      return;
+    }
+    const qs = new URLSearchParams({ factory, code });
+    if (group) qs.set('group', group);
+    if (size) qs.set('size', size);
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; priceType?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null } | null) => {
+        const type = data?.priceType && data.priceType in DEFAULT_MARKUP ? data.priceType : '';
+        setKeptType(Boolean(type));
+        setKeptSale(data?.found && data.salePrice && data.salePrice > 0 ? data.salePrice : null);
+        if (type) setPriceType(type);
+        if (data?.found) {
+          setDraft(current => ({
+            ...current,
+            ...(!current.packSize && data.packSize && data.packSize > 1 ? { packSize: String(data.packSize) } : {}),
+            ...(!current.cost && data.cost && data.cost > 0 ? { cost: String(data.cost) } : {}),
+          }));
+        }
+      }).catch(() => undefined);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [draft.factoryCode, draft.groupCode, draft.productCode, draft.size]);
   const factoryCode = draft.factoryCode.trim().toUpperCase();
   const groupCode = draft.groupCode.trim();
   const productCode = draft.productCode.trim();
   const nameRest = [factoryCode, groupCode, productCode, draft.size].filter(Boolean).join(' ');
   const name = ['Bordo', nameRest].filter(Boolean).join(' ');
   const cost = draft.cost.trim() ? Number(draft.cost) : null;
-  const sale = cost != null && priceType ? markedSale(cost, priceType) : 0;
+  const sale = keptSale != null && keptSale > 0 ? keptSale : (cost != null && priceType ? markedSale(cost, priceType, markup) : 0);
   const canSave = factory.found && factoryCode.length >= 2 && Boolean(groupCode) && Boolean(draft.size) && cost != null && cost > 0 && Boolean(priceType) && !saving;
   const saveProduct = async () => {
     if (!canSave || cost == null) return;
@@ -579,7 +625,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
       <label className="field">{t('products.field.pack')}<TextInput testId="input-product-pack" inputMode="numeric" value={draft.packSize} onChange={setText('packSize')}/></label>
       <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={event => setDraft(current => ({ ...current, cost: moneyDigits(event.target.value) }))}/></label>
-      <label className="field">{t('zavod.priceType')}<select className="input" value={priceType} onChange={event => setPriceType(event.target.value)} data-testid="select-product-price-type"><option value="">{t('products.sizeEmpty')}</option>{SALE_TYPES.map(type => <option key={type} value={type}>{t(type === 'Premium' ? 'products.markup.Premium' : type === 'Exclusive' ? 'products.markup.Exclusive' : 'products.markup.Standard')}</option>)}</select></label>
+      <label className="field">{t('zavod.priceType')}<select className="input" value={priceType} disabled={keptType} onChange={event => setPriceType(event.target.value)} data-testid="select-product-price-type"><option value="">{t('products.sizeEmpty')}</option>{SALE_TYPES.map(type => <option key={type} value={type}>{markupLabel(type, markup)}</option>)}</select></label>
       <label className="field">{t('products.field.sale')}<TextInput testId="input-product-sale" className="input-locked" value={sale > 0 ? String(sale) : ''} readOnly tabIndex={-1}/></label>
       <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')} placeholder={t('products.barcodeAuto')}/></label>
       <label className="field">{t('products.field.folder')}<select className="input" value={folderId} onChange={event => setFolderId(event.target.value)} data-testid="select-product-folder"><option value="">{t('products.folderEmpty')}</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
@@ -1272,6 +1318,50 @@ function MoySkladPanel() {
     {note && <Notice kind={note.kind === 'success' ? 'success' : 'error'} title={note.text} testId="status-ms-connection"/>}
   </Card>;
 }
+function MarkupPanel() {
+  const { t } = useI18n();
+  const session = readLocalSession();
+  const [draft, setDraft] = useState<SaleMarkup>(DEFAULT_MARKUP);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+  useEffect(() => {
+    void fetch('/api/settings/markup').then(response => response.ok ? response.json() : null).then((data: Partial<SaleMarkup> | null) => {
+      if (!data) return;
+      setDraft({
+        Premium: Number(data.Premium) || DEFAULT_MARKUP.Premium,
+        Exclusive: Number(data.Exclusive) || DEFAULT_MARKUP.Exclusive,
+        Standard: Number(data.Standard) || DEFAULT_MARKUP.Standard,
+      });
+    }).catch(() => undefined);
+  }, []);
+  const setPct = (key: SaleType) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = Math.max(0, Math.min(99, Number(event.target.value.replace(/[^\d]/g, '')) || 0));
+    setDraft(current => ({ ...current, [key]: value }));
+  };
+  const save = async () => {
+    setBusy(true); setNote(null);
+    const response = await fetch('/api/settings/markup', {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${session?.token || ''}`, 'content-type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    setBusy(false);
+    if (!response.ok) { setNote({ kind: 'error', text: t('common.tryAgain') }); return; }
+    const saved = await response.json() as SaleMarkup;
+    setDraft(saved);
+    setNote({ kind: 'success', text: t('settings.markup.saved') });
+  };
+  return <Card title={t('settings.markup')} meta={t('settings.markup.meta')}>
+    <p className="muted">{t('settings.markup.hint')}</p>
+    <div className="form-grid">
+      {SALE_TYPES.map(type => <Field key={type} label={markupLabel(type, draft)} testId={`field-markup-${type}`}>
+        <TextInput testId={`input-markup-${type}`} inputMode="numeric" value={String(draft[type])} onChange={setPct(type)}/>
+      </Field>)}
+      <div className="form-actions span-2"><Button testId="button-save-markup" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('products.saved')}</Button></div>
+    </div>
+    {note && <Notice kind={note.kind === 'success' ? 'success' : 'error'} title={note.text} testId="status-markup"/>}
+  </Card>;
+}
 function SettingsPage() {
   const { t, fmt } = useI18n(); const roleLabel = useRole();
   const users = useListUsers(); const me = useGetCurrentUser(); const updateRole = useUpdateUserRole(); const cache = useQueryClient();
@@ -1280,6 +1370,7 @@ function SettingsPage() {
   return <>
     <PageHead title={t('settings.title')}/>
     {localAdmin && <MoySkladPanel/>}
+    {localAdmin && <MarkupPanel/>}
     {localAdmin ? <AccessPanel/> : <Card title={t('settings.team')} meta={users.data ? t('settings.team.meta', { count: fmt(users.data.length) }) : ''}><QueryError q={users} id="users"/>{users.isLoading ? <LoadingRows count={3}/> : users.data?.length ? <ul className="user-list">{users.data.map(u => <li className="user-row" key={u.id} data-testid={`row-user-${u.id}`}><span className="avatar">{u.name.split(' ').map(x => x[0]).join('').slice(0, 2)}</span><span className="user-copy"><b>{u.id === 'local' ? t('shell.localUser') : u.name}</b><small>{u.email}</small></span>{admin ? <SelectInput value={u.role} onChange={role => updateRole.mutate({ id: u.id, data: { role: role as AppUserRole } }, { onSuccess: () => void cache.invalidateQueries({ queryKey: getListUsersQueryKey() }) })} testId={`select-role-${u.id}`}>{roleOptions.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}</SelectInput> : <span className="chip">{roleLabel(u.role)}</span>}</li>)}</ul> : <EmptyState title={t('settings.team.empty')} body={t('settings.team.emptyBody')} icon={Users}/>}</Card>}
   </>;
 }

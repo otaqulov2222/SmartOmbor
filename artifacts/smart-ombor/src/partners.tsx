@@ -15,11 +15,21 @@ type Line = {
   productId?: string | null; productName?: string | null;
 };
 const PRICE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
-function priceTypeLabel(type: string, t: (key: 'products.markup.Premium' | 'products.markup.Exclusive' | 'products.markup.Standard') => string) {
-  if (type === 'Premium') return t('products.markup.Premium');
-  if (type === 'Exclusive') return t('products.markup.Exclusive');
-  if (type === 'Standard') return t('products.markup.Standard');
+const DEFAULT_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 };
+type SaleMarkup = typeof DEFAULT_MARKUP;
+function priceTypeLabel(type: string, markup: SaleMarkup) {
+  if (type === 'Premium' || type === 'Exclusive' || type === 'Standard') return `${type} +${markup[type]}%`;
   return type;
+}
+async function loadMarkup(): Promise<SaleMarkup> {
+  const response = await fetch('/api/settings/markup');
+  if (!response.ok) return DEFAULT_MARKUP;
+  const data = await response.json() as Partial<SaleMarkup>;
+  return {
+    Premium: Number.isFinite(Number(data.Premium)) ? Number(data.Premium) : DEFAULT_MARKUP.Premium,
+    Exclusive: Number.isFinite(Number(data.Exclusive)) ? Number(data.Exclusive) : DEFAULT_MARKUP.Exclusive,
+    Standard: Number.isFinite(Number(data.Standard)) ? Number(data.Standard) : DEFAULT_MARKUP.Standard,
+  };
 }
 function blankLine(factoryCode: string): Line {
   return {
@@ -164,7 +174,7 @@ function receiptParts(line: Line) {
   return [{ color: null as string | null, quantity: total }];
 }
 
-function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
+function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: boolean; markup: SaleMarkup; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
   const { t, fmt, money } = useI18n();
   const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
   const [factoryCode, setFactoryCode] = useState(line.factoryCode || '');
@@ -235,7 +245,7 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
       <td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td>
       <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
       <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
-      <td data-label={t('zavod.priceType')}>{line.priceType ? priceTypeLabel(line.priceType, t) : '—'}</td>
+      <td data-label={t('zavod.priceType')}>{line.priceType ? priceTypeLabel(line.priceType, markup) : '—'}</td>
       <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
       <td className="num" data-label={t('zavod.sum')}>{money(lineUnits(line) * line.price)}</td>
     </>;
@@ -249,7 +259,7 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
     <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => applyPassport()}/></td>
-    <td className="waybill-type" data-label={t('zavod.priceType')}><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></td>
+    <td className="waybill-type" data-label={t('zavod.priceType')}><select className="input" aria-label={t('zavod.priceType')} value={priceType} disabled={Boolean(line.priceType)} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, markup)}</option>)}</select></td>
     <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
     <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;
@@ -511,6 +521,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [agentQuery, setAgentQuery] = useState('');
   const [agentHits, setAgentHits] = useState<Array<{ id: string; name: string }>>([]);
   const [agent, setAgent] = useState<{ id: string; name: string } | null>(null);
+  const [markup, setMarkup] = useState<SaleMarkup>(DEFAULT_MARKUP);
+  useEffect(() => { void loadMarkup().then(setMarkup); }, []);
   useEffect(() => {
     if (!posting) return;
     const saved = row.account?.counterpartyId && row.account.counterpartyName ? { id: row.account.counterpartyId, name: row.account.counterpartyName } : null;
@@ -773,7 +785,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   const colored = (line.colors ?? []).some(color => color.name && color.quantity > 0);
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
-                      <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} onSave={patch => saveLine(shipment, line, patch)}/>
+                      <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} markup={markup} onSave={patch => saveLine(shipment, line, patch)}/>
                       <td className="waybill-line-tools" data-label="">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
                     </tr>
                     {colorFor === line.id && <tr><td className="waybill-colors" colSpan={12}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
@@ -833,8 +845,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       {error && <p className="error-text">{error}</p>}
       <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</button><button type="button" className="btn btn-danger" disabled={busy} onClick={() => void removeFactory()} data-testid="button-confirm-delete-partner"><Trash2 size={15}/>{busy ? t('common.saving') : t('partners.delete')}</button></div>
     </div></div>, document.body)}
-    {editing && <WaybillEditor shipment={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await refreshShipments(); }}/>}
-    {lineEdit && <LineEditor shipment={lineEdit.shipment} line={lineEdit.line} creating={!lineEdit.line.id} onClose={() => setLineEdit(null)} onSave={async patch => { const ok = await saveLine(lineEdit.shipment, lineEdit.line, patch); if (ok) setLineEdit(null); return ok; }}/>}
+    {editing && <WaybillEditor shipment={editing} markup={markup} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await refreshShipments(); }}/>}
+    {lineEdit && <LineEditor shipment={lineEdit.shipment} line={lineEdit.line} creating={!lineEdit.line.id} markup={markup} onClose={() => setLineEdit(null)} onSave={async patch => { const ok = await saveLine(lineEdit.shipment, lineEdit.line, patch); if (ok) setLineEdit(null); return ok; }}/>}
     {removing && createPortal(<div className="backdrop" onClick={() => setRemoving(null)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="shipment-delete-title">
       <div className="modal-top"><div><p className="eyebrow">{removing.number}</p><h2 id="shipment-delete-title">{t('partners.deleteShipment')}</h2></div><button type="button" className="icon-btn" onClick={() => setRemoving(null)} aria-label={t('common.close')}><X size={18}/></button></div>
       <p>{t('partners.deleteShipmentBody', { number: removing.number })}</p>
@@ -850,7 +862,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   </div>;
 }
 
-function LineEditor({ line, creating, onClose, onSave }: { shipment: Shipment; line: Line; creating?: boolean; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
+function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shipment; line: Line; creating?: boolean; markup: SaleMarkup; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
   const { t, money } = useI18n();
   const [factoryCode, setFactoryCode] = useState(line.factoryCode);
   const [sectionCode, setSectionCode] = useState(line.sectionCode);
@@ -894,7 +906,7 @@ function LineEditor({ line, creating, onClose, onSave }: { shipment: Shipment; l
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={priceType} onChange={event => setPriceType(event.target.value)}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></label>
+      <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={priceType} disabled={!creating && Boolean(line.priceType)} onChange={event => setPriceType(event.target.value)}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, markup)}</option>)}</select></label>
       <label className="field"><span>{t('zavod.sum')}</span><input className="input" value={sum ? money(sum) : ''} readOnly/></label>
     </div>
     {error && <p className="error-text">{error}</p>}
@@ -902,7 +914,7 @@ function LineEditor({ line, creating, onClose, onSave }: { shipment: Shipment; l
   </div></div>, document.body);
 }
 
-function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onClose: () => void; onSaved: () => Promise<void> }) {
+function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipment; markup: SaleMarkup; onClose: () => void; onSaved: () => Promise<void> }) {
   const { t } = useI18n();
   const [date, setDate] = useState(String(shipment.date ?? '').slice(0, 10));
   const [note, setNote] = useState(shipment.note);
@@ -978,7 +990,7 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })} onBlur={e => fillLine(line, { price: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={line.priceType} onChange={e => patch(line.key, { priceType: e.target.value })}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></label>
+        <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={line.priceType} disabled={Boolean(shipment.lines.find(item => item.id === line.key)?.priceType)} onChange={e => patch(line.key, { priceType: e.target.value })}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, markup)}</option>)}</select></label>
       </div>
       <div className="yx-colors">
         <span>{t('zavod.colors')}</span>

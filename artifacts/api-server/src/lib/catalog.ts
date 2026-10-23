@@ -802,7 +802,7 @@ export function listWaybillProducts(
   return exact;
 }
 
-function pickPassport(rows: CatalogProduct[]): { id: string; name: string } | null {
+export function pickPassport(rows: CatalogProduct[]): { id: string; name: string } | null {
   if (!rows.length) return null;
   if (rows.length === 1) return { id: rows[0].id, name: rows[0].name };
   const withGroup = rows.filter((product) => Boolean(parseBordoName(product.name)?.groupCode));

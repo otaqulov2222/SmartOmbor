@@ -1,10 +1,26 @@
 import { Router, type IRouter } from "express";
 import { loadCatalog, resetCatalog } from "../lib/catalog";
 import { clearConnection, connectionView, probeMoySklad, saveConnection } from "../lib/connection";
+import { loadMarkup, saveMarkup } from "../lib/markup";
 import { recordAudit } from "../lib/audit";
 import { requireLocalAdmin } from "./local-auth";
 
 const router: IRouter = Router();
+
+router.get("/settings/markup", (_req, res) => {
+  res.json(loadMarkup());
+});
+
+router.put("/settings/markup", (req, res) => {
+  if (!requireLocalAdmin(req, res)) return;
+  const saved = saveMarkup({
+    Premium: req.body?.Premium,
+    Exclusive: req.body?.Exclusive,
+    Standard: req.body?.Standard,
+  });
+  void recordAudit({ action: "settings.markup", entityType: "settings", details: JSON.stringify(saved) });
+  res.json(saved);
+});
 
 router.get("/settings/connection", (req, res) => {
   if (!requireLocalAdmin(req, res)) return;

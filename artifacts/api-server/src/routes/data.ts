@@ -25,7 +25,8 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { loadMarkup, markedSale } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
@@ -33,14 +34,6 @@ import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { listAccounts } from "../lib/partners";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
-
-const SALE_MARKUP: Record<string, number> = { Premium: 5, Exclusive: 10, Standard: 13 };
-
-function markedSale(cost: number, priceType: string) {
-  const pct = SALE_MARKUP[priceType];
-  if (pct == null || !(cost > 0)) return null;
-  return Math.round(cost * (100 + pct) / 100);
-}
 
 function sameFactoryCode(left: string, right: string) {
   const a = left.trim().toUpperCase();
@@ -608,8 +601,9 @@ router.post("/products", async (req, res, next) => {
       Standard: som(req.body?.priceStandard),
     };
     let cost = som(req.body?.cost);
-    if (cost != null && SALE_MARKUP[priceType] != null) {
-      const sale = markedSale(cost, priceType);
+    const markup = loadMarkup();
+    const sale = cost != null ? markedSale(cost, priceType, markup) : null;
+    if (cost != null && sale != null) {
       prices.Exclusive = priceType === "Exclusive" ? sale : null;
       prices.Premium = priceType === "Premium" ? sale : null;
       prices.Standard = priceType === "Standard" ? sale : null;
@@ -618,7 +612,7 @@ router.post("/products", async (req, res, next) => {
       if (cost == null && prices.Exclusive != null) cost = prices.Exclusive;
     }
     const packSize = Math.max(0, Math.round(Number(req.body?.packSize) || 0));
-    if (!factoryCode || !groupCode || !size || cost == null || SALE_MARKUP[priceType] == null || name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
+    if (!factoryCode || !groupCode || !size || cost == null || sale == null || name.length < 2 || Number.isNaN(cost) || Object.values(prices).some((price) => Number.isNaN(price))) {
       res.status(400).json({ error: "rejected" });
       return;
     }
@@ -632,25 +626,9 @@ router.post("/products", async (req, res, next) => {
       { factoryCode, factoryName: partner.name, catalog },
     );
     if (existing?.id) {
-      const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
-      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
-      const sale = prices.Exclusive ?? prices.Premium ?? prices.Standard ?? cost ?? 0;
-      const typeName = prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "";
-      const asMeta = (id: string, type: string) => (id ? { href: `https://api.moysklad.ru/api/remap/1.2/entity/${type}/${id}`, type, mediaType: "application/json" } : null);
-      if (currency) {
-        await writeProductCard(existing.id, sale, typeName, currency, {
-          article,
-          supplierMeta: asMeta(partner.supplierId, "counterparty"),
-          packSize,
-          buySom: cost ?? undefined,
-        });
-      } else if (packSize > 1) {
-        await ensurePachka(existing.id, packSize);
-      }
+      if (packSize > 1) await ensurePachka(existing.id, packSize);
       updateCatalogProduct(existing.id, {
         ...(packSize > 1 ? { packType: "pachka", packSize } : {}),
-        ...(cost != null ? { cost } : {}),
-        ...(sale ? { salePrice: sale } : {}),
       });
       res.json({ id: existing.id, name: existing.name, reused: true });
       return;
@@ -725,19 +703,7 @@ router.post("/products", async (req, res, next) => {
           )
         : null;
       if (!again?.id) throw error;
-      const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
-      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
-      const sale = prices.Exclusive ?? prices.Premium ?? prices.Standard ?? cost ?? 0;
-      const typeName = prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "";
-      if (currency) {
-        await writeProductCard(again.id, sale, typeName, currency, {
-          article,
-          packSize,
-          buySom: cost ?? undefined,
-        });
-      } else if (packSize > 1) {
-        await ensurePachka(again.id, packSize);
-      }
+      if (packSize > 1) await ensurePachka(again.id, packSize);
       res.json({ id: again.id, name: again.name || name, reused: true });
       return;
     }
@@ -896,7 +862,26 @@ router.get("/products/passport", async (req, res, next) => {
     const sizes = new Set(options.map((item) => item.size).filter(Boolean));
     const groups = new Set(options.map((item) => item.groupCode).filter(Boolean));
     if (!matched || !product || (!size && sizes.size > 1) || (!group && groups.size > 1)) {
-      res.json({ found: false, options });
+      let priceType = "";
+      if (group) {
+        const family = listWaybillProducts(catalog, { ...input, size: "" });
+        const sibling = pickPassport(family);
+        if (sibling?.id) {
+          try {
+            const row = await moysklad<{ salePrices?: Array<{ value?: number; priceType?: { name?: string } }> }>(`/entity/product/${encodeURIComponent(sibling.id)}?expand=salePrices.priceType`);
+            for (const typeName of ["Exclusive", "Premium", "Standard"] as const) {
+              const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
+              if (hit) {
+                priceType = typeName;
+                break;
+              }
+            }
+          } catch (error) {
+            logger.warn({ productId: sibling.id, err: error instanceof Error ? error.message : error }, "MoySklad sibling price type skipped");
+          }
+        }
+      }
+      res.json({ found: false, priceType, options });
       return;
     }
     const parts = parseBordoName(product.name);
