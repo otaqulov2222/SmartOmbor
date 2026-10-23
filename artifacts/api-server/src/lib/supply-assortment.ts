@@ -1,4 +1,5 @@
 import { matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, type Catalog } from "./catalog";
+import { loadMarkup, markedSale } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
 import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
@@ -175,6 +176,7 @@ export async function writeProductCard(
   }
   if (extras.packSize && extras.packSize > 1) await ensurePachka(productId, extras.packSize);
   if (!(kopecks > 0) || !priceType) return;
+  if (hasSaleMarkup(current.salePrices)) return;
   const listed = await listedPrices(current.salePrices, priceType, som, currencyMeta);
   if (!listed) {
     logger.warn({ productId, priceType }, "MoySklad Exclusive/sale price was not written");
@@ -364,18 +366,20 @@ async function colorNamedProduct(
   },
 ): Promise<ProductRow> {
   const name = `${parent.name || ""} ${color}`.trim();
+  const sale = extras.price > 0 && extras.priceType ? (markedSale(extras.price, extras.priceType, loadMarkup()) ?? extras.price) : extras.price;
   const existing = await productByName(name);
   if (existing) {
-    await writeProductCard(existing.id, extras.price, extras.priceType, extras.currencyMeta, {
+    await writeProductCard(existing.id, sale, extras.priceType, extras.currencyMeta, {
       article: extras.article,
       supplierMeta: extras.supplierMeta,
       description: extras.description,
       folderMeta: extras.folder?.meta ?? null,
       packSize: extras.packSize,
+      buySom: extras.price,
     });
     return existing;
   }
-  const listed = extras.price > 0 ? await listedPrices(undefined, extras.priceType, extras.price, extras.currencyMeta) : null;
+  const listed = sale > 0 ? await listedPrices(undefined, extras.priceType, sale, extras.currencyMeta) : null;
   const barcode = nextInternalEan13(extras.catalog, extras.used);
   extras.used.add(barcode);
   const packSize = extras.packSize > 1 ? extras.packSize : 0;
@@ -392,12 +396,13 @@ async function colorNamedProduct(
   });
   if (listed) created.salePrices = listed;
   created.barcodes = barcodeValues(created.barcodes);
-  await writeProductCard(created.id, extras.price, extras.priceType, extras.currencyMeta, {
+  await writeProductCard(created.id, sale, extras.priceType, extras.currencyMeta, {
     article: extras.article,
     supplierMeta: extras.supplierMeta,
     description: extras.description,
     folderMeta: extras.folder?.meta ?? null,
     packSize,
+    buySom: extras.price,
   });
   return created;
 }
@@ -555,6 +560,16 @@ function saleTypeOf(line: ShipmentLine): string {
   return line.price > 0 ? "Exclusive" : "";
 }
 
+function hasSaleMarkup(prices?: Price[]) {
+  return (prices ?? []).some((price) => Boolean(price.priceType?.name) && SALE_TYPES.includes(price.priceType?.name || "") && (price.value ?? 0) > 0);
+}
+
+function saleForLine(line: ShipmentLine) {
+  const type = saleTypeOf(line);
+  if (!(line.price > 0) || !type) return { type, sale: 0 };
+  return { type, sale: markedSale(line.price, type, loadMarkup()) ?? line.price };
+}
+
 export async function stampWaybillCardPrices(
   lines: ShipmentLine[],
   currencyMeta: Meta,
@@ -567,11 +582,13 @@ export async function stampWaybillCardPrices(
     const matched = await findExistingBordoProduct(line, scope);
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
-    await writeProductCard(matched.id, line.price, saleTypeOf(line), currencyMeta, {
+    const priced = saleForLine(line);
+    await writeProductCard(matched.id, priced.sale, priced.type, currencyMeta, {
       article: line.productCode.trim(),
       supplierMeta: scope.supplierMeta,
       description: cardDescription(line),
       packSize: line.pairs > 1 ? line.pairs : 0,
+      buySom: line.price,
     });
   }
 }
@@ -698,7 +715,8 @@ export async function buildSupplyPositions(
     }
     const code = item.line.productCode.trim();
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
-    const listed = item.line.price > 0 ? await listedPrices(undefined, saleTypeOf(item.line), item.line.price, currencyMeta) : null;
+    const priced = saleForLine(item.line);
+    const listed = priced.sale > 0 ? await listedPrices(undefined, priced.type, priced.sale, currencyMeta) : null;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
     const product = await createProduct({
@@ -738,12 +756,14 @@ export async function buildSupplyPositions(
     }
     const product = parents.get(parent.id) ?? full;
     if (item.line.price > 0) {
-      await writeProductCard(product.id, item.line.price, saleTypeOf(item.line), currencyMeta, {
+      const priced = saleForLine(item.line);
+      await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
         article: item.line.productCode.trim(),
         supplierMeta: scope.supplierMeta,
         description: cardDescription(item.line),
         folderMeta: item.folder?.meta ?? null,
         packSize: item.line.pairs > 1 ? item.line.pairs : 0,
+        buySom: item.line.price,
       });
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
@@ -779,7 +799,8 @@ export async function buildSupplyPositions(
           } catch (error) {
             if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
           }
-          const listed = await listedPrices(current, saleTypeOf(item.line), item.line.price, currencyMeta);
+          const priced = saleForLine(item.line);
+          const listed = hasSaleMarkup(current) ? null : await listedPrices(current, priced.type, priced.sale, currencyMeta);
           const saleBody = listed ? { salePrices: priceBody(listed) } : {};
           const buyBody = item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {};
           if (listed || item.line.price > 0) {
@@ -818,10 +839,12 @@ export async function buildSupplyPositions(
           || await productByName(`${product.name} (${part.color})`);
         if (existingColor?.id) {
           if (item.line.price > 0) {
-            await writeProductCard(existingColor.id, item.line.price, saleTypeOf(item.line), currencyMeta, {
+            const priced = saleForLine(item.line);
+            await writeProductCard(existingColor.id, priced.sale, priced.type, currencyMeta, {
               article: item.line.productCode.trim(),
               supplierMeta: scope.supplierMeta,
               packSize,
+              buySom: item.line.price,
             });
           }
           if (!existingColor.meta?.href) existingColor.meta = entityMeta(`${BASE}/entity/product/${existingColor.id}`, "product");

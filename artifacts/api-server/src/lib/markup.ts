@@ -5,6 +5,7 @@ import { dataFile } from "./data-dir";
 const FILE = dataFile("markup.json");
 
 export const SALE_TYPES = ["Premium", "Exclusive", "Standard"] as const;
+export const SALE_READ_ORDER = ["Exclusive", "Premium", "Standard"] as const;
 export type SaleType = (typeof SALE_TYPES)[number];
 export type SaleMarkup = Record<SaleType, number>;
 

@@ -459,6 +459,17 @@ const DEFAULT_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 };
 const SALE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
 type SaleType = typeof SALE_TYPES[number];
 type SaleMarkup = { Premium: number; Exclusive: number; Standard: number };
+function asMarkup(data: Partial<SaleMarkup> | null | undefined): SaleMarkup {
+  const one = (value: unknown, fallback: number) => {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) && n >= 0 && n <= 99 ? n : fallback;
+  };
+  return {
+    Premium: one(data?.Premium, DEFAULT_MARKUP.Premium),
+    Exclusive: one(data?.Exclusive, DEFAULT_MARKUP.Exclusive),
+    Standard: one(data?.Standard, DEFAULT_MARKUP.Standard),
+  };
+}
 type ProductAddMemory = { factoryCode?: string; packSize?: string; priceType?: string };
 function readProductAddMemory(): ProductAddMemory {
   try { return JSON.parse(localStorage.getItem(PRODUCT_ADD_MEMORY) || '{}') as ProductAddMemory; } catch { return {}; }
@@ -485,11 +496,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   useEffect(() => {
     void fetch('/api/settings/markup').then(response => response.ok ? response.json() : null).then((data: Partial<SaleMarkup> | null) => {
       if (!data) return;
-      setMarkup({
-        Premium: Number(data.Premium) || DEFAULT_MARKUP.Premium,
-        Exclusive: Number(data.Exclusive) || DEFAULT_MARKUP.Exclusive,
-        Standard: Number(data.Standard) || DEFAULT_MARKUP.Standard,
-      });
+      setMarkup(asMarkup(data));
     }).catch(() => undefined);
     void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
     void fetch('/api/products/next-barcode').then(response => response.json()).then((data: { barcode?: string }) => {
@@ -1337,11 +1344,7 @@ function MarkupPanel() {
   useEffect(() => {
     void fetch('/api/settings/markup').then(response => response.ok ? response.json() : null).then((data: Partial<SaleMarkup> | null) => {
       if (!data) return;
-      setDraft({
-        Premium: Number(data.Premium) || DEFAULT_MARKUP.Premium,
-        Exclusive: Number(data.Exclusive) || DEFAULT_MARKUP.Exclusive,
-        Standard: Number(data.Standard) || DEFAULT_MARKUP.Standard,
-      });
+      setDraft(asMarkup(data));
     }).catch(() => undefined);
   }, []);
   const setPct = (key: SaleType) => (event: React.ChangeEvent<HTMLInputElement>) => {

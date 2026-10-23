@@ -26,7 +26,7 @@ import {
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
 import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
-import { loadMarkup, markedSale, markupFromPrices, parsePct, SALE_TYPES } from "../lib/markup";
+import { loadMarkup, markedSale, markupFromPrices, parsePct, SALE_READ_ORDER } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
@@ -597,7 +597,7 @@ async function readProductSaleMarkup(productId: string, fallback?: { cost?: numb
     }>(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType`);
     let priceType = "";
     let salePrice = empty.salePrice;
-    for (const typeName of SALE_TYPES) {
+    for (const typeName of SALE_READ_ORDER) {
       const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
       if (hit) {
         priceType = typeName;
@@ -928,7 +928,7 @@ router.get("/products/passport", async (req, res, next) => {
       const pachka = (row.packs ?? []).find((pack) => isPachkaPack(pack));
       if (pachka?.quantity && pachka.quantity > 1) packSize = pachka.quantity;
       cost = money(row.buyPrice?.value) ?? cost;
-      for (const typeName of ["Exclusive", "Premium", "Standard"] as const) {
+      for (const typeName of SALE_READ_ORDER) {
         const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
         if (hit) {
           priceType = typeName;
