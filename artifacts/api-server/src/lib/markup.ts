@@ -12,10 +12,15 @@ export const DEFAULT_MARKUP: SaleMarkup = { Premium: 5, Exclusive: 10, Standard:
 
 let memory: SaleMarkup | undefined;
 
-function clamp(value: unknown, fallback: number) {
+export function parsePct(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const next = Math.round(Number(value));
-  if (!Number.isFinite(next) || next < 0 || next > 99) return fallback;
+  if (!Number.isFinite(next) || next < 0 || next > 99) return null;
   return next;
+}
+
+function clamp(value: unknown, fallback: number) {
+  return parsePct(value) ?? fallback;
 }
 
 function normalize(raw: Partial<SaleMarkup> | null | undefined): SaleMarkup {
@@ -46,8 +51,13 @@ export function saveMarkup(input: Partial<SaleMarkup>): SaleMarkup {
   return next;
 }
 
-export function markedSale(cost: number, priceType: string, markup = loadMarkup()): number | null {
-  const pct = markup[priceType as SaleType];
-  if (pct == null || !(cost > 0)) return null;
-  return Math.round(cost * (100 + pct) / 100);
+export function markupFromPrices(cost: number | null | undefined, sale: number | null | undefined): number | null {
+  if (!(typeof cost === "number" && cost > 0) || !(typeof sale === "number" && sale > 0)) return null;
+  return parsePct(((sale / cost) - 1) * 100);
+}
+
+export function markedSale(cost: number, priceType: string, markup = loadMarkup(), pct?: number | null): number | null {
+  const rate = parsePct(pct) ?? (SALE_TYPES.includes(priceType as SaleType) ? markup[priceType as SaleType] : undefined);
+  if (rate == null || !(cost > 0)) return null;
+  return Math.round(cost * (100 + rate) / 100);
 }
