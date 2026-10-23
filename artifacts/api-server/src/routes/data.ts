@@ -850,14 +850,10 @@ router.get("/products/passport", async (req, res, next) => {
       return;
     }
     const catalog = peekCatalog() ?? await loadCatalog();
-    const hits = listWaybillProducts(catalog, {
-      factoryCode: factory,
-      factoryName: factory,
-      productCode: code,
-      size,
-      groupCode: group,
-    });
-    const options = hits.slice(0, 8).map((product) => {
+    const input = { factoryCode: factory, factoryName: factory, productCode: code, size, groupCode: group };
+    const hits = listWaybillProducts(catalog, input);
+    const optionsRows = hits.length ? hits : listWaybillProducts(catalog, { ...input, groupCode: "" });
+    const options = optionsRows.slice(0, 8).map((product) => {
       const parts = parseBordoName(product.name);
       return {
         productId: product.id,
@@ -869,13 +865,9 @@ router.get("/products/passport", async (req, res, next) => {
         salePrice: product.salePrice,
       };
     });
-    const matched = matchWaybillProduct(catalog, {
-      factoryCode: factory,
-      factoryName: factory,
-      productCode: code,
-      size,
-      groupCode: group,
-    });
+    const matched = group && !hits.length
+      ? null
+      : matchWaybillProduct(catalog, input);
     const product = matched ? catalog.products.find((item) => item.id === matched.id) : null;
     const sizes = new Set(options.map((item) => item.size).filter(Boolean));
     if (!matched || !product || (!size && sizes.size > 1)) {
@@ -914,7 +906,7 @@ router.get("/products/passport", async (req, res, next) => {
       found: true,
       productId: matched.id,
       name: matched.name,
-      groupCode: parts?.groupCode || group || "",
+      groupCode: parts?.groupCode || "",
       size: parts?.size || size,
       packSize: packSize > 1 ? packSize : null,
       cost,

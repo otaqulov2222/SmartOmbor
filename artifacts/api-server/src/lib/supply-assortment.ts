@@ -671,7 +671,7 @@ export async function buildSupplyPositions(
     const parent = await findExistingParent(line, scope, name);
     if (parent?.name) {
       const parts = parseBordoName(parent.name);
-      if (parts?.groupCode && !line.sectionCode.trim()) line.sectionCode = parts.groupCode;
+      if (parts?.groupCode) line.sectionCode = parts.groupCode;
     }
     const key = parent?.id || (line.sectionCode.trim() ? productIdentity(line, scope.factoryCode) : parentIdentity(line, scope.factoryCode));
     const folder = await ensureFolder(folders, line.sectionCode);

@@ -819,10 +819,16 @@ export function matchWaybillProduct(
   const group = input.groupCode?.trim() || "";
   const exact = listWaybillProducts(catalog, input);
   const hit = pickPassport(exact);
-  if (hit) return hit;
-  if (!group) return null;
-  const ungrouped = listWaybillProducts(catalog, { ...input, groupCode: "" }).filter((product) => !parseBordoName(product.name)?.groupCode);
-  return pickPassport(ungrouped);
+  if (hit || !group) return hit;
+  const typed = group.toLowerCase();
+  const loose = listWaybillProducts(catalog, { ...input, groupCode: "" }).filter((product) => {
+    const other = (parseBordoName(product.name)?.groupCode || "").toLowerCase();
+    if (!other) return true;
+    return other !== typed && !other.startsWith(typed) && !typed.startsWith(other);
+  });
+  const withGroup = loose.filter((product) => Boolean(parseBordoName(product.name)?.groupCode));
+  const ungrouped = loose.filter((product) => !parseBordoName(product.name)?.groupCode);
+  return pickPassport(withGroup.length ? withGroup : ungrouped);
 }
 
 export function findProductsByBarcode(catalog: Catalog, raw: string): CatalogProduct[] {
