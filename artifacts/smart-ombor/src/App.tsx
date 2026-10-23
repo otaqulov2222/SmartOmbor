@@ -479,6 +479,9 @@ function markedSale(cost: number, pct: number) {
   if (!(cost > 0) || pct < 0) return 0;
   return Math.round(cost * (100 + pct) / 100);
 }
+function pctDigits(value: string) {
+  return value.replace(/[^\d]/g, '').slice(0, 2);
+}
 
 function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (name: string) => void }) {
   const { t } = useI18n();
@@ -486,7 +489,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [draft, setDraft] = useState({ factoryCode: remembered.factoryCode || '', groupCode: '', productCode: '', size: '', packSize: remembered.packSize || '', cost: '', barcode: '' });
   const [markup, setMarkup] = useState<SaleMarkup>(DEFAULT_MARKUP);
   const [priceType, setPriceType] = useState(remembered.priceType && remembered.priceType in DEFAULT_MARKUP ? remembered.priceType : '');
-  const [markupPct, setMarkupPct] = useState<number | null>(null);
+  const [pctText, setPctText] = useState(remembered.priceType && remembered.priceType in DEFAULT_MARKUP ? String(DEFAULT_MARKUP[remembered.priceType as SaleType]) : '');
   const [family, setFamily] = useState<FamilyLock | null>(null);
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState('');
@@ -496,7 +499,13 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   useEffect(() => {
     void fetch('/api/settings/markup').then(response => response.ok ? response.json() : null).then((data: Partial<SaleMarkup> | null) => {
       if (!data) return;
-      setMarkup(asMarkup(data));
+      const next = asMarkup(data);
+      setMarkup(next);
+      setPctText(current => {
+        if (current !== '') return current;
+        const type = remembered.priceType;
+        return type && type in next ? String(next[type as SaleType]) : current;
+      });
     }).catch(() => undefined);
     void fetch('/api/products/folders').then(response => response.json()).then(data => setFolders(Array.isArray(data.items) ? data.items : [])).catch(() => setFolders([]));
     void fetch('/api/products/next-barcode').then(response => response.json()).then((data: { barcode?: string }) => {
@@ -568,7 +577,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
           sale: data.found && data.salePrice && data.salePrice > 0 ? data.salePrice : null,
         });
         setPriceType(type);
-        if (pct != null) setMarkupPct(pct);
+        if (pct != null) setPctText(String(pct));
         if (data?.found) {
           setDraft(current => ({
             ...current,
@@ -587,7 +596,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const name = ['Bordo', nameRest].filter(Boolean).join(' ');
   const cost = draft.cost.trim() ? Number(draft.cost) : null;
   const type = family?.type || priceType;
-  const pct = family?.pct != null ? family.pct : (markupPct ?? (type && type in DEFAULT_MARKUP ? markup[type as SaleType] : null));
+  const pct = family?.pct != null ? family.pct : (pctText === '' ? null : Math.max(0, Math.min(99, Number(pctText))));
   const locked = Boolean(family?.type);
   const pctLocked = locked && family?.pct != null;
   const sale = family?.found && family.sale && family.sale > 0 ? family.sale : (cost != null && pct != null ? markedSale(cost, pct) : 0);
@@ -642,7 +651,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
       <label className="field">{t('products.field.pack')}<TextInput testId="input-product-pack" inputMode="numeric" value={draft.packSize} onChange={setText('packSize')}/></label>
       <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={event => setDraft(current => ({ ...current, cost: moneyDigits(event.target.value) }))}/></label>
-      <label className="field">{t('zavod.priceType')}<span className="price-type-row"><select className="input" value={type} disabled={locked} onChange={event => { const next = event.target.value; setPriceType(next); setMarkupPct(next && next in DEFAULT_MARKUP ? markup[next as SaleType] : null); }} data-testid="select-product-price-type"><option value="">{t('products.sizeEmpty')}</option>{SALE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select><span className="pct-box"><input className={`input ${pctLocked ? 'input-locked' : ''}`} inputMode="numeric" disabled={!type || pctLocked} value={pct == null ? '' : String(pct)} onChange={event => { const digits = event.target.value.replace(/[^\d]/g, ''); setMarkupPct(digits ? Math.max(0, Math.min(99, Number(digits))) : null); }} aria-label={t('products.field.markup')} data-testid="input-product-markup"/><span>%</span></span></span></label>
+      <label className="field">{t('zavod.priceType')}<span className="price-type-row"><select className="input" value={type} disabled={locked} onChange={event => { const next = event.target.value; setPriceType(next); setPctText(next && next in DEFAULT_MARKUP ? String(markup[next as SaleType]) : ''); }} data-testid="select-product-price-type"><option value="">{t('products.sizeEmpty')}</option>{SALE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select><span className="pct-box"><input className={`input ${pctLocked ? 'input-locked' : ''}`} inputMode="numeric" disabled={!type || pctLocked} value={pctLocked ? String(family?.pct ?? '') : pctText} onChange={event => setPctText(pctDigits(event.target.value))} onFocus={event => event.target.select()} aria-label={t('products.field.markup')} data-testid="input-product-markup"/><span>%</span></span></span></label>
       <label className="field">{t('products.field.sale')}<TextInput testId="input-product-sale" className="input-locked" value={sale > 0 ? String(sale) : ''} readOnly tabIndex={-1}/></label>
       <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')} placeholder={t('products.barcodeAuto')}/></label>
       <label className="field">{t('products.field.folder')}<select className="input" value={folderId} onChange={event => setFolderId(event.target.value)} data-testid="select-product-folder"><option value="">{t('products.folderEmpty')}</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
@@ -1348,7 +1357,8 @@ function MarkupPanel() {
     }).catch(() => undefined);
   }, []);
   const setPct = (key: SaleType) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    const value = Math.max(0, Math.min(99, Number(event.target.value.replace(/[^\d]/g, '')) || 0));
+    const digits = pctDigits(event.target.value);
+    const value = digits === '' ? 0 : Math.max(0, Math.min(99, Number(digits)));
     setDraft(current => ({ ...current, [key]: value }));
   };
   const save = async () => {
@@ -1367,7 +1377,7 @@ function MarkupPanel() {
   return <Card title={t('settings.markup')} meta={t('settings.markup.meta')}>
     <p className="muted markup-hint">{t('settings.markup.hint')}</p>
     <div className="markup-row">
-      {SALE_TYPES.map(type => <label className="field" key={type} data-testid={`field-markup-${type}`}><span>{type}</span><span className="pct-box"><TextInput testId={`input-markup-${type}`} inputMode="numeric" value={String(draft[type])} onChange={setPct(type)}/><span>%</span></span></label>)}
+      {SALE_TYPES.map(type => <label className="field" key={type} data-testid={`field-markup-${type}`}><span>{type}</span><span className="pct-box"><TextInput testId={`input-markup-${type}`} inputMode="numeric" value={String(draft[type])} onChange={setPct(type)} onFocus={event => event.currentTarget.select()}/><span>%</span></span></label>)}
       <div className="form-actions"><Button testId="button-save-markup" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('products.saved')}</Button></div>
     </div>
     {note && <Notice kind={note.kind === 'success' ? 'success' : 'error'} title={note.text} testId="status-markup"/>}
