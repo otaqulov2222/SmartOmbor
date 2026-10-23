@@ -25,8 +25,8 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, loadCatalog, matchProductFolder, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
-import { ensurePachka, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { ensurePachka, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
@@ -627,6 +627,37 @@ router.post("/products", async (req, res, next) => {
       res.status(400).json({ error: "factory_missing" });
       return;
     }
+    const existing = matchWaybillProduct(catalog, {
+      factoryCode,
+      factoryName: partner.name,
+      groupCode,
+      productCode,
+      size,
+    });
+    if (existing?.id) {
+      const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
+      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+      const sale = prices.Exclusive ?? prices.Premium ?? prices.Standard ?? cost ?? 0;
+      const typeName = prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "";
+      const asMeta = (id: string, type: string) => (id ? { href: `https://api.moysklad.ru/api/remap/1.2/entity/${type}/${id}`, type, mediaType: "application/json" } : null);
+      if (currency) {
+        await writeProductCard(existing.id, sale, typeName, currency, {
+          article,
+          supplierMeta: asMeta(partner.supplierId, "counterparty"),
+          packSize,
+          buySom: cost ?? undefined,
+        });
+      } else if (packSize > 1) {
+        await ensurePachka(existing.id, packSize);
+      }
+      updateCatalogProduct(existing.id, {
+        ...(packSize > 1 ? { packType: "pachka", packSize } : {}),
+        ...(cost != null ? { cost } : {}),
+        ...(sale ? { salePrice: sale } : {}),
+      });
+      res.json({ id: existing.id, name: existing.name, reused: true });
+      return;
+    }
     const uomMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/19f1edc0-fc42-4001-94cb-c9ec9c62ec10", type: "uom", mediaType: "application/json" };
     const pachkaMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/2061e032-0683-11f1-0a80-00e70010dbf7", type: "uom", mediaType: "application/json" };
     const payload: Record<string, unknown> = { name, uom: { meta: uomMeta } };
@@ -803,6 +834,94 @@ router.get("/products/next-barcode", async (_req, res, next) => {
   try {
     const catalog = peekCatalog() ?? await loadCatalog();
     res.json({ barcode: nextInternalEan13(catalog, new Set()) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/products/passport", async (req, res, next) => {
+  try {
+    const factory = String(req.query.factory ?? "").trim();
+    const code = String(req.query.code ?? "").trim();
+    const size = String(req.query.size ?? "").trim();
+    const group = String(req.query.group ?? "").trim();
+    if (!code) {
+      res.json({ found: false, options: [] });
+      return;
+    }
+    const catalog = peekCatalog() ?? await loadCatalog();
+    const hits = listWaybillProducts(catalog, {
+      factoryCode: factory,
+      factoryName: factory,
+      productCode: code,
+      size,
+      groupCode: group,
+    });
+    const options = hits.slice(0, 8).map((product) => {
+      const parts = parseBordoName(product.name);
+      return {
+        productId: product.id,
+        name: product.name,
+        groupCode: parts?.groupCode || "",
+        size: parts?.size || "",
+        packSize: product.packSize > 1 ? product.packSize : null,
+        cost: product.cost,
+        salePrice: product.salePrice,
+      };
+    });
+    const matched = matchWaybillProduct(catalog, {
+      factoryCode: factory,
+      factoryName: factory,
+      productCode: code,
+      size,
+      groupCode: group,
+    });
+    const product = matched ? catalog.products.find((item) => item.id === matched.id) : null;
+    const sizes = new Set(options.map((item) => item.size).filter(Boolean));
+    if (!matched || !product || (!size && sizes.size > 1)) {
+      res.json({ found: false, options });
+      return;
+    }
+    const parts = parseBordoName(product.name);
+    let packSize = product.packSize > 1 ? product.packSize : 0;
+    let cost = product.cost;
+    let salePrice = product.salePrice;
+    let priceType = "";
+    try {
+      const row = await moysklad<{
+        buyPrice?: { value?: number };
+        packs?: Array<{ quantity?: number; uom?: { meta?: { href?: string }; name?: string } }>;
+        salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
+      }>(`/entity/product/${encodeURIComponent(matched.id)}?expand=packs.uom,salePrices.priceType`);
+      const pachka = (row.packs ?? []).find((pack) => isPachkaPack(pack)) || ((row.packs ?? []).length === 1 ? row.packs?.[0] : undefined);
+      if (pachka?.quantity && pachka.quantity > 1) packSize = pachka.quantity;
+      cost = money(row.buyPrice?.value) ?? cost;
+      for (const typeName of ["Exclusive", "Premium", "Standard"] as const) {
+        const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
+        if (hit) {
+          priceType = typeName;
+          salePrice = money(hit.value);
+          break;
+        }
+      }
+      if (packSize > 1) {
+        updateCatalogProduct(matched.id, { packSize, packType: "pachka", cost: cost ?? product.cost, salePrice: salePrice ?? product.salePrice });
+      }
+    } catch (error) {
+      logger.warn({ productId: matched.id, err: error instanceof Error ? error.message : error }, "MoySklad passport pack skipped");
+    }
+    res.json({
+      found: true,
+      productId: matched.id,
+      name: matched.name,
+      groupCode: parts?.groupCode || group || "",
+      size: parts?.size || size,
+      packSize: packSize > 1 ? packSize : null,
+      cost,
+      salePrice,
+      priceType,
+      options,
+    });
   } catch (error) {
     next(error);
   }

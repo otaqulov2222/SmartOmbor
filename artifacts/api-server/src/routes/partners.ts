@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, productBelongsToFactory } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -167,8 +167,21 @@ router.post("/partner-factories/:id/password", (req, res) => {
   }
 });
 
-function exactCatalogProduct(_catalog: Awaited<ReturnType<typeof loadCatalog>>, _code: string) {
-  return null;
+function exactCatalogProduct(
+  catalog: Awaited<ReturnType<typeof loadCatalog>>,
+  line: { factoryCode: string; sectionCode: string; productCode: string; size: string },
+  account: { code?: string; name?: string; catalogName?: string },
+) {
+  const matched = matchWaybillProduct(catalog, {
+    factoryCode: line.factoryCode || account.code || "",
+    factoryName: account.catalogName || account.name || "",
+    groupCode: line.sectionCode,
+    productCode: line.productCode,
+    size: line.size,
+  });
+  if (!matched) return null;
+  const groupCode = parseBordoName(matched.name)?.groupCode || "";
+  return { ...matched, groupCode };
 }
 
 router.get("/partner-factories/:id", async (req, res, next) => {
@@ -179,7 +192,7 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       return;
     }
     const catalog = await loadCatalog();
-    linkExactShipmentLines(account.id, (code) => exactCatalogProduct(catalog, code));
+    linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {
@@ -204,15 +217,19 @@ function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sect
   const raw = name.trim();
   const color = raw.match(/\(([^)]+)\)\s*$/)?.[1]?.trim().toLowerCase() || "";
   const base = raw.replace(/\s*\([^)]+\)\s*$/, "").trim().toLowerCase();
+  const parsed = parseBordoName(raw);
   let best: { score: number; price: number } | null = null;
   for (const line of lines) {
     if (!(line.price > 0)) continue;
     const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
     let score = 0;
+    const codeOk = parsed ? parsed.productCode.toLowerCase() === line.productCode.trim().toLowerCase() : false;
+    const sizeOk = parsed ? parsed.size === line.size.trim() : false;
+    const groupOk = !line.sectionCode.trim() || (parsed ? parsed.groupCode.toLowerCase() === line.sectionCode.trim().toLowerCase() : false);
     if (base === identity) score = 4;
     else if (color && base === `${identity} ${color}`) score = 4;
     else if (identity && base.startsWith(identity)) score = 3;
-    else if (line.productCode && line.size && base.includes(line.productCode.toLowerCase()) && base.includes(line.size.toLowerCase())) score = 2;
+    else if (codeOk && sizeOk && groupOk) score = 2;
     if (color && (line.colors ?? []).some((item) => item.name?.trim().toLowerCase() === color)) score += 1;
     if (score > (best?.score ?? 0)) best = { score, price: kopecks(line.price) };
   }
@@ -645,7 +662,7 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    linkExactShipmentLines(res.locals.factory.id, (code) => exactCatalogProduct(catalog, code));
+    linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === saved.id) ?? saved;
     res.json(shipment);
   } catch (error) {
@@ -672,7 +689,7 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    linkExactShipmentLines(res.locals.factory.id, (code) => exactCatalogProduct(catalog, code));
+    linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === created.id) ?? created;
     res.status(201).json(shipment);
   } catch (error) {

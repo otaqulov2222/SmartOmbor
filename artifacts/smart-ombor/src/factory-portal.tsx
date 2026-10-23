@@ -153,6 +153,25 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   }, { pairs: 0, boxes: 0, amount: 0 }), [lines]);
 
   const patch = (key: string, next: Partial<Draft>) => setLines(rows => withBlank(rows.map(row => row.key === key ? { ...row, ...next } : row)));
+  const fillPassport = (line: Draft, next?: Partial<Draft>) => {
+    const merged = { ...line, ...next };
+    const code = merged.productCode.trim();
+    if (!code) { if (next) patch(line.key, next); return; }
+    const qs = new URLSearchParams({ code, factory: account.code });
+    if (merged.size.trim()) qs.set('size', merged.size.trim());
+    if (merged.groupCode.trim()) qs.set('group', merged.groupCode.trim());
+    void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; groupCode?: string; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
+      if (!data?.found) { if (next) patch(line.key, next); return; }
+      patch(line.key, {
+        ...next,
+        ...(!merged.groupCode.trim() && data.groupCode ? { groupCode: data.groupCode } : {}),
+        ...(!merged.size.trim() && data.size ? { size: data.size } : {}),
+        ...(!merged.pairs.trim() && data.packSize && data.packSize > 1 ? { pairs: String(data.packSize) } : {}),
+        ...(!merged.price.trim() && (data.cost || data.salePrice) ? { price: String(data.cost || data.salePrice) } : {}),
+        ...(!merged.priceType && data.priceType ? { priceType: data.priceType } : {}),
+      });
+    }).catch(() => { if (next) patch(line.key, next); });
+  };
 
   const resetForm = () => {
     setEditingId(null);
@@ -290,11 +309,11 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
-          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
-          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => patch(line.key, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!LINE_SIZES.includes(line.size as typeof LINE_SIZES[number]) && line.size ? <option value={line.size}>{line.size}</option> : null}{LINE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
-          <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })}/></label>
+          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} inputMode="numeric" value={line.productCode} onChange={e => patch(line.key, { productCode: digits(e.target.value) })} onBlur={e => fillPassport(line, { productCode: digits(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
+          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!LINE_SIZES.includes(line.size as typeof LINE_SIZES[number]) && line.size ? <option value={line.size}>{line.size}</option> : null}{LINE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+          <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
-          <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })}/></label>
+          <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })} onBlur={e => fillPassport(line, { price: digits(e.target.value) })}/></label>
           <label className="yx-cell yx-sum-cell"><span>{t('zavod.sum')}</span><input className="input yx-sum" aria-label={t('zavod.sum')} value={sum ? money(sum) : ''} readOnly/></label>
           <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank(account.code)]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
         </div>;

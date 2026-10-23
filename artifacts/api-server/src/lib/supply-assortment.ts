@@ -1,4 +1,4 @@
-import { matchProductFolder, matchWaybillProduct, type Catalog } from "./catalog";
+import { matchProductFolder, matchWaybillProduct, parseBordoName, type Catalog } from "./catalog";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
 import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
@@ -60,11 +60,18 @@ function packBody(pack: GoodsPack, quantity = pack.quantity) {
   return { id: pack.id, quantity, uom: { meta: pack.uom?.meta ?? uomMeta(PACHKA_UOM) } };
 }
 
+export function isPachkaPack(pack: { uom?: { meta?: { href?: string }; name?: string } }) {
+  const href = pack.uom?.meta?.href || "";
+  if (href.includes(PACHKA_UOM)) return true;
+  const name = (pack.uom?.name || "").trim().toLowerCase();
+  return name === "pachka" || name === "пачка" || name === "pack";
+}
+
 export async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
   try {
     const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
     const packs = current.packs ?? [];
-    const pachka = packs.find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka");
+    const pachka = packs.find((pack) => isPachkaPack(pack)) || (packs.length === 1 ? packs[0] : undefined);
     if (!(packSize > 1)) {
       if (!current.uom) await optionalWrite(() => moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT"), "MoySklad uom skipped", { productId });
       return null;
@@ -81,7 +88,7 @@ export async function ensurePachka(productId: string, packSize: number): Promise
     const saved = (updated.packs ?? []).find((pack) => pack.quantity === packSize && pack.uom?.meta);
     if (saved?.id && saved.uom?.meta) return saved;
     const again = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom`);
-    return (again.packs ?? []).find((pack) => pack.uom?.name?.trim().toLowerCase() === "pachka" && pack.quantity === packSize) ?? null;
+    return (again.packs ?? []).find((pack) => isPachkaPack(pack) && pack.quantity === packSize) ?? null;
   } catch (error) {
     if (!permissionDenied(error)) throw error;
     logger.warn({ productId, packSize, err: error instanceof Error ? error.message : error }, "MoySklad pack skipped");
@@ -180,12 +187,23 @@ export async function writeProductCard(
   );
 }
 
+function normalizeColor(value: string) {
+  return value.trim().toLocaleUpperCase("ru-RU").replace(/[\s-]+/g, "").replace(/^Р/u, "R");
+}
+
 function sameColor(left: string, right: string) {
-  return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
+  return normalizeColor(left) === normalizeColor(right);
 }
 
 function variantColor(variant: VariantRow) {
-  return (variant.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang")?.value?.trim() || "";
+  const chars = variant.characteristics ?? [];
+  const named = chars.find((item) => /^(rang|цвет|color)$/i.test(item.name?.trim() || ""));
+  if (named?.value?.trim()) return named.value.trim();
+  if (chars[0]?.value?.trim()) return chars[0].value.trim();
+  const fromName = (variant.name || "").match(/\(([^)]+)\)\s*$/);
+  if (fromName?.[1]) return fromName[1].trim();
+  const tail = (variant.name || "").match(/\s+(R-?\d+)\s*$/i);
+  return tail?.[1]?.trim() || "";
 }
 
 let rangCharacteristic: { id: string; name: string; href: string } | null = null;
@@ -194,7 +212,8 @@ async function colorCharacteristic() {
   if (rangCharacteristic) return rangCharacteristic;
   try {
     const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
-    const found = (metadata.characteristics ?? []).find((item) => item.name?.trim().toLowerCase() === "rang" && item.id && item.name);
+    const found = (metadata.characteristics ?? []).find((item) => /^(rang|цвет|color)$/i.test(item.name?.trim() || "") && item.id && item.name)
+      || (metadata.characteristics ?? []).find((item) => item.id && item.name);
     if (!found?.id || !found.name) return null;
     rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
     return rangCharacteristic;
@@ -262,8 +281,13 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
 }
 
 async function variantsOf(productId: string) {
-  const page = await moysklad<{ rows: VariantRow[] }>(`/entity/variant?limit=100&filter=productid=${encodeURIComponent(productId)}&expand=characteristics`);
-  return page.rows.filter((row) => row.id);
+  const rows: VariantRow[] = [];
+  for (let offset = 0; offset < 2000; offset += 100) {
+    const page = await moysklad<{ meta?: { size?: number }; rows: VariantRow[] }>(`/entity/variant?limit=100&offset=${offset}&filter=productid=${encodeURIComponent(productId)}&expand=characteristics`);
+    rows.push(...page.rows.filter((row) => row.id));
+    if (rows.length >= (page.meta?.size ?? rows.length) || page.rows.length < 100) break;
+  }
+  return rows;
 }
 
 async function ensureVariant(
@@ -309,9 +333,10 @@ async function ensureVariant(
     } catch (error) {
       if (uniqueNameConflict(error)) {
         const rows = await variantsOf(product.id);
+        known.splice(0, known.length, ...rows);
         const hit = rows.find((row) => sameColor(variantColor(row), color));
         if (hit?.id) {
-          known.push(hit);
+          await ensureBarcodes("variant", hit.id, catalog, used);
           return hit;
         }
       }
@@ -540,16 +565,7 @@ export async function stampWaybillCardPrices(
   for (const line of lines) {
     if (!(line.price > 0)) continue;
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-    const exact = scope.catalog.products.find((product) => product.name.trim() === name);
-    const matched = exact
-      ? { id: exact.id, name: exact.name }
-      : matchWaybillProduct(scope.catalog, {
-          factoryCode: line.factoryCode || scope.factoryCode,
-          factoryName: scope.factoryName,
-          groupCode: line.sectionCode,
-          productCode: line.productCode,
-          size: line.size,
-        });
+    const matched = await findExistingParent(line, scope, name);
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
     await writeProductCard(matched.id, line.price, saleTypeOf(line), currencyMeta, {
@@ -570,6 +586,70 @@ function productIdentity(line: ShipmentLine, factoryCode: string) {
   ].join("\0");
 }
 
+function parentIdentity(line: ShipmentLine, factoryCode: string) {
+  return [
+    (line.factoryCode || factoryCode).trim().toLowerCase(),
+    line.productCode.trim().toLowerCase(),
+    line.size.trim().toLowerCase(),
+  ].join("\0");
+}
+
+async function findExistingParent(
+  line: ShipmentLine,
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+  name: string,
+): Promise<ProductRow | null> {
+  if (line.productId) {
+    const byId = await productById(line.productId);
+    if (byId) return byId;
+  }
+  const exact = scope.catalog.products.find((product) => product.name.trim() === name);
+  const catalogMatch = exact
+    ? { id: exact.id, name: exact.name }
+    : matchWaybillProduct(scope.catalog, {
+        factoryCode: line.factoryCode || scope.factoryCode,
+        factoryName: scope.factoryName,
+        groupCode: line.sectionCode,
+        productCode: line.productCode,
+        size: line.size,
+      });
+  if (catalogMatch?.id) {
+    const row = await productById(catalogMatch.id);
+    if (row) return row;
+  }
+  const factory = line.factoryCode || scope.factoryCode;
+  const names = [...new Set([
+    name,
+    ["Bordo", factory, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim(),
+    ["Bordo", factory, line.productCode, line.size].filter(Boolean).join(" ").trim(),
+  ])].filter((item) => item.length >= 2);
+  for (const candidate of names) {
+    const hit = await productByName(candidate);
+    if (hit) return hit;
+  }
+  const query = [factory, line.productCode, line.size].filter(Boolean).join(" ");
+  if (query.length < 3) return null;
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
+    const hits = page.rows.filter((row) => {
+      if (!row.id || !row.name) return false;
+      const parts = parseBordoName(row.name);
+      if (!parts || parts.color) return false;
+      if (parts.productCode.toLowerCase() !== line.productCode.trim().toLowerCase()) return false;
+      if (line.size.trim() && parts.size !== line.size.trim()) return false;
+      if (line.sectionCode.trim() && parts.groupCode && parts.groupCode.toLowerCase() !== line.sectionCode.trim().toLowerCase()) return false;
+      return parts.factoryCode.toLowerCase() === factory.trim().toLowerCase();
+    });
+    const grouped = hits.filter((row) => parseBordoName(row.name || "")?.groupCode);
+    const chosen = (line.sectionCode.trim() ? hits : grouped.length ? grouped : hits)[0];
+    return chosen?.id ? productById(chosen.id) : null;
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+    logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
+    return null;
+  }
+}
+
 export async function buildSupplyPositions(
   lines: ShipmentLine[],
   currencyMeta: Meta,
@@ -588,18 +668,12 @@ export async function buildSupplyPositions(
     if (!parts.length) continue;
     requireWaybillLine(line);
     const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-    const key = productIdentity(line, scope.factoryCode);
-    const exact = scope.catalog.products.find((product) => product.name.trim() === name);
-    const catalogMatch = exact
-      ? { id: exact.id, name: exact.name }
-      : matchWaybillProduct(scope.catalog, {
-          factoryCode: line.factoryCode || scope.factoryCode,
-          factoryName: scope.factoryName,
-          groupCode: line.sectionCode,
-          productCode: line.productCode,
-          size: line.size,
-        });
-    const parent: ProductRow | null = catalogMatch ? await productById(catalogMatch.id) : null;
+    const parent = await findExistingParent(line, scope, name);
+    if (parent?.name) {
+      const parts = parseBordoName(parent.name);
+      if (parts?.groupCode && !line.sectionCode.trim()) line.sectionCode = parts.groupCode;
+    }
+    const key = parent?.id || (line.sectionCode.trim() ? productIdentity(line, scope.factoryCode) : parentIdentity(line, scope.factoryCode));
     const folder = await ensureFolder(folders, line.sectionCode);
     const priceType = saleTypeOf(line);
     if (line.price > 0) line.priceType = priceType;
@@ -724,6 +798,25 @@ export async function buildSupplyPositions(
         assortment = { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") };
         stockId = variant.id;
       } else {
+        const existingColor = await productByName(`${product.name} ${part.color}`)
+          || await productByName(`${product.name} (${part.color})`);
+        if (existingColor?.id) {
+          if (item.line.price > 0) {
+            await writeProductCard(existingColor.id, item.line.price, saleTypeOf(item.line), currencyMeta, {
+              article: item.line.productCode.trim(),
+              supplierMeta: scope.supplierMeta,
+              packSize,
+            });
+          }
+          if (!existingColor.meta?.href) existingColor.meta = entityMeta(`${BASE}/entity/product/${existingColor.id}`, "product");
+          positions.push({
+            quantity: part.quantity,
+            price: Math.round(item.line.price * 100),
+            assortment: { meta: existingColor.meta },
+            stockId: existingColor.id,
+          });
+          continue;
+        }
         const colored = await colorNamedProduct(product, part.color, {
           folder: item.folder,
           supplierMeta: scope.supplierMeta,

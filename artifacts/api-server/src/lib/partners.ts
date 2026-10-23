@@ -406,18 +406,24 @@ export function deleteShipment(id: string) {
   return { ok: true };
 }
 
-export function linkExactShipmentLines(factoryId: string, match: (code: string) => { id: string; name: string } | null) {
+export function linkExactShipmentLines(factoryId: string, match: (line: ShipmentLine) => { id: string; name: string; groupCode?: string } | null) {
   const store = load();
   let changed = false;
   for (const shipment of store.shipments) {
     if (shipment.factoryId !== factoryId || shipment.moyskladId) continue;
     for (const line of shipment.lines) {
-      if (line.productId || !line.productCode.trim()) continue;
-      const product = match(line.productCode);
+      if (!line.productCode.trim()) continue;
+      const product = match(line);
       if (!product) continue;
-      line.productId = product.id;
-      line.productName = product.name;
-      changed = true;
+      if (!line.productId) {
+        line.productId = product.id;
+        line.productName = product.name;
+        changed = true;
+      }
+      if (!line.sectionCode.trim() && product.groupCode) {
+        line.sectionCode = product.groupCode;
+        changed = true;
+      }
     }
   }
   if (changed) save(store);

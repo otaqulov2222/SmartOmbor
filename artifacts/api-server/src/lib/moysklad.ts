@@ -4,6 +4,7 @@ import { logger } from "./logger";
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 
 export class MoySkladError extends Error {
+  retryAfterMs?: number;
   constructor(
     message: string,
     readonly status: number,
@@ -73,8 +74,9 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
         ...(method === "DELETE" ? {} : { body: JSON.stringify(body) }),
       });
       if (!response.ok) {
+        const retryAfter = response.headers.get("retry-after");
         const text = await response.text();
-        throw parseMoySkladFailure(response.status, text, path, true);
+        throw attachRetryAfter(parseMoySkladFailure(response.status, text, path, true), retryAfter);
       }
       if (response.status === 204) return {} as T;
       return (await response.json()) as T;
@@ -90,27 +92,38 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
   throw last;
 }
 
-const MAX_IN_FLIGHT = 2;
+const MAX_IN_FLIGHT = 1;
+const MIN_GAP_MS = 90;
 let inFlight = 0;
+let lastStart = 0;
 const waiters: Array<() => void> = [];
 
-function takeSlot(): Promise<void> {
-  if (inFlight < MAX_IN_FLIGHT) {
-    inFlight += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    waiters.push(() => {
-      inFlight += 1;
-      resolve();
+async function takeSlot(): Promise<void> {
+  if (inFlight >= MAX_IN_FLIGHT) {
+    await new Promise<void>((resolve) => {
+      waiters.push(() => {
+        inFlight += 1;
+        resolve();
+      });
     });
-  });
+  } else {
+    inFlight += 1;
+  }
+  const pause = lastStart + MIN_GAP_MS - Date.now();
+  if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
+  lastStart = Date.now();
 }
 
 function freeSlot() {
   inFlight -= 1;
   const next = waiters.shift();
   if (next) next();
+}
+
+function attachRetryAfter(error: MoySkladError, header: string | null): MoySkladError {
+  const seconds = header ? Number(header) : NaN;
+  if (Number.isFinite(seconds) && seconds > 0) error.retryAfterMs = Math.min(20_000, Math.max(1_000, seconds * 1000));
+  return error;
 }
 
 function networkFailure(error: unknown): boolean {
@@ -124,7 +137,9 @@ function temporaryMoySklad(error: unknown): boolean {
 }
 
 function retryDelay(error: unknown, attempt: number) {
-  if (error instanceof MoySkladError && error.status === 429) return 3000 * (attempt + 1);
+  if (error instanceof MoySkladError && error.status === 429) {
+    return error.retryAfterMs ?? Math.min(15_000, 2000 * (attempt + 1));
+  }
   return 500 * (attempt + 1);
 }
 
@@ -166,7 +181,7 @@ export async function moysklad<T>(path: string): Promise<T> {
   }
 
   let last: unknown;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     await takeSlot();
     try {
       const response = await fetch(`${BASE}${path}`, {
@@ -179,15 +194,16 @@ export async function moysklad<T>(path: string): Promise<T> {
       });
 
       if (!response.ok) {
+        const retryAfter = response.headers.get("retry-after");
         const body = await response.text();
-        throw parseMoySkladFailure(response.status, body, path);
+        throw attachRetryAfter(parseMoySkladFailure(response.status, body, path), retryAfter);
       }
 
       return (await response.json()) as T;
     } catch (error) {
       last = error;
       const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
-      if (!retry || attempt === 5) throw error;
+      if (!retry || attempt === 7) throw error;
     } finally {
       freeSlot();
     }
@@ -202,13 +218,10 @@ export async function moyskladAll<T>(path: string): Promise<{ rows: T[]; size: n
   const first = await moysklad<ListResponse<T>>(`${path}${joiner}limit=${limit}&offset=0`);
   const size = first.meta.size;
   const rows = [...first.rows];
-  if (rows.length === 0 || rows.length >= size) return { rows, size };
-  const offsets: number[] = [];
-  for (let offset = limit; offset < size; offset += limit) offsets.push(offset);
-  const rest = await Promise.all(
-    offsets.map((offset) => moysklad<ListResponse<T>>(`${path}${joiner}limit=${limit}&offset=${offset}`)),
-  );
-  for (const page of rest) rows.push(...page.rows);
+  for (let offset = limit; offset < size; offset += limit) {
+    const page = await moysklad<ListResponse<T>>(`${path}${joiner}limit=${limit}&offset=${offset}`);
+    rows.push(...page.rows);
+  }
   return { rows, size };
 }
 
