@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
+import { parsePct } from "./markup";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -19,6 +20,7 @@ export type ShipmentLine = {
   quantity: number;
   price: number;
   priceType: string;
+  markupPct: number | null;
   colors: ColorLine[];
   note: string;
   productId: string | null;
@@ -324,6 +326,7 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     quantity,
     price: Math.max(0, Number(raw.price) || 0),
     priceType: ["Exclusive", "Premium", "Standard"].includes(String(raw.priceType ?? "")) ? String(raw.priceType) : "",
+    markupPct: parsePct(raw.markupPct),
     colors,
     note: String(raw.note ?? "").trim(),
     productId: raw.productId ? String(raw.productId) : null,

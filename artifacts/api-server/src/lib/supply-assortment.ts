@@ -567,7 +567,7 @@ function hasSaleMarkup(prices?: Price[]) {
 function saleForLine(line: ShipmentLine) {
   const type = saleTypeOf(line);
   if (!(line.price > 0) || !type) return { type, sale: 0 };
-  return { type, sale: markedSale(line.price, type, loadMarkup()) ?? line.price };
+  return { type, sale: markedSale(line.price, type, loadMarkup(), line.markupPct) ?? line.price };
 }
 
 export async function stampWaybillCardPrices(

@@ -901,8 +901,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
 .waybill-table .waybill-size { min-width: 6.8rem; }
 .waybill-table .waybill-size .input { min-width: 6.8rem; }
-.waybill-table .waybill-type { min-width: 11.5rem; }
-.waybill-table .waybill-type .input { min-width: 11.5rem; }
+.waybill-table .waybill-type { min-width: 13.8rem; }
+.waybill-table .waybill-type .price-type-row { min-width: 13.8rem; width: 100%; }
+.waybill-table .waybill-type .input { min-width: 0; }
+.waybill-table .waybill-type .pct-box { min-width: 4.6rem; }
 .waybill-table td.num { white-space: nowrap; }
 .waybill-table .waybill-line-tools { width: 6.6rem; white-space: nowrap; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
@@ -1149,6 +1151,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table td.waybill-line-tools::before { content: none; }
   .waybill-table td.waybill-line-tools { justify-content: flex-end; padding-top: .45rem; width: auto; }
   .waybill-table td .input, .waybill-table .waybill-size, .waybill-table .waybill-type, .waybill-table .waybill-size .input, .waybill-table .waybill-type .input { min-width: 0; width: min(100%, 11.5rem); max-width: 100%; }
+  .waybill-table .waybill-type .price-type-row, .waybill-table .waybill-type .price-type-row .input { width: 100%; max-width: 100%; }
   .waybill-table tr:has(> .waybill-colors) { padding: 0; border: 0; background: transparent; box-shadow: none; }
   .waybill-table td.waybill-colors { display: block; width: 100%; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: .9rem; }
   .waybill-table td.waybill-colors::before { content: none; }
