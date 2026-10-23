@@ -20,6 +20,20 @@ export function parsePct(value: unknown): number | null {
   return next;
 }
 
+export function parseMarkups(raw: unknown, fallbackType?: string, fallbackPct?: unknown): Partial<SaleMarkup> {
+  const src = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const out: Partial<SaleMarkup> = {};
+  for (const type of SALE_TYPES) {
+    const pct = parsePct(src[type]);
+    if (pct != null) out[type] = pct;
+  }
+  if (SALE_TYPES.includes(fallbackType as SaleType) && out[fallbackType as SaleType] == null) {
+    const pct = parsePct(fallbackPct);
+    if (pct != null) out[fallbackType as SaleType] = pct;
+  }
+  return out;
+}
+
 function clamp(value: unknown, fallback: number) {
   return parsePct(value) ?? fallback;
 }
@@ -61,4 +75,31 @@ export function markedSale(cost: number, priceType: string, markup = loadMarkup(
   const rate = parsePct(pct) ?? (SALE_TYPES.includes(priceType as SaleType) ? markup[priceType as SaleType] : undefined);
   if (rate == null || !(cost > 0)) return null;
   return Math.round(cost * (100 + rate) / 100);
+}
+
+export function resolveMarkups(
+  requested?: Partial<SaleMarkup> | null,
+  inherited?: Partial<SaleMarkup> | null,
+  defaults = loadMarkup(),
+): SaleMarkup {
+  const pick = (key: SaleType) => parsePct(inherited?.[key]) ?? parsePct(requested?.[key]) ?? defaults[key];
+  return { Premium: pick("Premium"), Exclusive: pick("Exclusive"), Standard: pick("Standard") };
+}
+
+export function salesOf(cost: number, markups: SaleMarkup): Record<SaleType, number> | null {
+  if (!(cost > 0)) return null;
+  return {
+    Premium: Math.round(cost * (100 + markups.Premium) / 100),
+    Exclusive: Math.round(cost * (100 + markups.Exclusive) / 100),
+    Standard: Math.round(cost * (100 + markups.Standard) / 100),
+  };
+}
+
+export function markupsFromSales(cost: number | null | undefined, sales: Partial<Record<SaleType, number | null | undefined>>): Partial<SaleMarkup> {
+  const out: Partial<SaleMarkup> = {};
+  for (const type of SALE_TYPES) {
+    const pct = markupFromPrices(cost, sales[type] ?? null);
+    if (pct != null) out[type] = pct;
+  }
+  return out;
 }

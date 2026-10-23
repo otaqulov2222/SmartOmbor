@@ -26,7 +26,7 @@ import {
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
 import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
-import { loadMarkup, markedSale, markupFromPrices, parsePct, SALE_READ_ORDER } from "../lib/markup";
+import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
 import { orderRecommendations } from "../lib/recommendations";
@@ -581,7 +581,14 @@ function som(value: unknown): number | null {
   return price;
 }
 
-type SaleMarkupInfo = { priceType: string; salePrice: number | null; cost: number | null; markupPct: number | null };
+type SaleMarkupInfo = {
+  priceType: string;
+  salePrice: number | null;
+  cost: number | null;
+  markupPct: number | null;
+  markups: Partial<SaleMarkup>;
+  sales: Partial<Record<SaleType, number>>;
+};
 
 async function readProductSaleMarkup(productId: string, fallback?: { cost?: number | null; salePrice?: number | null }): Promise<SaleMarkupInfo> {
   const empty: SaleMarkupInfo = {
@@ -589,24 +596,38 @@ async function readProductSaleMarkup(productId: string, fallback?: { cost?: numb
     salePrice: fallback?.salePrice ?? null,
     cost: fallback?.cost ?? null,
     markupPct: markupFromPrices(fallback?.cost, fallback?.salePrice),
+    markups: {},
+    sales: {},
   };
   try {
     const row = await moysklad<{
       buyPrice?: { value?: number };
       salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
     }>(`/entity/product/${encodeURIComponent(productId)}?expand=salePrices.priceType`);
+    const sales: Partial<Record<SaleType, number>> = {};
+    for (const typeName of SALE_TYPES) {
+      const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
+      const value = hit ? money(hit.value) : null;
+      if (value != null && value > 0) sales[typeName] = value;
+    }
     let priceType = "";
     let salePrice = empty.salePrice;
     for (const typeName of SALE_READ_ORDER) {
-      const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
-      if (hit) {
+      if (sales[typeName] != null) {
         priceType = typeName;
-        salePrice = money(hit.value);
+        salePrice = sales[typeName] ?? salePrice;
         break;
       }
     }
     const cost = money(row.buyPrice?.value) ?? empty.cost;
-    return { priceType, salePrice, cost, markupPct: markupFromPrices(cost, salePrice) };
+    return {
+      priceType,
+      salePrice,
+      cost,
+      markupPct: markupFromPrices(cost, salePrice),
+      markups: markupsFromSales(cost, sales),
+      sales,
+    };
   } catch (error) {
     logger.warn({ productId, err: error instanceof Error ? error.message : error }, "MoySklad sale markup skipped");
     return empty;
@@ -619,8 +640,7 @@ router.post("/products", async (req, res, next) => {
     const groupCode = String(req.body?.groupCode ?? "").trim();
     const productCode = String(req.body?.productCode ?? req.body?.code ?? "").trim();
     const size = String(req.body?.size ?? "").trim();
-    let priceType = String(req.body?.priceType ?? "").trim();
-    let markupPct = parsePct(req.body?.markupPct);
+    const requestedMarkups = parseMarkups(req.body?.markups, String(req.body?.priceType ?? "").trim(), req.body?.markupPct);
     const builtName = ["Bordo", factoryCode, groupCode, productCode, size].filter(Boolean).join(" ").trim();
     const name = factoryCode ? builtName : String(req.body?.name ?? "").trim() || builtName;
     const code = productCode;
@@ -653,23 +673,18 @@ router.post("/products", async (req, res, next) => {
     }
     const family = listWaybillProducts(catalog, { factoryCode, factoryName: partner.name, productCode, size: "", groupCode });
     const sibling = pickPassport(family);
+    let inheritedMarkups: Partial<SaleMarkup> = {};
     if (sibling?.id) {
       const row = family.find((item) => item.id === sibling.id);
       const inherited = await readProductSaleMarkup(sibling.id, { cost: row?.cost, salePrice: row?.salePrice });
-      if (inherited.priceType) priceType = inherited.priceType;
-      if (inherited.markupPct != null) markupPct = inherited.markupPct;
+      inheritedMarkups = inherited.markups;
     }
-    const markup = loadMarkup();
-    const sale = markedSale(cost, priceType, markup, markupPct);
-    if (sale == null) {
+    const markups = resolveMarkups(requestedMarkups, inheritedMarkups);
+    const prices = salesOf(cost, markups);
+    if (!prices) {
       res.status(400).json({ error: "rejected" });
       return;
     }
-    const prices = {
-      Exclusive: priceType === "Exclusive" ? sale : null,
-      Premium: priceType === "Premium" ? sale : null,
-      Standard: priceType === "Standard" ? sale : null,
-    };
     const uomMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/19f1edc0-fc42-4001-94cb-c9ec9c62ec10", type: "uom", mediaType: "application/json" };
     const pachkaMeta = { href: "https://api.moysklad.ru/api/remap/1.2/entity/uom/2061e032-0683-11f1-0a80-00e70010dbf7", type: "uom", mediaType: "application/json" };
     const payload: Record<string, unknown> = { name, uom: { meta: uomMeta } };
@@ -757,6 +772,7 @@ router.post("/products", async (req, res, next) => {
           folderMeta: asMeta(folderId, "productfolder"),
           packSize,
           buySom: cost ?? undefined,
+          sales: prices,
         });
       } else if (packSize > 1) {
         await ensurePachka(created.id, packSize);
@@ -901,6 +917,8 @@ router.get("/products/passport", async (req, res, next) => {
     if (!matched || !product || (!size && sizes.size > 1) || (!group && groups.size > 1)) {
       let priceType = "";
       let markupPct: number | null = null;
+      let markups: Partial<SaleMarkup> = {};
+      let sales: Partial<Record<SaleType, number>> = {};
       if (group) {
         const family = listWaybillProducts(catalog, { ...input, size: "" });
         const sibling = pickPassport(family);
@@ -909,35 +927,24 @@ router.get("/products/passport", async (req, res, next) => {
           const inherited = await readProductSaleMarkup(sibling.id, { cost: row?.cost, salePrice: row?.salePrice });
           priceType = inherited.priceType;
           markupPct = inherited.markupPct;
+          markups = inherited.markups;
+          sales = inherited.sales;
         }
       }
-      res.json({ found: false, priceType, markupPct, options });
+      res.json({ found: false, priceType, markupPct, markups, sales, options });
       return;
     }
     const parts = parseBordoName(product.name);
     let packSize = product.packSize > 1 ? product.packSize : 0;
-    let cost = product.cost;
-    let salePrice = product.salePrice;
-    let priceType = "";
+    const inherited = await readProductSaleMarkup(matched.id, { cost: product.cost, salePrice: product.salePrice });
     try {
       const row = await moysklad<{
-        buyPrice?: { value?: number };
         packs?: Array<{ quantity?: number; uom?: { meta?: { href?: string }; name?: string } }>;
-        salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
-      }>(`/entity/product/${encodeURIComponent(matched.id)}?expand=packs.uom,salePrices.priceType`);
+      }>(`/entity/product/${encodeURIComponent(matched.id)}?expand=packs.uom`);
       const pachka = (row.packs ?? []).find((pack) => isPachkaPack(pack));
       if (pachka?.quantity && pachka.quantity > 1) packSize = pachka.quantity;
-      cost = money(row.buyPrice?.value) ?? cost;
-      for (const typeName of SALE_READ_ORDER) {
-        const hit = (row.salePrices ?? []).find((price) => price.priceType?.name === typeName && (price.value ?? 0) > 0);
-        if (hit) {
-          priceType = typeName;
-          salePrice = money(hit.value);
-          break;
-        }
-      }
       if (packSize > 1) {
-        updateCatalogProduct(matched.id, { packSize, packType: "pachka", cost: cost ?? product.cost, salePrice: salePrice ?? product.salePrice });
+        updateCatalogProduct(matched.id, { packSize, packType: "pachka", cost: inherited.cost ?? product.cost, salePrice: inherited.salePrice ?? product.salePrice });
       }
     } catch (error) {
       logger.warn({ productId: matched.id, err: error instanceof Error ? error.message : error }, "MoySklad passport pack skipped");
@@ -949,10 +956,12 @@ router.get("/products/passport", async (req, res, next) => {
       groupCode: parts?.groupCode || "",
       size: parts?.size || size,
       packSize: packSize > 1 ? packSize : null,
-      cost,
-      salePrice,
-      priceType,
-      markupPct: markupFromPrices(cost, salePrice),
+      cost: inherited.cost,
+      salePrice: inherited.salePrice,
+      priceType: inherited.priceType,
+      markupPct: inherited.markupPct,
+      markups: inherited.markups,
+      sales: inherited.sales,
       options,
     });
   } catch (error) {

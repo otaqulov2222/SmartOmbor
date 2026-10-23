@@ -11,12 +11,14 @@ type Account = { id: string; name: string; code: string; catalogName: string; lo
 type ColorLine = { name: string; quantity: number };
 type Line = {
   id: string; factoryCode: string; sectionCode: string; productCode: string; model: string; size: string;
-  pairs: number; boxes: number; quantity: number; price: number; priceType?: string; markupPct?: number | null; colors: ColorLine[]; note: string;
+  pairs: number; boxes: number; quantity: number; price: number; priceType?: string; markupPct?: number | null; markup?: Partial<SaleMarkup>; colors: ColorLine[]; note: string;
   productId?: string | null; productName?: string | null;
 };
 const PRICE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
+type SaleType = typeof PRICE_TYPES[number];
 const DEFAULT_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 };
 type SaleMarkup = typeof DEFAULT_MARKUP;
+type PctMap = Record<SaleType, string>;
 function pctDigits(value: string) {
   return value.replace(/[^\d]/g, '').slice(0, 2);
 }
@@ -25,35 +27,42 @@ function parseLinePct(value: string) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 && n <= 99 ? Math.round(n) : null;
 }
-function defaultPctText(type: string, markup: SaleMarkup) {
-  return type === 'Premium' || type === 'Exclusive' || type === 'Standard' ? String(markup[type]) : '';
+function defaultPctMap(markup: SaleMarkup): PctMap {
+  return { Premium: String(markup.Premium), Exclusive: String(markup.Exclusive), Standard: String(markup.Standard) };
 }
-function pctTextOf(line: Pick<Line, 'priceType' | 'markupPct'>, markup: SaleMarkup) {
-  if (line.markupPct != null && Number.isFinite(line.markupPct)) return String(line.markupPct);
-  return defaultPctText(line.priceType || '', markup);
-}
-function priceTypeLabel(type: string, markup: SaleMarkup, pct?: number | null) {
-  if (type === 'Premium' || type === 'Exclusive' || type === 'Standard') {
-    const n = pct != null && Number.isFinite(pct) ? pct : markup[type];
-    return `${type} +${n}%`;
+function pctMapOf(line: Pick<Line, 'markup' | 'priceType' | 'markupPct'>, markup: SaleMarkup): PctMap {
+  const next = defaultPctMap(markup);
+  for (const type of PRICE_TYPES) {
+    if (line.markup?.[type] != null) next[type] = String(line.markup[type]);
+    else if (line.priceType === type && line.markupPct != null) next[type] = String(line.markupPct);
   }
-  return type;
+  return next;
 }
-function PriceTypeField({ type, pctText, markup, lockedType, lockedPct, onType, onPct, onPctBlur }: {
-  type: string; pctText: string; markup: SaleMarkup; lockedType?: boolean; lockedPct?: boolean;
-  onType: (type: string, pctText: string) => void; onPct: (pctText: string) => void; onPctBlur?: (pctText: string) => void;
+function parsePctMap(map: PctMap): Partial<SaleMarkup> {
+  return {
+    Premium: parseLinePct(map.Premium) ?? undefined,
+    Exclusive: parseLinePct(map.Exclusive) ?? undefined,
+    Standard: parseLinePct(map.Standard) ?? undefined,
+  };
+}
+function markupLabel(line: Line, markup: SaleMarkup) {
+  const map = pctMapOf(line, markup);
+  return `P ${map.Premium}% · E ${map.Exclusive}% · S ${map.Standard}%`;
+}
+function MarkupTriple({ values, locked, compact, onChange, onBlur }: {
+  values: PctMap; locked?: Partial<Record<SaleType, boolean>>; compact?: boolean;
+  onChange: (next: PctMap) => void; onBlur?: (next: PctMap) => void;
 }) {
   const { t } = useI18n();
-  return <span className="price-type-row">
-    <select className="input" aria-label={t('zavod.priceType')} value={type} disabled={lockedType} onChange={event => {
-      const next = event.target.value;
-      onType(next, defaultPctText(next, markup));
-    }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select>
-    <span className="pct-box">
-      <input className={`input ${lockedPct ? 'input-locked' : ''}`} inputMode="numeric" disabled={!type || lockedPct} value={pctText} onChange={event => onPct(pctDigits(event.target.value))} onFocus={event => event.target.select()} onBlur={event => onPctBlur?.(pctDigits(event.target.value))} aria-label={t('products.field.markup')}/>
-      <span>%</span>
-    </span>
-  </span>;
+  return <div className={`sale-triple ${compact ? 'compact' : ''}`} role="group" aria-label={t('zavod.priceType')}>
+    {PRICE_TYPES.map(type => <label className="sale-triple-row" key={type}>
+      <b>{type}</b>
+      <span className="pct-box">
+        <input className={`input ${locked?.[type] ? 'input-locked' : ''}`} inputMode="numeric" disabled={Boolean(locked?.[type])} value={values[type]} onChange={event => onChange({ ...values, [type]: pctDigits(event.target.value) })} onFocus={event => event.target.select()} onBlur={event => onBlur?.({ ...values, [type]: pctDigits(event.target.value) })} aria-label={`${type} ${t('products.field.markup')}`}/>
+        <span>%</span>
+      </span>
+    </label>)}
+  </div>;
 }
 async function loadMarkup(): Promise<SaleMarkup> {
   const response = await fetch('/api/settings/markup');
@@ -100,8 +109,7 @@ type DraftLine = {
   boxes: string;
   quantity: string;
   price: string;
-  priceType: string;
-  markupPct: string;
+  markup: PctMap;
   colors: { name: string; quantity: string }[];
 };
 
@@ -117,14 +125,13 @@ function draftFrom(line: Line, markup: SaleMarkup = DEFAULT_MARKUP): DraftLine {
     boxes: line.boxes ? String(line.boxes) : '',
     quantity: line.quantity ? String(line.quantity) : '',
     price: line.price ? String(line.price) : '',
-    priceType: line.priceType || '',
-    markupPct: pctTextOf(line, markup),
+    markup: pctMapOf(line, markup),
     colors: (line.colors ?? []).length ? (line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) })) : [{ name: '', quantity: '' }],
   };
 }
 
-function blankDraft(): DraftLine {
-  return { key: Math.random().toString(36).slice(2), factoryCode: '', sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', priceType: '', markupPct: '', colors: [{ name: '', quantity: '' }] };
+function blankDraft(markup: SaleMarkup = DEFAULT_MARKUP): DraftLine {
+  return { key: Math.random().toString(36).slice(2), factoryCode: '', sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', markup: defaultPctMap(markup), colors: [{ name: '', quantity: '' }] };
 }
 
 function asNumber(value: string) {
@@ -146,6 +153,7 @@ type Passport = {
   salePrice?: number | null;
   priceType?: string;
   markupPct?: number | null;
+  markups?: Partial<SaleMarkup>;
 };
 
 async function loadPassport(input: { factory: string; code: string; size?: string; group?: string }): Promise<Passport | null> {
@@ -158,7 +166,7 @@ async function loadPassport(input: { factory: string; code: string; size?: strin
   return response.json() as Promise<Passport>;
 }
 
-function fromPassport(current: { group: string; size: string; pack: string; price: string; priceType: string; markupPct?: string }, data: Passport): Partial<Line> {
+function fromPassport(current: { group: string; size: string; pack: string; price: string; markup?: PctMap }, data: Passport): Partial<Line> {
   const patch: Partial<Line> = {};
   if (data.found) {
     if (!current.group && data.groupCode) patch.sectionCode = data.groupCode;
@@ -171,8 +179,11 @@ function fromPassport(current: { group: string; size: string; pack: string; pric
       patch.productName = data.name || null;
     }
   }
-  if (!current.priceType && data.priceType) patch.priceType = data.priceType;
-  if (!current.markupPct && data.markupPct != null) patch.markupPct = data.markupPct;
+  const inherited: Partial<SaleMarkup> = { ...(data.markups ?? {}) };
+  if (!PRICE_TYPES.some(type => inherited[type] != null) && data.priceType && data.priceType in DEFAULT_MARKUP && data.markupPct != null) {
+    inherited[data.priceType as SaleType] = data.markupPct;
+  }
+  if (PRICE_TYPES.some(type => inherited[type] != null)) patch.markup = inherited;
   return patch;
 }
 
@@ -223,9 +234,8 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
   const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
   const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
   const [price, setPrice] = useState(line.price ? String(line.price) : '');
-  const [priceType, setPriceType] = useState(line.priceType || '');
-  const [pctText, setPctText] = useState(pctTextOf(line, markup));
-  const [keptType, setKeptType] = useState(false);
+  const [pctMap, setPctMap] = useState<PctMap>(() => pctMapOf(line, markup));
+  const [kept, setKept] = useState<Partial<Record<SaleType, boolean>>>({});
   useEffect(() => {
     setFactoryCode(line.factoryCode || '');
     setSectionCode(line.sectionCode || '');
@@ -234,25 +244,25 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     setPairs(line.pairs ? String(line.pairs) : '');
     setBoxes(line.boxes ? String(line.boxes) : '');
     setPrice(line.price ? String(line.price) : '');
-    setPriceType(line.priceType || '');
-    setPctText(pctTextOf(line, markup));
+    setPctMap(pctMapOf(line, markup));
   }, [line, markup]);
   const chips = <ColorMarks colors={colors} fmt={fmt}/>;
   const preview = lineUnits({ ...line, pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
   const commit = (next?: Partial<Line>) => {
+    const markupValues = next?.markup ?? parsePctMap(pctMap);
     const patch: Partial<Line> = {
       size,
       pairs: asNumber(pairs),
       boxes: asNumber(boxes),
       price: asNumber(price),
-      priceType,
-      markupPct: parseLinePct(pctText),
+      markup: markupValues,
       ...next,
       factoryCode: codeInput(next?.factoryCode ?? factoryCode),
       sectionCode: codeInput(next?.sectionCode ?? sectionCode),
       productCode: codeInput(next?.productCode ?? productCode),
     };
-    const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && (patch.priceType || '') === (line.priceType || '') && (patch.markupPct ?? null) === (line.markupPct ?? null) && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
+    const sameMarkup = PRICE_TYPES.every(type => (patch.markup?.[type] ?? null) === (line.markup?.[type] ?? (line.priceType === type ? line.markupPct : null) ?? null));
+    const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && sameMarkup && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
     if (unchanged) return;
     void onSave(patch);
   };
@@ -261,23 +271,31 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     const sizeVal = (next?.size ?? size).trim();
     const factory = (next?.factoryCode ?? factoryCode).trim();
     const group = (next?.sectionCode ?? sectionCode).trim();
-    if (!code) { setKeptType(false); commit(next); return; }
+    if (!code) { setKept({}); commit(next); return; }
     void loadPassport({ factory, code, size: sizeVal, group }).then(data => {
       const extra = data ? fromPassport({
         group,
         size: sizeVal,
         pack: next?.pairs != null ? String(next.pairs) : pairs,
         price: next?.price != null ? String(next.price) : price,
-        priceType: next?.priceType ?? priceType,
-        markupPct: pctText,
+        markup: pctMap,
       }, data) : {};
       if (extra.sectionCode) setSectionCode(codeInput(extra.sectionCode));
       if (extra.size) setSize(extra.size);
       if (extra.pairs) setPairs(String(extra.pairs));
       if (extra.price) setPrice(String(extra.price));
-      if (extra.priceType) setPriceType(extra.priceType);
-      if (extra.markupPct != null) setPctText(String(extra.markupPct));
-      setKeptType(Boolean(data?.priceType));
+      if (extra.markup) {
+        setPctMap(current => {
+          const nextMap = { ...current };
+          for (const type of PRICE_TYPES) {
+            if (extra.markup?.[type] != null) nextMap[type] = String(extra.markup[type]);
+          }
+          return nextMap;
+        });
+        setKept(Object.fromEntries(PRICE_TYPES.filter(type => extra.markup?.[type] != null).map(type => [type, true])));
+      } else {
+        setKept({});
+      }
       commit({ ...next, ...extra, ...(extra.sectionCode ? { sectionCode: codeInput(extra.sectionCode) } : {}) });
     }).catch(() => commit(next));
   };
@@ -291,7 +309,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
       <td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td>
       <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
       <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
-      <td data-label={t('zavod.priceType')}>{line.priceType ? priceTypeLabel(line.priceType, markup, line.markupPct) : '—'}</td>
+      <td data-label={t('zavod.priceType')}>{markupLabel(line, markup)}</td>
       <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
       <td className="num" data-label={t('zavod.sum')}>{money(lineUnits(line) * line.price)}</td>
     </>;
@@ -305,7 +323,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => applyPassport()}/></td>
-    <td className="waybill-type" data-label={t('zavod.priceType')}><PriceTypeField type={priceType} pctText={pctText} markup={markup} lockedType={keptType} onType={(next, nextPct) => { setPriceType(next); setPctText(nextPct); commit({ priceType: next, markupPct: parseLinePct(nextPct) }); }} onPct={setPctText} onPctBlur={nextPct => commit({ markupPct: parseLinePct(nextPct) })}/></td>
+    <td className="waybill-type" data-label={t('zavod.priceType')}><MarkupTriple compact values={pctMap} locked={kept} onChange={setPctMap} onBlur={next => { setPctMap(next); commit({ markup: parsePctMap(next) }); }}/></td>
     <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
     <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;
@@ -355,7 +373,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
       line.pairs,
       line.boxes,
       line.price,
-      line.priceType ? priceTypeLabel(line.priceType, DEFAULT_MARKUP, line.markupPct) : '',
+      markupLabel(line, DEFAULT_MARKUP),
       colorText(line, fmt),
       lineUnits(line) * line.price,
     ]));
@@ -365,7 +383,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   };
   const pdf = () => {
     const blocks = shipments.map(shipment => {
-      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(line.priceType ? priceTypeLabel(line.priceType, DEFAULT_MARKUP, line.markupPct) : '—')}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
+      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(markupLabel(line, DEFAULT_MARKUP))}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
       return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.brand'))}</th><th>${htmlEscape(t('zavod.factoryCode'))}</th><th>${htmlEscape(t('zavod.groupCode'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.priceType'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
     }).join('');
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"/><title>${htmlEscape(title)}</title><style>
@@ -717,6 +735,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       price: patch?.price ?? line.price,
       priceType: patch?.priceType ?? line.priceType ?? '',
       markupPct: patch?.markupPct !== undefined ? patch.markupPct : (line.markupPct ?? null),
+      markup: patch?.markup ?? line.markup ?? {},
       colors: patch?.colors ?? line.colors,
       productId: linked ?? null,
       productName: patch?.productName !== undefined ? patch.productName : (linked ? line.productName : null),
@@ -918,8 +937,7 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
   const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
   const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
   const [price, setPrice] = useState(line.price ? String(line.price) : '');
-  const [priceType, setPriceType] = useState(line.priceType || '');
-  const [pctText, setPctText] = useState(pctTextOf(line, markup));
+  const [pctMap, setPctMap] = useState<PctMap>(() => pctMapOf(line, markup));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pack = asNumber(pairs);
@@ -929,19 +947,25 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
   const fill = async () => {
     const data = await loadPassport({ factory: factoryCode.trim(), code: productCode.trim(), size, group: sectionCode.trim() });
     if (!data) return;
-    const extra = fromPassport({ group: sectionCode, size, pack: pairs, price, priceType, markupPct: pctText }, data);
+    const extra = fromPassport({ group: sectionCode, size, pack: pairs, price, markup: pctMap }, data);
     if (extra.sectionCode) setSectionCode(extra.sectionCode);
     if (extra.size) setSize(extra.size);
     if (extra.pairs) setPairs(String(extra.pairs));
     if (extra.price) setPrice(String(extra.price));
-    if (extra.priceType) setPriceType(extra.priceType);
-    if (extra.markupPct != null) setPctText(String(extra.markupPct));
+    if (extra.markup) {
+      setPctMap(current => {
+        const nextMap = { ...current };
+        for (const type of PRICE_TYPES) {
+          if (extra.markup?.[type] != null) nextMap[type] = String(extra.markup[type]);
+        }
+        return nextMap;
+      });
+    }
   };
   const save = async () => {
     if (!productCode.trim() || !sectionCode.trim() || !size.trim()) { setError(t('zavod.needProduct')); return; }
-    if (!priceType) { setError(t('zavod.priceType')); return; }
     setBusy(true);
-    const ok = await onSave({ factoryCode: codeInput(factoryCode), sectionCode: codeInput(sectionCode), productCode: codeInput(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), priceType, markupPct: parseLinePct(pctText) });
+    const ok = await onSave({ factoryCode: codeInput(factoryCode), sectionCode: codeInput(sectionCode), productCode: codeInput(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), markup: parsePctMap(pctMap) });
     setBusy(false);
     if (!ok) setError(t('partners.shipmentInvalid'));
   };
@@ -951,11 +975,11 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
       <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" autoCapitalize="characters" value={factoryCode} onChange={event => setFactoryCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" autoCapitalize="characters" value={sectionCode} onChange={event => setSectionCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.size')}</span><select className="input" value={size} onChange={event => { setSize(event.target.value); void loadPassport({ factory: factoryCode.trim(), code: productCode.trim(), size: event.target.value, group: sectionCode.trim() }).then(data => { if (!data) return; const extra = fromPassport({ group: sectionCode, size: event.target.value, pack: pairs, price, priceType, markupPct: pctText }, data); if (extra.sectionCode) setSectionCode(extra.sectionCode); if (extra.pairs) setPairs(String(extra.pairs)); if (extra.price) setPrice(String(extra.price)); if (extra.priceType) setPriceType(extra.priceType); if (extra.markupPct != null) setPctText(String(extra.markupPct)); }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label className="field"><span>{t('zavod.size')}</span><select className="input" value={size} onChange={event => { setSize(event.target.value); void loadPassport({ factory: factoryCode.trim(), code: productCode.trim(), size: event.target.value, group: sectionCode.trim() }).then(data => { if (!data) return; const extra = fromPassport({ group: sectionCode, size: event.target.value, pack: pairs, price, markup: pctMap }, data); if (extra.sectionCode) setSectionCode(extra.sectionCode); if (extra.pairs) setPairs(String(extra.pairs)); if (extra.price) setPrice(String(extra.price)); if (extra.markup) setPctMap(current => { const nextMap = { ...current }; for (const type of PRICE_TYPES) { if (extra.markup?.[type] != null) nextMap[type] = String(extra.markup[type]); } return nextMap; }); }); }}><option value=""/>{!LINE_SIZES.includes(size) && size && <option value={size}>{size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.priceType')}</span><PriceTypeField type={priceType} pctText={pctText} markup={markup} onType={(next, nextPct) => { setPriceType(next); setPctText(nextPct); }} onPct={setPctText}/></label>
+      <label className="field span-2"><span>{t('zavod.priceType')}</span><MarkupTriple values={pctMap} onChange={setPctMap}/></label>
       <label className="field"><span>{t('zavod.sum')}</span><input className="input" value={sum ? money(sum) : ''} readOnly/></label>
     </div>
     {error && <p className="error-text">{error}</p>}
@@ -976,15 +1000,20 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
     if (!merged.productCode.trim()) { if (next) patch(line.key, next); return; }
     void loadPassport({ factory: merged.factoryCode.trim(), code: merged.productCode.trim(), size: merged.size, group: merged.sectionCode.trim() }).then(data => {
       if (!data) { if (next) patch(line.key, next); return; }
-      const extra = fromPassport({ group: merged.sectionCode, size: merged.size, pack: merged.pairs, price: merged.price, priceType: merged.priceType, markupPct: merged.markupPct }, data);
+      const extra = fromPassport({ group: merged.sectionCode, size: merged.size, pack: merged.pairs, price: merged.price, markup: merged.markup }, data);
+      const nextMarkup = extra.markup ? { ...merged.markup } : null;
+      if (nextMarkup && extra.markup) {
+        for (const type of PRICE_TYPES) {
+          if (extra.markup[type] != null) nextMarkup[type] = String(extra.markup[type]);
+        }
+      }
       patch(line.key, {
         ...next,
         ...(extra.sectionCode ? { sectionCode: extra.sectionCode } : {}),
         ...(extra.size ? { size: extra.size } : {}),
         ...(extra.pairs ? { pairs: String(extra.pairs) } : {}),
         ...(extra.price ? { price: String(extra.price) } : {}),
-        ...(extra.priceType ? { priceType: extra.priceType } : {}),
-        ...(extra.markupPct != null ? { markupPct: String(extra.markupPct) } : {}),
+        ...(nextMarkup ? { markup: nextMarkup } : {}),
       });
     }).catch(() => { if (next) patch(line.key, next); });
   };
@@ -1013,8 +1042,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
             boxes: asNumber(line.boxes),
             quantity: asNumber(line.quantity),
             price: asNumber(line.price),
-            priceType: line.priceType,
-            markupPct: parseLinePct(line.markupPct),
+            markup: parsePctMap(line.markup),
             colors: line.colors.filter(color => color.name.trim() && asNumber(color.quantity) > 0).map(color => ({ name: color.name.trim(), quantity: asNumber(color.quantity) })),
           })),
         }),
@@ -1041,7 +1069,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })} onBlur={e => fillLine(line, { price: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.priceType')}</span><PriceTypeField type={line.priceType} pctText={line.markupPct} markup={markup} onType={(next, nextPct) => patch(line.key, { priceType: next, markupPct: nextPct })} onPct={nextPct => patch(line.key, { markupPct: nextPct })}/></label>
+        <label className="field span-2"><span>{t('zavod.priceType')}</span><MarkupTriple values={line.markup} onChange={next => patch(line.key, { markup: next })}/></label>
       </div>
       <div className="yx-colors">
         <span>{t('zavod.colors')}</span>
@@ -1053,7 +1081,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => patch(line.key, { colors: [...line.colors, { name: '', quantity: '' }] })}><Plus size={14}/>{t('zavod.addColor')}</button>
       </div>
     </article>)}
-    <button type="button" className="btn btn-secondary" onClick={() => setLines(rows => [...rows, blankDraft()])}><Plus size={15}/>{t('zavod.addRow')}</button>
+    <button type="button" className="btn btn-secondary" onClick={() => setLines(rows => [...rows, blankDraft(markup)])}><Plus size={15}/>{t('zavod.addRow')}</button>
     {error && <p className="error-text">{error}</p>}
     <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()} data-testid="button-save-shipment"><Pencil size={15}/>{busy ? t('common.saving') : t('partners.edit')}</button></div>
   </div></div>, document.body);

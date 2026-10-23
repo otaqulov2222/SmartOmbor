@@ -1,5 +1,5 @@
 import { matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, type Catalog } from "./catalog";
-import { loadMarkup, markedSale } from "./markup";
+import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
 import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
@@ -145,7 +145,7 @@ export async function writeProductCard(
   som: number,
   priceType: string,
   currencyMeta: Meta,
-  extras: { article?: string; supplierMeta?: Meta | null; description?: string; folderMeta?: Meta | null; packSize?: number; buySom?: number } = {},
+  extras: { article?: string; supplierMeta?: Meta | null; description?: string; folderMeta?: Meta | null; packSize?: number; buySom?: number; sales?: Partial<Record<string, number>> } = {},
 ) {
   if (!productId) return;
   const buy = extras.buySom != null && extras.buySom > 0 ? extras.buySom : som;
@@ -175,11 +175,14 @@ export async function writeProductCard(
     );
   }
   if (extras.packSize && extras.packSize > 1) await ensurePachka(productId, extras.packSize);
-  if (!(kopecks > 0) || !priceType) return;
   if (hasSaleMarkup(current.salePrices)) return;
-  const listed = await listedPrices(current.salePrices, priceType, som, currencyMeta);
+  const sales = extras.sales && Object.values(extras.sales).some((value) => typeof value === "number" && value > 0)
+    ? extras.sales
+    : (kopecks > 0 && priceType ? { [priceType]: som } : null);
+  if (!sales) return;
+  const listed = await listedAllPrices(current.salePrices, sales, currencyMeta);
   if (!listed) {
-    logger.warn({ productId, priceType }, "MoySklad Exclusive/sale price was not written");
+    logger.warn({ productId, priceType, sales }, "MoySklad sale prices were not written");
     return;
   }
   await optionalWrite(
@@ -358,6 +361,7 @@ async function colorNamedProduct(
     currencyMeta: Meta;
     price: number;
     priceType: string;
+    sales?: Partial<Record<string, number>> | null;
     article: string;
     description?: string;
     packSize: number;
@@ -376,10 +380,13 @@ async function colorNamedProduct(
       folderMeta: extras.folder?.meta ?? null,
       packSize: extras.packSize,
       buySom: extras.price,
+      sales: extras.sales ?? undefined,
     });
     return existing;
   }
-  const listed = sale > 0 ? await listedPrices(undefined, extras.priceType, sale, extras.currencyMeta) : null;
+  const listed = extras.sales
+    ? await listedAllPrices(undefined, extras.sales, extras.currencyMeta)
+    : (sale > 0 ? await listedPrices(undefined, extras.priceType, sale, extras.currencyMeta) : null);
   const barcode = nextInternalEan13(extras.catalog, extras.used);
   extras.used.add(barcode);
   const packSize = extras.packSize > 1 ? extras.packSize : 0;
@@ -403,6 +410,7 @@ async function colorNamedProduct(
     folderMeta: extras.folder?.meta ?? null,
     packSize,
     buySom: extras.price,
+    sales: extras.sales ?? undefined,
   });
   return created;
 }
@@ -454,6 +462,25 @@ async function saleTypes() {
     saleTypeCache = [];
   }
   return saleTypeCache;
+}
+
+async function listedAllPrices(current: Price[] | undefined, sales: Partial<Record<string, number>>, currencyMeta: Meta): Promise<Price[] | null> {
+  const fromProduct = asPriceTypes((current ?? []).map((price) => ({ name: price.priceType?.name, meta: price.priceType?.meta })));
+  const types = new Map<string, { name: string; meta: Meta }>();
+  for (const row of [...fromProduct, ...(await saleTypes())]) {
+    if (!types.has(row.meta.href)) types.set(row.meta.href, row);
+  }
+  if (!types.size) return null;
+  const rows = [...types.values()].map((type) => {
+    const existing = (current ?? []).find((price) => price.priceType?.meta?.href === type.meta.href);
+    const som = Object.entries(sales).find(([name, value]) => samePriceType(name, type.name) && typeof value === "number" && value > 0)?.[1];
+    return {
+      value: som != null ? Math.round(som * 100) : (existing?.value ?? 0),
+      currency: existing?.currency ?? { meta: currencyMeta },
+      priceType: { meta: type.meta, name: type.name },
+    };
+  });
+  return rows.some((row) => (row.value ?? 0) > 0) ? rows : null;
 }
 
 async function listedPrices(current: Price[] | undefined, typeName: string, som: number, currencyMeta: Meta): Promise<Price[] | null> {
@@ -570,6 +597,16 @@ function saleForLine(line: ShipmentLine) {
   return { type, sale: markedSale(line.price, type, loadMarkup(), line.markupPct) ?? line.price };
 }
 
+function salesForLine(line: ShipmentLine) {
+  const requested = {
+    Premium: line.markup?.Premium ?? (line.priceType === "Premium" ? line.markupPct ?? undefined : undefined),
+    Exclusive: line.markup?.Exclusive ?? (line.priceType === "Exclusive" ? line.markupPct ?? undefined : undefined),
+    Standard: line.markup?.Standard ?? (line.priceType === "Standard" ? line.markupPct ?? undefined : undefined),
+  };
+  const markups = resolveMarkups(requested);
+  return salesOf(line.price, markups);
+}
+
 export async function stampWaybillCardPrices(
   lines: ShipmentLine[],
   currencyMeta: Meta,
@@ -589,6 +626,7 @@ export async function stampWaybillCardPrices(
       description: cardDescription(line),
       packSize: line.pairs > 1 ? line.pairs : 0,
       buySom: line.price,
+      sales: salesForLine(line) ?? undefined,
     });
   }
 }
@@ -716,7 +754,8 @@ export async function buildSupplyPositions(
     const code = item.line.productCode.trim();
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
     const priced = saleForLine(item.line);
-    const listed = priced.sale > 0 ? await listedPrices(undefined, priced.type, priced.sale, currencyMeta) : null;
+    const sales = salesForLine(item.line);
+    const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : (priced.sale > 0 ? await listedPrices(undefined, priced.type, priced.sale, currencyMeta) : null);
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
     const product = await createProduct({
@@ -764,6 +803,7 @@ export async function buildSupplyPositions(
         folderMeta: item.folder?.meta ?? null,
         packSize: item.line.pairs > 1 ? item.line.pairs : 0,
         buySom: item.line.price,
+        sales: salesForLine(item.line) ?? undefined,
       });
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
@@ -800,7 +840,8 @@ export async function buildSupplyPositions(
             if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
           }
           const priced = saleForLine(item.line);
-          const listed = hasSaleMarkup(current) ? null : await listedPrices(current, priced.type, priced.sale, currencyMeta);
+          const sales = salesForLine(item.line);
+          const listed = hasSaleMarkup(current) ? null : (sales ? await listedAllPrices(current, sales, currencyMeta) : await listedPrices(current, priced.type, priced.sale, currencyMeta));
           const saleBody = listed ? { salePrices: priceBody(listed) } : {};
           const buyBody = item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {};
           if (listed || item.line.price > 0) {
@@ -845,6 +886,7 @@ export async function buildSupplyPositions(
               supplierMeta: scope.supplierMeta,
               packSize,
               buySom: item.line.price,
+              sales: salesForLine(item.line) ?? undefined,
             });
           }
           if (!existingColor.meta?.href) existingColor.meta = entityMeta(`${BASE}/entity/product/${existingColor.id}`, "product");
@@ -862,6 +904,7 @@ export async function buildSupplyPositions(
           currencyMeta,
           price: item.line.price,
           priceType: saleTypeOf(item.line),
+          sales: salesForLine(item.line),
           article: item.line.productCode.trim(),
           description: cardDescription(item.line),
           packSize,
