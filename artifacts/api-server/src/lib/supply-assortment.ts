@@ -71,7 +71,7 @@ export async function ensurePachka(productId: string, packSize: number): Promise
   try {
     const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
     const packs = current.packs ?? [];
-    const pachka = packs.find((pack) => isPachkaPack(pack)) || (packs.length === 1 ? packs[0] : undefined);
+    const pachka = packs.find((pack) => isPachkaPack(pack));
     if (!(packSize > 1)) {
       if (!current.uom) await optionalWrite(() => moyskladSend(`/entity/product/${productId}`, { uom: { meta: uomMeta(PIECE_UOM) } }, "PUT"), "MoySklad uom skipped", { productId });
       return null;
@@ -212,8 +212,7 @@ async function colorCharacteristic() {
   if (rangCharacteristic) return rangCharacteristic;
   try {
     const metadata = await moysklad<{ characteristics?: Array<{ id?: string; name?: string }> }>("/entity/variant/metadata");
-    const found = (metadata.characteristics ?? []).find((item) => /^(rang|цвет|color)$/i.test(item.name?.trim() || "") && item.id && item.name)
-      || (metadata.characteristics ?? []).find((item) => item.id && item.name);
+    const found = (metadata.characteristics ?? []).find((item) => /^(rang|цвет|color)$/i.test(item.name?.trim() || "") && item.id && item.name);
     if (!found?.id || !found.name) return null;
     rangCharacteristic = { id: found.id, name: found.name, href: `${BASE}/entity/variant/metadata/characteristics/${found.id}` };
     return rangCharacteristic;
@@ -600,52 +599,56 @@ export async function findExistingBordoProduct(
 ): Promise<ProductRow | null> {
   if (line.productId) {
     const byId = await productById(line.productId);
-    if (byId) return byId;
+    const parts = byId?.name ? parseBordoName(byId.name) : null;
+    const factory = (line.factoryCode || scope.factoryCode).trim().toLowerCase();
+    const codeOk = !parts || parts.productCode.toLowerCase() === line.productCode.trim().toLowerCase();
+    const sizeOk = !line.size.trim() || !parts || parts.size === line.size.trim();
+    const factoryOk = !parts || !factory || parts.factoryCode.toLowerCase() === factory;
+    if (byId && codeOk && sizeOk && factoryOk) return byId;
   }
   const factory = line.factoryCode || scope.factoryCode;
   const groupCode = line.sectionCode || "";
-  const name = ["Bordo", factory, groupCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
-  const exact = scope.catalog.products.find((product) => product.name.trim() === name);
-  const catalogMatch = exact
-    ? { id: exact.id, name: exact.name }
-    : matchWaybillProduct(scope.catalog, {
+  const catalogMatch = matchWaybillProduct(scope.catalog, {
+    factoryCode: factory,
+    factoryName: scope.factoryName,
+    groupCode,
+    productCode: line.productCode,
+    size: line.size,
+  });
+  if (catalogMatch?.id) {
+    const row = await productById(catalogMatch.id);
+    if (row) return row;
+  }
+  const query = [factory, line.productCode, line.size].filter(Boolean).join(" ");
+  if (query.length >= 3) {
+    try {
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
+      const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
+      const matched = matchNamedProducts(rows, {
         factoryCode: factory,
         factoryName: scope.factoryName,
         groupCode,
         productCode: line.productCode,
         size: line.size,
       });
-  if (catalogMatch?.id) {
-    const row = await productById(catalogMatch.id);
-    if (row) return row;
+      if (matched?.id) {
+        const row = await productById(matched.id);
+        if (row) return row;
+      }
+    } catch (error) {
+      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+      logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
+    }
   }
   const names = [...new Set([
-    name,
     ["Bordo", factory, groupCode, line.productCode, line.size].filter(Boolean).join(" ").trim(),
-    ["Bordo", factory, line.productCode, line.size].filter(Boolean).join(" ").trim(),
+    ...(groupCode.trim() ? [] : [["Bordo", factory, line.productCode, line.size].filter(Boolean).join(" ").trim()]),
   ])].filter((item) => item.length >= 2);
   for (const candidate of names) {
     const hit = await productByName(candidate);
     if (hit) return hit;
   }
-  const query = [factory, line.productCode, line.size].filter(Boolean).join(" ");
-  if (query.length < 3) return null;
-  try {
-    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
-    const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-    const matched = matchNamedProducts(rows, {
-      factoryCode: factory,
-      factoryName: scope.factoryName,
-      groupCode,
-      productCode: line.productCode,
-      size: line.size,
-    });
-    return matched?.id ? productById(matched.id) : null;
-  } catch (error) {
-    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
-    logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
-    return null;
-  }
+  return null;
 }
 
 export async function buildSupplyPositions(
@@ -796,6 +799,21 @@ export async function buildSupplyPositions(
         assortment = { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") };
         stockId = variant.id;
       } else {
+        const refreshed = await variantsOf(product.id);
+        known.splice(0, known.length, ...refreshed);
+        variantCache.set(product.id, known);
+        const existingVariant = known.find((row) => sameColor(variantColor(row), part.color));
+        if (existingVariant?.id) {
+          assortment = { meta: existingVariant.meta?.href ? existingVariant.meta : entityMeta(`${BASE}/entity/variant/${existingVariant.id}`, "variant") };
+          stockId = existingVariant.id;
+          positions.push({
+            quantity: part.quantity,
+            price: Math.round(item.line.price * 100),
+            assortment,
+            stockId,
+          });
+          continue;
+        }
         const existingColor = await productByName(`${product.name} ${part.color}`)
           || await productByName(`${product.name} (${part.color})`);
         if (existingColor?.id) {

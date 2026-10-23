@@ -662,7 +662,7 @@ router.post("/products", async (req, res, next) => {
     if (article) payload.article = article;
     if (barcode) payload.barcodes = [ean13(barcode) ? { ean13: barcode } : { code128: barcode }];
     if (packSize > 1) payload.packs = [{ quantity: packSize, uom: { meta: pachkaMeta } }];
-    let folderId = String(req.body?.folderId ?? "").trim();
+    let folderId = "";
     let supplierId = String(req.body?.supplierId ?? "").trim();
     let folderName: string | null = null;
     let supplierName: string | null = null;
@@ -713,7 +713,34 @@ router.post("/products", async (req, res, next) => {
       if (salePrices.length > 0) payload.salePrices = salePrices;
       if (cost != null) payload.buyPrice = { value: Math.round(cost * 100), currency: { meta: currency } };
     }
-    const created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
+    let created: { id: string; name: string; code?: string; article?: string };
+    try {
+      created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
+    } catch (error) {
+      const conflict = error instanceof MoySkladError && (error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message));
+      const again = conflict
+        ? await findExistingBordoProduct(
+            { factoryCode, sectionCode: groupCode, productCode, size },
+            { factoryCode, factoryName: partner.name, catalog },
+          )
+        : null;
+      if (!again?.id) throw error;
+      const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
+      const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+      const sale = prices.Exclusive ?? prices.Premium ?? prices.Standard ?? cost ?? 0;
+      const typeName = prices.Exclusive != null ? "Exclusive" : prices.Premium != null ? "Premium" : prices.Standard != null ? "Standard" : sale > 0 ? "Exclusive" : "";
+      if (currency) {
+        await writeProductCard(again.id, sale, typeName, currency, {
+          article,
+          packSize,
+          buySom: cost ?? undefined,
+        });
+      } else if (packSize > 1) {
+        await ensurePachka(again.id, packSize);
+      }
+      res.json({ id: again.id, name: again.name || name, reused: true });
+      return;
+    }
     try {
       const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
       const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
@@ -867,7 +894,8 @@ router.get("/products/passport", async (req, res, next) => {
       : matchWaybillProduct(catalog, input);
     const product = matched ? catalog.products.find((item) => item.id === matched.id) : null;
     const sizes = new Set(options.map((item) => item.size).filter(Boolean));
-    if (!matched || !product || (!size && sizes.size > 1)) {
+    const groups = new Set(options.map((item) => item.groupCode).filter(Boolean));
+    if (!matched || !product || (!size && sizes.size > 1) || (!group && groups.size > 1)) {
       res.json({ found: false, options });
       return;
     }
@@ -882,7 +910,7 @@ router.get("/products/passport", async (req, res, next) => {
         packs?: Array<{ quantity?: number; uom?: { meta?: { href?: string }; name?: string } }>;
         salePrices?: Array<{ value?: number; priceType?: { name?: string } }>;
       }>(`/entity/product/${encodeURIComponent(matched.id)}?expand=packs.uom,salePrices.priceType`);
-      const pachka = (row.packs ?? []).find((pack) => isPachkaPack(pack)) || ((row.packs ?? []).length === 1 ? row.packs?.[0] : undefined);
+      const pachka = (row.packs ?? []).find((pack) => isPachkaPack(pack));
       if (pachka?.quantity && pachka.quantity > 1) packSize = pachka.quantity;
       cost = money(row.buyPrice?.value) ?? cost;
       for (const typeName of ["Exclusive", "Premium", "Standard"] as const) {

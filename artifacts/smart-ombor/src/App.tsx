@@ -513,7 +513,10 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     if (code.length < 2) return;
     const timer = window.setTimeout(() => {
       void fetch(`/api/products/suggest?code=${encodeURIComponent(code)}`).then(response => response.json()).then((data: { folderId?: string; packSize?: number | null }) => {
-        if (data.folderId) setFolderId(current => current || data.folderId || '');
+        if (data.folderId) {
+          const group = draft.groupCode.trim();
+          setFolderId(current => (group && code === group ? data.folderId || current : current || data.folderId || ''));
+        }
         if (data.packSize) setDraft(current => current.packSize ? current : { ...current, packSize: String(data.packSize) });
       }).catch(() => undefined);
     }, 400);
@@ -556,7 +559,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
         const body = await response.json().catch(() => ({ error: '' })) as { error?: string };
         throw new Error(body.error === 'factory_missing' ? `${t('products.factoryMissing')} ${t('products.factoryMissing.action')}` : t('products.addFailed'));
       }
-      localStorage.setItem(PRODUCT_ADD_MEMORY, JSON.stringify({ factoryCode, packSize: draft.packSize, priceType }));
+      localStorage.setItem(PRODUCT_ADD_MEMORY, JSON.stringify({ factoryCode, priceType }));
       onSaved(name);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : t('products.addFailed'));
