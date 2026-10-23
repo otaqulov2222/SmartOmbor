@@ -381,6 +381,10 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       res.status(404).json({ error: "not_found" });
       return;
     }
+    if (shipment.status === "declined") {
+      res.status(409).json({ error: "declined" });
+      return;
+    }
     if (shipment.moyskladId) {
       let gone = false;
       try {

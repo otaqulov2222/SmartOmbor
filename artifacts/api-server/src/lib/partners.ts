@@ -467,7 +467,11 @@ export function setShipmentStatus(id: string, status: "sent" | "accepted" | "dec
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
-  if (shipment.moyskladId && status !== "accepted") throw Object.assign(new Error("posted"), { status: 409 });
+  if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
+  if (status === "accepted" && shipment.status === "declined") throw Object.assign(new Error("declined"), { status: 409 });
+  if (status === "sent" && shipment.status !== "declined" && shipment.status !== "sent") {
+    throw Object.assign(new Error("invalid"), { status: 409 });
+  }
   shipment.status = status;
   save(store);
   return shipmentView(shipment);

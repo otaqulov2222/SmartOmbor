@@ -455,7 +455,7 @@ function moneyDigits(value: string) {
 }
 
 const PRODUCT_ADD_MEMORY = 'bordo.product-add';
-const SALE_MARKUP = { Premium: 5, Exclusive: 8, Standard: 10 } as const;
+const SALE_MARKUP = { Premium: 5, Exclusive: 10, Standard: 13 } as const;
 const SALE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
 type SaleType = typeof SALE_TYPES[number];
 type ProductAddMemory = { factoryCode?: string; packSize?: string; priceType?: string };

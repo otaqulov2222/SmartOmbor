@@ -890,8 +890,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
 .waybill-table .waybill-size { min-width: 6.8rem; }
 .waybill-table .waybill-size .input { min-width: 6.8rem; }
-.waybill-table .waybill-type { min-width: 9rem; }
-.waybill-table .waybill-type .input { min-width: 9rem; }
+.waybill-table .waybill-type { min-width: 11.5rem; }
+.waybill-table .waybill-type .input { min-width: 11.5rem; }
+.waybill-table td.num { white-space: nowrap; }
 .waybill-table .waybill-line-tools { width: 6.6rem; white-space: nowrap; }
 .waybill-table th, .waybill-table td { padding: .42rem .6rem; text-align: left; vertical-align: middle; border-top: 1px solid var(--line); }
 .waybill-table th { border-top: 0; background: #f4f7fb; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
@@ -1073,7 +1074,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .topbar .chip span { display: none; }
   .scan-btn span { display: none; }
   .scan-btn { width: 2.4rem; height: 2.4rem; padding: 0; flex: none; }
-  .product-kpis b, .partner-kpis b, .kpi strong, .metric strong, .factory-id h1, .modal h2, .waybill-sum, .shipment header strong, .table td.num, .cabinet-kpis b, .yx-totals b { overflow-wrap: break-word; word-break: normal; white-space: normal; }
+  .product-kpis b, .kpi strong, .metric strong, .factory-id h1, .modal h2, .shipment header strong, .cabinet-kpis b { overflow-wrap: break-word; word-break: normal; white-space: normal; }
+  .waybill-sum, .partner-kpis b, .yx-totals b, .waybill-table td.num, .yx-sum { white-space: nowrap; overflow-wrap: normal; }
   .scan-row h2, .scan-row p, .product-copy b, .attn-copy b, .doc-copy b { overflow-wrap: break-word; word-break: normal; }
   .product-kpis b, .partner-kpis b { font-size: 1.15rem; }
   .factory-id h1 { font-size: 1.28rem; }

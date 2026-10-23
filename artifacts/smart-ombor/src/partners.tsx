@@ -14,7 +14,20 @@ type Line = {
   pairs: number; boxes: number; quantity: number; price: number; priceType?: string; colors: ColorLine[]; note: string;
   productId?: string | null; productName?: string | null;
 };
-const PRICE_TYPES = ['Exclusive', 'Standard', 'Premium'] as const;
+const PRICE_TYPES = ['Premium', 'Exclusive', 'Standard'] as const;
+function priceTypeLabel(type: string, t: (key: 'products.markup.Premium' | 'products.markup.Exclusive' | 'products.markup.Standard') => string) {
+  if (type === 'Premium') return t('products.markup.Premium');
+  if (type === 'Exclusive') return t('products.markup.Exclusive');
+  if (type === 'Standard') return t('products.markup.Standard');
+  return type;
+}
+function blankLine(factoryCode: string): Line {
+  return {
+    id: '', factoryCode, sectionCode: '', productCode: '', model: '', size: '',
+    pairs: 0, boxes: 0, quantity: 0, price: 0, priceType: '', colors: [], note: '',
+    productId: null, productName: null,
+  };
+}
 const LINE_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
 function todayKey() {
   const now = new Date();
@@ -218,7 +231,7 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
       <td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td>
       <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
       <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
-      <td data-label={t('zavod.priceType')}>{line.priceType || '—'}</td>
+      <td data-label={t('zavod.priceType')}>{line.priceType ? priceTypeLabel(line.priceType, t) : '—'}</td>
       <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
       <td className="num" data-label={t('zavod.sum')}>{money(lineUnits(line) * line.price)}</td>
     </>;
@@ -232,7 +245,7 @@ function WaybillCells({ line, locked, onSave }: { line: Line; locked: boolean; o
     <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => applyPassport()}/></td>
-    <td className="waybill-type" data-label={t('zavod.priceType')}><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
+    <td className="waybill-type" data-label={t('zavod.priceType')}><select className="input" aria-label={t('zavod.priceType')} value={priceType} onChange={event => { setPriceType(event.target.value); commit({ priceType: event.target.value }); }}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></td>
     <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
     <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;
@@ -599,7 +612,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const postSupply = async () => {
-    if (!posting || posting.moyskladId) return;
+    if (!posting || posting.moyskladId || posting.status === 'declined') return;
     const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
     if (!agent && !row.account?.counterpartyId) { setPostError(t('partners.agentMissing')); return; }
@@ -648,13 +661,17 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const saveLine = async (shipment: Shipment, line: Line, patch: Partial<Line>) => {
+    const next = lineBody(line, patch);
+    const lines = line.id
+      ? shipment.lines.map(item => item.id === line.id ? next : lineBody(item))
+      : [...shipment.lines.map(item => lineBody(item)), next];
     const response = await fetch(`/api/partner-factories/shipments/${shipment.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         date: shipment.date,
         note: shipment.note,
-        lines: shipment.lines.map(item => item.id === line.id ? lineBody(line, patch) : lineBody(item)),
+        lines,
       }),
     });
     if (!response.ok) return false;
@@ -675,8 +692,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     await refreshShipments();
   };
 
-  const setStatus = async (id: string, status: 'accepted' | 'declined') => {
-    await fetch(`/api/partner-factories/shipments/${id}/${status === 'accepted' ? 'accept' : 'decline'}`, { method: 'POST' });
+  const setStatus = async (id: string, status: 'accepted' | 'declined' | 'sent') => {
+    const path = status === 'accepted' ? 'accept' : status === 'declined' ? 'decline' : 'reopen';
+    await fetch(`/api/partner-factories/shipments/${id}/${path}`, { method: 'POST' });
     await refreshShipments();
   };
 
@@ -766,12 +784,14 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                 <div className="waybill-tools">
                   <WaybillExport shipments={[shipment]} filename={`${row.account?.code || row.name}-${shipment.number}`} title={`${t('zavod.title')} ${shipment.number}`} factory={row.name} code={row.account?.code || ''}/>
                   {!shipment.moyskladId && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(shipment)}><Pencil size={14}/>{t('partners.edit')}</button>}
+                  {!shipment.moyskladId && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLineEdit({ shipment, line: blankLine(row.account?.code || shipment.lines[0]?.factoryCode || '') })} data-testid="button-add-waybill-line"><Plus size={14}/>{t('zavod.addRow')}</button>}
                   {!shipment.moyskladId && <button type="button" className="btn btn-ghost btn-sm factory-delete" onClick={() => setRemoving(shipment)}><Trash2 size={14}/>{t('partners.delete')}</button>}
                 </div>
                 <div className="waybill-decide">
                   {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
-                  {!shipment.moyskladId && shipment.status !== 'accepted' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
-                  {!shipment.moyskladId && <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
+                  {!shipment.moyskladId && shipment.status === 'sent' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
+                  {!shipment.moyskladId && shipment.status === 'declined' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void setStatus(shipment.id, 'sent')} data-testid="button-reopen-shipment"><Check size={15}/>{t('partners.reopen')}</button>}
+                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
                 </div>
               </div>
             )}
@@ -810,7 +830,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</button><button type="button" className="btn btn-danger" disabled={busy} onClick={() => void removeFactory()} data-testid="button-confirm-delete-partner"><Trash2 size={15}/>{busy ? t('common.saving') : t('partners.delete')}</button></div>
     </div></div>, document.body)}
     {editing && <WaybillEditor shipment={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await refreshShipments(); }}/>}
-    {lineEdit && <LineEditor shipment={lineEdit.shipment} line={lineEdit.line} onClose={() => setLineEdit(null)} onSave={async patch => { const ok = await saveLine(lineEdit.shipment, lineEdit.line, patch); if (ok) setLineEdit(null); return ok; }}/>}
+    {lineEdit && <LineEditor shipment={lineEdit.shipment} line={lineEdit.line} creating={!lineEdit.line.id} onClose={() => setLineEdit(null)} onSave={async patch => { const ok = await saveLine(lineEdit.shipment, lineEdit.line, patch); if (ok) setLineEdit(null); return ok; }}/>}
     {removing && createPortal(<div className="backdrop" onClick={() => setRemoving(null)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="shipment-delete-title">
       <div className="modal-top"><div><p className="eyebrow">{removing.number}</p><h2 id="shipment-delete-title">{t('partners.deleteShipment')}</h2></div><button type="button" className="icon-btn" onClick={() => setRemoving(null)} aria-label={t('common.close')}><X size={18}/></button></div>
       <p>{t('partners.deleteShipmentBody', { number: removing.number })}</p>
@@ -826,7 +846,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   </div>;
 }
 
-function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
+function LineEditor({ line, creating, onClose, onSave }: { shipment: Shipment; line: Line; creating?: boolean; onClose: () => void; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
   const { t, money } = useI18n();
   const [factoryCode, setFactoryCode] = useState(line.factoryCode);
   const [sectionCode, setSectionCode] = useState(line.sectionCode);
@@ -861,7 +881,7 @@ function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line;
     if (!ok) setError(t('partners.shipmentInvalid'));
   };
   return createPortal(<div className="backdrop" onClick={onClose}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="line-edit-title">
-    <div className="modal-top"><div><p className="eyebrow">Bordo</p><h2 id="line-edit-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
+    <div className="modal-top"><div><p className="eyebrow">Bordo</p><h2 id="line-edit-title">{creating ? t('zavod.addRow') : t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}><X size={18}/></button></div>
     <div className="form-grid">
       <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" value={factoryCode} onChange={event => setFactoryCode(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" inputMode="numeric" value={sectionCode} onChange={event => setSectionCode(event.target.value.replace(/\D/g, ''))} onBlur={() => void fill()}/></label>
@@ -870,11 +890,11 @@ function LineEditor({ line, onClose, onSave }: { shipment: Shipment; line: Line;
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={priceType} onChange={event => setPriceType(event.target.value)}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={priceType} onChange={event => setPriceType(event.target.value)}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></label>
       <label className="field"><span>{t('zavod.sum')}</span><input className="input" value={sum ? money(sum) : ''} readOnly/></label>
     </div>
     {error && <p className="error-text">{error}</p>}
-    <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : t('partners.edit')}</button></div>
+    <div className="form-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? t('common.saving') : creating ? t('zavod.addRow') : t('partners.edit')}</button></div>
   </div></div>, document.body);
 }
 
@@ -954,7 +974,7 @@ function WaybillEditor({ shipment, onClose, onSaved }: { shipment: Shipment; onC
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })} onBlur={e => fillLine(line, { price: e.target.value })}/></label>
-        <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={line.priceType} onChange={e => patch(line.key, { priceType: e.target.value })}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label className="field"><span>{t('zavod.priceType')}</span><select className="input" value={line.priceType} onChange={e => patch(line.key, { priceType: e.target.value })}><option value=""/>{PRICE_TYPES.map(item => <option key={item} value={item}>{priceTypeLabel(item, t)}</option>)}</select></label>
       </div>
       <div className="yx-colors">
         <span>{t('zavod.colors')}</span>

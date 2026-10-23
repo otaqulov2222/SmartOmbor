@@ -277,8 +277,8 @@ const uz = {
   'products.field.pack': 'Qadoq soni',
   'products.field.sale': 'Sotuv narxi, so‘m',
   'products.markup.Premium': 'Premium +5%',
-  'products.markup.Exclusive': 'Exclusive +8%',
-  'products.markup.Standard': 'Standard +10%',
+  'products.markup.Exclusive': 'Exclusive +10%',
+  'products.markup.Standard': 'Standard +13%',
   'products.factoryMissing': 'Bu kod bilan hamkor zavod yo‘q.',
   'products.factoryMissing.action': 'Hamkor zavodlar bo‘limidan zavod qo‘shing.',
   'products.barcodeAuto': 'Avtomat',
@@ -911,6 +911,7 @@ const uz = {
   'partners.storeMissing': 'Ombor tanlanmadi.',
   'partners.posted': 'MoySklad kirimi {number}',
   'partners.unaccept': 'Qabul qilinmadi deb belgilash',
+  'partners.reopen': 'Qayta ochish',
   'partners.declined': 'Qabul qilinmadi',
   'partners.editShipment': 'Yuk xatini tahrirlash',
   'partners.deleteShipment': 'Yuk xatini o‘chirish',
@@ -1273,8 +1274,8 @@ const ru: Record<TKey, string> = {
   'products.field.pack': 'В упаковке',
   'products.field.sale': 'Цена продажи, сум',
   'products.markup.Premium': 'Premium +5%',
-  'products.markup.Exclusive': 'Exclusive +8%',
-  'products.markup.Standard': 'Standard +10%',
+  'products.markup.Exclusive': 'Exclusive +10%',
+  'products.markup.Standard': 'Standard +13%',
   'products.factoryMissing': 'Завода с таким кодом нет.',
   'products.factoryMissing.action': 'Добавьте завод в разделе «Заводы-партнёры».',
   'products.barcodeAuto': 'Авто',
@@ -1892,6 +1893,7 @@ const ru: Record<TKey, string> = {
   'partners.storeMissing': 'Склад не выбран.',
   'partners.posted': 'Приёмка МойСклад {number}',
   'partners.unaccept': 'Отметить непринятым',
+  'partners.reopen': 'Открыть снова',
   'partners.declined': 'Не принято',
   'partners.editShipment': 'Изменить накладную',
   'partners.deleteShipment': 'Удалить накладную',
@@ -2013,11 +2015,11 @@ export function translate(lang: Lang, key: TKey, vars?: Vars) {
 const numberFormatter = (digits: number) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: digits, minimumFractionDigits: 0 });
 export function formatNumber(value: number | null | undefined, digits = 0) {
   if (value == null || Number.isNaN(value)) return '—';
-  return numberFormatter(digits).format(value).replace(/\u00a0|\u202f/g, ' ');
+  return numberFormatter(digits).format(value).replace(/\u202f/g, '\u00a0');
 }
 export function formatMoney(lang: Lang, value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return '—';
-  return `${formatNumber(Math.round(value))} ${translate(lang, 'common.currency')}`;
+  return `${formatNumber(Math.round(value))}\u00a0${translate(lang, 'common.currency')}`;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');

@@ -34,7 +34,7 @@ import { logger } from "../lib/logger";
 import { listAccounts } from "../lib/partners";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
-const SALE_MARKUP: Record<string, number> = { Premium: 5, Exclusive: 8, Standard: 10 };
+const SALE_MARKUP: Record<string, number> = { Premium: 5, Exclusive: 10, Standard: 13 };
 
 function markedSale(cost: number, priceType: string) {
   const pct = SALE_MARKUP[priceType];
