@@ -811,7 +811,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 @media (max-width: 560px) {
   .markup-row { grid-template-columns: 1fr 1fr; }
   .markup-row .form-actions { grid-column: 1 / -1; }
-  .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
+  .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(0, 1fr) 5.8rem; }
+  .sale-triple-row, .product-add .sale-triple-row { grid-template-columns: auto 5.8rem minmax(0, 1fr); }
+  .product-add .sale-triple-row .input, .product-add .sale-triple-row .input-locked { min-width: 0; width: 100%; }
   .kpis { grid-template-columns: minmax(0, 1fr); }
   .metrics { grid-template-columns: 1fr; }
   .gate { padding-inline: 1rem; }
@@ -1236,5 +1238,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .kpi { border-right: 0; border-bottom: 1px solid var(--line); padding: .85rem 1rem; overflow: hidden; }
   .kpi:last-child { border-bottom: 0; }
   .kpi strong { font-size: 1.12rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
+  .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(0, 1fr) 5.8rem; }
+  .sale-triple-row, .product-add .sale-triple-row { grid-template-columns: auto 5.8rem minmax(0, 1fr); }
+  .product-add .sale-triple-row .input, .product-add .sale-triple-row .input-locked { min-width: 0; width: 100%; }
 }
