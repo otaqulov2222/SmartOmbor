@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -636,9 +636,9 @@ async function readProductSaleMarkup(productId: string, fallback?: { cost?: numb
 
 router.post("/products", async (req, res, next) => {
   try {
-    const factoryCode = String(req.body?.factoryCode ?? "").trim().toUpperCase();
-    const groupCode = String(req.body?.groupCode ?? "").trim();
-    const productCode = String(req.body?.productCode ?? req.body?.code ?? "").trim();
+    const factoryCode = normalizeBordoCode(String(req.body?.factoryCode ?? ""));
+    const groupCode = normalizeBordoCode(String(req.body?.groupCode ?? ""));
+    const productCode = normalizeBordoCode(String(req.body?.productCode ?? req.body?.code ?? ""));
     const size = String(req.body?.size ?? "").trim();
     const requestedMarkups = parseMarkups(req.body?.markups, String(req.body?.priceType ?? "").trim(), req.body?.markupPct);
     const builtName = ["Bordo", factoryCode, groupCode, productCode, size].filter(Boolean).join(" ").trim();
@@ -884,10 +884,10 @@ router.get("/products/next-barcode", async (_req, res, next) => {
 
 router.get("/products/passport", async (req, res, next) => {
   try {
-    const factory = String(req.query.factory ?? "").trim();
-    const code = String(req.query.code ?? "").trim();
+    const factory = normalizeBordoCode(String(req.query.factory ?? ""));
+    const code = normalizeBordoCode(String(req.query.code ?? ""));
     const size = String(req.query.size ?? "").trim();
-    const group = String(req.query.group ?? "").trim();
+    const group = normalizeBordoCode(String(req.query.group ?? ""));
     if (!code) {
       res.json({ found: false, options: [] });
       return;

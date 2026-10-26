@@ -4,6 +4,7 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 import { parseMarkups, parsePct, type SaleMarkup } from "./markup";
+import { normalizeBordoCode } from "./catalog";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -317,9 +318,9 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
   const quantity = Math.max(0, Number(raw.quantity) || 0) || (pairs > 0 ? 0 : colorQty);
   return {
     id: randomBytes(6).toString("hex"),
-    factoryCode: String(raw.factoryCode || factoryCode).trim().toLocaleUpperCase("ru-RU"),
-    sectionCode: String(raw.sectionCode ?? "").trim().toLocaleUpperCase("ru-RU"),
-    productCode: String(raw.productCode ?? "").trim().toLocaleUpperCase("ru-RU"),
+    factoryCode: normalizeBordoCode(String(raw.factoryCode || factoryCode)),
+    sectionCode: normalizeBordoCode(String(raw.sectionCode ?? "")),
+    productCode: normalizeBordoCode(String(raw.productCode ?? "")),
     model: String(raw.model ?? "").trim(),
     size: String(raw.size ?? "").trim(),
     pairs,

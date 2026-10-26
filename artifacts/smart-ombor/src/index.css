@@ -735,7 +735,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .topbar { padding: calc(.55rem + env(safe-area-inset-top)) .9rem .55rem; gap: .5rem; }
   .crumb-root { display: none; } .crumbs > svg { display: none; }
   .topbar .chip span { display: none; }
-  .scan-btn { height: 2.4rem; padding: 0 .7rem; }
+  .scan-btn { height: 2.9rem; padding: 0 .7rem; }
   .topbar .chip { padding: .35rem; width: 1.5rem; height: 1.5rem; justify-content: center; }
   .content { padding: 1rem .9rem .9rem; }
   .page-head { align-items: center; flex-wrap: wrap; }
@@ -795,21 +795,21 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
   .table tr { padding: .5rem 1rem; border-bottom: 1px solid var(--line); }
   .table tbody tr:last-child { border-bottom: 0; }
-  .table td { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .45rem 0; border: 0; text-align: right; }
-  .table td.num { text-align: right; }
-  .table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); text-align: left; flex: none; }
+  .table td { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; justify-content: stretch; gap: .3rem; padding: .45rem 0; border: 0; text-align: left; }
+  .table td.num { text-align: left; }
+  .table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; letter-spacing: .02em; text-transform: none; color: var(--muted); text-align: left; pointer-events: none; }
   .table td:first-child { padding-top: .6rem; }
   .table td:first-child::before { display: none; }
-  .table td:first-child { justify-content: flex-start; text-align: left; }
   .table td .product { width: 100%; }
   .table tbody tr:hover td { background: transparent; }
-  .row-actions { justify-content: flex-end; }
+  .row-actions { justify-content: stretch; gap: .55rem; }
+  .row-actions .btn, .row-actions .icon-btn { min-height: 2.9rem; }
   .pager { padding: .8rem 1rem; }
 }
 @media (max-width: 560px) {
   .markup-row { grid-template-columns: 1fr 1fr; }
   .markup-row .form-actions { grid-column: 1 / -1; }
-  .sale-triple-row, .product-add .sale-triple-row { grid-template-columns: 5.8rem 5.8rem minmax(0, 1fr); }
+  .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
   .kpis { grid-template-columns: 1fr; }
   .kpi { border-right: 0 !important; border-bottom: 1px solid var(--line); } .kpi:last-child { border-bottom: 0; }
   .metrics { grid-template-columns: 1fr; }
@@ -1064,9 +1064,13 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   html, body, #root { max-width: 100%; overflow-x: hidden; }
   body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
   .btn, .input, select.input, textarea { font-size: 16px; }
-  .btn { white-space: normal; min-height: 2.75rem; text-align: center; line-height: 1.2; padding: .65rem .9rem; }
-  .btn-sm { min-height: 2.4rem; padding: .45rem .7rem; font-size: .92rem; }
-  .icon-btn { width: 2.75rem; height: 2.75rem; }
+  .btn, .icon-btn, .scan-btn, .nav-item, .menu-btn, .sidebar-close, .lang-dd-btn { -webkit-tap-highlight-color: rgb(47 84 235 / .14); touch-action: manipulation; }
+  .btn, .icon-btn, .menu-btn, .sidebar-close, .scan-btn { position: relative; z-index: 1; isolation: isolate; }
+  .btn { white-space: normal; min-height: 2.9rem; text-align: center; line-height: 1.2; padding: .7rem .95rem; }
+  .btn-sm { min-height: 2.9rem; padding: .55rem .8rem; font-size: .95rem; }
+  .icon-btn, .menu-btn, .sidebar-close { width: 2.9rem; height: 2.9rem; flex: none; }
+  .input, select.input { min-height: 2.9rem; height: 2.9rem; }
+  .table td::before, .mini-table td::before, .waybill-table td::before { pointer-events: none; }
   .page-head { align-items: stretch; flex-direction: column; gap: .75rem; }
   .page-head h1 { font-size: 1.28rem; overflow-wrap: break-word; word-break: normal; }
   .page-head p { font-size: .88rem; }
@@ -1078,14 +1082,17 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     font-size: .95rem; line-height: 1.2; gap: .4rem; border-radius: .8rem;
   }
   .page-actions .btn svg, .toolbar > .btn svg, .partner-bar > .btn svg, .factory-actions .btn svg, .waybill-tools .btn svg, .waybill-head-tools .btn svg { width: 1.05rem; height: 1.05rem; flex: none; }
-  .form-actions, .waybill-actions, .waybill-decide { flex-direction: column; width: 100%; }
-  .waybill-actions .btn, .waybill-decide .btn, .waybill-link .btn, .waybill-link .input, .toolbar .search { width: 100%; flex: none; }
+  .form-actions, .waybill-actions, .waybill-decide { display: grid; flex-direction: column; width: 100%; gap: .55rem; }
+  .waybill .waybill-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: .7rem; padding: .8rem .85rem calc(.85rem + env(safe-area-inset-bottom)); isolation: isolate; }
+  .waybill .waybill-tools, .waybill .waybill-decide { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; width: 100%; margin: 0; }
+  .waybill-actions .btn, .waybill-decide .btn, .waybill-link .btn, .waybill-link .input, .toolbar .search, .waybill-export, .waybill-export .btn { width: 100%; flex: none; min-height: 2.9rem; }
   .content, .page-enter { min-width: 0; max-width: 100%; overflow: visible; }
   .page-head, .page-head.partner-head { display: flex; flex-direction: column; align-items: stretch; max-width: 100%; min-width: 0; overflow: visible; }
   .page-head > * { min-width: 0; max-width: 100%; }
   .partner-bar { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 100%; margin-left: 0; }
   .partner-bar > * { min-width: 0; max-width: 100%; }
-  .factory-actions, .waybill-tools, .waybill-head-tools { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: stretch; width: 100%; max-width: 100%; margin-left: 0; }
+  .factory-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; width: 100%; max-width: 100%; margin-left: 0; }
+  .waybill-tools, .waybill-head-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; width: 100%; max-width: 100%; margin-left: 0; }
   .topbar { gap: .4rem; min-width: 0; overflow: visible; }
   .topbar-right { flex: none; gap: .35rem; min-width: 0; }
   .waybill-export, .waybill-export .btn { width: 100%; }
@@ -1099,7 +1106,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .partner-grid { grid-template-columns: minmax(0, 1fr); }
   .topbar .chip span { display: none; }
   .scan-btn span { display: none; }
-  .scan-btn { width: 2.4rem; height: 2.4rem; padding: 0; flex: none; }
+  .scan-btn { width: 2.9rem; height: 2.9rem; padding: 0; flex: none; }
   .product-kpis b, .kpi strong, .metric strong, .factory-id h1, .modal h2, .shipment header strong, .cabinet-kpis b { overflow-wrap: break-word; word-break: normal; white-space: normal; }
   .waybill-sum, .partner-kpis b, .yx-totals b, .waybill-table td.num, .yx-sum { white-space: nowrap; overflow-wrap: normal; }
   .scan-row h2, .scan-row p, .product-copy b, .attn-copy b, .doc-copy b { overflow-wrap: break-word; word-break: normal; }
@@ -1129,6 +1136,17 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     border-radius: 1.1rem 1.1rem 0 0;
     padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
   }
+  .modal .form-actions, .waybill-editor .form-actions, .product-add .form-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    gap: .55rem;
+    margin: .35rem -1rem 0;
+    padding: .75rem 1rem 0;
+    background: #fff;
+  }
   .lightbox { max-width: 100%; border-radius: 1rem 1rem 0 0; }
   .cabinet-hero, .cabinet-profile { grid-template-columns: 1fr; }
   .yx-submit, .cabinet-hero, .yx-send, .yx-actions { align-items: stretch; }
@@ -1144,7 +1162,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .tabs button { flex: 1 1 auto; min-height: 2.4rem; }
   .pager { flex-direction: column; align-items: stretch; gap: .65rem; }
   .pager-nav { justify-content: space-between; }
-  .shipment header { align-items: stretch; gap: .55rem; }
+  .shipment header { flex-direction: column; align-items: stretch; gap: .55rem; }
+  .shipment header .btn { width: 100%; min-height: 2.9rem; }
   .shipment-open { flex-wrap: wrap; }
   .shipment-open strong { width: 100%; margin-left: 0; }
   .waybill-open { grid-template-columns: auto minmax(0, 1fr); }
@@ -1156,14 +1175,15 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table tr { display: grid; width: 100%; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: .9rem; background: #fff; }
   .waybill-table tr.has-colors { background: #f5f8ff; box-shadow: inset 3px 0 0 var(--brand); }
   .waybill-table tr.has-colors td { background: transparent; box-shadow: none; }
-  .waybill-table td { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: .7rem; padding: .38rem 0; border: 0; text-align: right; min-width: 0; height: auto; }
+  .waybill-table td { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr); justify-content: stretch; align-items: stretch; gap: .3rem; padding: .5rem 0; border: 0; text-align: left; min-width: 0; height: auto; }
   .waybill-table td.waybill-colors-cell { white-space: normal; min-width: 0; }
-  .waybill-table td.waybill-colors-cell .color-chips { flex-wrap: wrap; justify-content: flex-end; }
-  .waybill-table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; color: var(--muted); text-align: left; flex: none; max-width: 42%; }
-  .waybill-table td.waybill-line-tools, .waybill-table td.waybill-line-tools::before { display: flex; }
+  .waybill-table td.waybill-colors-cell .color-chips { flex-wrap: wrap; justify-content: flex-start; }
+  .waybill-table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; color: var(--muted); text-align: left; flex: none; max-width: none; }
+  .waybill-table td.waybill-line-tools, .waybill-table td.waybill-line-tools::before { display: grid; }
   .waybill-table td.waybill-line-tools::before { content: none; }
-  .waybill-table td.waybill-line-tools { justify-content: flex-end; padding-top: .45rem; width: auto; }
-  .waybill-table td .input, .waybill-table .waybill-size, .waybill-table .waybill-type, .waybill-table .waybill-size .input, .waybill-table .waybill-type .input { min-width: 0; width: min(100%, 11.5rem); max-width: 100%; }
+  .waybill-table td.waybill-line-tools { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; justify-content: stretch; padding-top: .65rem; width: 100%; }
+  .waybill-table td.waybill-line-tools .icon-btn { width: 100%; height: 2.9rem; }
+  .waybill-table td .input, .waybill-table .waybill-size, .waybill-table .waybill-type, .waybill-table .waybill-size .input, .waybill-table .waybill-type .input { min-width: 0; width: 100%; max-width: 100%; }
   .waybill-table .waybill-type .price-type-row, .waybill-table .waybill-type .sale-triple, .waybill-table .waybill-type .pct-box { width: 100%; max-width: 100%; }
   .waybill-table .waybill-type .pct-box .input { width: auto; max-width: none; }
   .waybill-table tr:has(> .waybill-colors) { padding: 0; border: 0; background: transparent; box-shadow: none; }
@@ -1202,4 +1222,5 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .user-row { flex-wrap: wrap; }
   .notice { align-items: flex-start; }
   .kpis, .metrics, .product-kpis, .partner-kpis { grid-template-columns: 1fr; }
+  .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
 }

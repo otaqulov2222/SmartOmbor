@@ -139,7 +139,10 @@ function asNumber(value: string) {
 }
 
 function codeInput(value: string) {
-  return value.replace(/\s+/g, '').toLocaleUpperCase('ru-RU');
+  return value.replace(/[^\S\n]+/g, ' ').replace(/^\s+/g, '').toLocaleUpperCase('ru-RU');
+}
+function codeValue(value: string) {
+  return codeInput(value).trim();
 }
 
 type Passport = {
@@ -257,9 +260,9 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
       price: asNumber(price),
       markup: markupValues,
       ...next,
-      factoryCode: codeInput(next?.factoryCode ?? factoryCode),
-      sectionCode: codeInput(next?.sectionCode ?? sectionCode),
-      productCode: codeInput(next?.productCode ?? productCode),
+      factoryCode: codeValue(next?.factoryCode ?? factoryCode),
+      sectionCode: codeValue(next?.sectionCode ?? sectionCode),
+      productCode: codeValue(next?.productCode ?? productCode),
     };
     const sameMarkup = PRICE_TYPES.every(type => (patch.markup?.[type] ?? null) === (line.markup?.[type] ?? (line.priceType === type ? line.markupPct : null) ?? null));
     const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && sameMarkup && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
@@ -965,7 +968,7 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
   const save = async () => {
     if (!productCode.trim() || !sectionCode.trim() || !size.trim()) { setError(t('zavod.needProduct')); return; }
     setBusy(true);
-    const ok = await onSave({ factoryCode: codeInput(factoryCode), sectionCode: codeInput(sectionCode), productCode: codeInput(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), markup: parsePctMap(pctMap) });
+    const ok = await onSave({ factoryCode: codeValue(factoryCode), sectionCode: codeValue(sectionCode), productCode: codeValue(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price), markup: parsePctMap(pctMap) });
     setBusy(false);
     if (!ok) setError(t('partners.shipmentInvalid'));
   };
@@ -1032,10 +1035,10 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
           date,
           note,
           lines: filled.map(line => ({
-            factoryCode: codeInput(line.factoryCode),
-            sectionCode: codeInput(line.sectionCode),
+            factoryCode: codeValue(line.factoryCode),
+            sectionCode: codeValue(line.sectionCode),
             id: line.key,
-            productCode: codeInput(line.productCode),
+            productCode: codeValue(line.productCode),
             model: line.model,
             size: line.size,
             pairs: asNumber(line.pairs),
@@ -1062,9 +1065,9 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
     {lines.map((line, index) => <article className="waybill-line" key={line.key}>
       <header><b>{String(index + 1).padStart(2, '0')}</b>{lines.length > 1 && <button type="button" className="icon-btn" onClick={() => setLines(rows => rows.filter(row => row.key !== line.key))} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>}</header>
       <div className="form-grid">
-        <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" autoCapitalize="characters" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { factoryCode: codeInput(e.target.value) })}/></label>
-        <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" autoCapitalize="characters" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { sectionCode: codeInput(e.target.value) })}/></label>
-        <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { productCode: codeInput(e.target.value) })}/></label>
+        <label className="field"><span>{t('zavod.factoryCode')}</span><input className="input" autoCapitalize="characters" value={line.factoryCode} onChange={e => patch(line.key, { factoryCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { factoryCode: codeValue(e.target.value) })}/></label>
+        <label className="field"><span>{t('zavod.groupCode')}</span><input className="input" autoCapitalize="characters" value={line.sectionCode} onChange={e => patch(line.key, { sectionCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { sectionCode: codeValue(e.target.value) })}/></label>
+        <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { productCode: codeValue(e.target.value) })}/></label>
         <label className="field"><span>{t('zavod.size')}</span><select className="input" value={line.size} onChange={e => fillLine(line, { size: e.target.value })}><option value=""/>{!LINE_SIZES.includes(line.size) && line.size && <option value={line.size}>{line.size}</option>}{LINE_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>

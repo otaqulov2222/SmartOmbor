@@ -602,9 +602,9 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     }, 350);
     return () => window.clearTimeout(timer);
   }, [draft.factoryCode, draft.groupCode, draft.productCode, draft.size]);
-  const factoryCode = draft.factoryCode.trim().toUpperCase();
-  const groupCode = draft.groupCode.trim();
-  const productCode = draft.productCode.trim();
+  const factoryCode = draft.factoryCode.trim().replace(/\s+/g, ' ').toLocaleUpperCase('ru-RU');
+  const groupCode = draft.groupCode.trim().replace(/\s+/g, ' ').toLocaleUpperCase('ru-RU');
+  const productCode = draft.productCode.trim().replace(/\s+/g, ' ').toLocaleUpperCase('ru-RU');
   const nameRest = [factoryCode, groupCode, productCode, draft.size].filter(Boolean).join(' ');
   const name = ['Bordo', nameRest].filter(Boolean).join(' ');
   const cost = draft.cost.trim() ? Number(draft.cost) : null;
@@ -655,7 +655,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       setAddError(error instanceof Error ? error.message : t('products.addFailed'));
     } finally { setSaving(false); }
   };
-  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'packSize' ? moneyDigits(event.target.value) : key === 'barcode' ? event.target.value : event.target.value.replace(/\s+/g, '').toLocaleUpperCase('ru-RU') }));
+  const setText = (key: 'factoryCode' | 'groupCode' | 'productCode' | 'barcode' | 'packSize') => (event: React.ChangeEvent<HTMLInputElement>) => setDraft(current => ({ ...current, [key]: key === 'packSize' ? moneyDigits(event.target.value) : key === 'barcode' ? event.target.value : event.target.value.replace(/[^\S\n]+/g, ' ').replace(/^\s+/g, '').toLocaleUpperCase('ru-RU') }));
   const factoryMissing = factory.ready && draft.factoryCode.trim().length >= 2 && !factory.found;
   return createPortal(<div className="backdrop" onClick={() => { if (!saving) onClose(); }}><form className="modal product-add" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void saveProduct(); }} role="dialog" aria-labelledby="product-add-title">
     <div className="modal-top"><div><p className="eyebrow">{t('products.title')}</p><h2 id="product-add-title">{t('products.addTitle')}</h2></div><button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')} data-testid="button-close-add-product"><X size={18}/></button></div>

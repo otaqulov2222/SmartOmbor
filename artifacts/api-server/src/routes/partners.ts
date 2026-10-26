@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -184,6 +184,19 @@ function exactCatalogProduct(
   return { ...matched, groupCode };
 }
 
+function lineMatchesCatalogProduct(
+  product: { code?: string | null; article?: string | null; name: string; barcodes: string[] },
+  typed: string,
+) {
+  const code = typed.trim();
+  if (!code) return true;
+  if (sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code)) return true;
+  const parsed = parseBordoName(product.name);
+  if (parsed && sameProductCode(parsed.productCode, code)) return true;
+  const needle = compactCode(code);
+  return Boolean(needle) && product.barcodes.some((value) => compactCode(value) === needle);
+}
+
 router.get("/partner-factories/:id", async (req, res, next) => {
   try {
     const account = getAccount(String(req.params.id));
@@ -223,12 +236,12 @@ function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sect
     if (!(line.price > 0)) continue;
     const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
     let score = 0;
-    const codeOk = parsed ? parsed.productCode.toLowerCase() === line.productCode.trim().toLowerCase() : false;
+    const codeOk = parsed ? sameProductCode(parsed.productCode, line.productCode) : false;
     const sizeOk = parsed ? parsed.size === line.size.trim() : false;
-    const groupOk = !line.sectionCode.trim() || (parsed ? parsed.groupCode.toLowerCase() === line.sectionCode.trim().toLowerCase() : false);
-    if (base === identity) score = 4;
-    else if (color && base === `${identity} ${color}`) score = 4;
-    else if (identity && base.startsWith(identity)) score = 3;
+    const groupOk = !line.sectionCode.trim() || (parsed ? sameProductCode(parsed.groupCode, line.sectionCode) : false);
+    if (base === identity || compactCode(base) === compactCode(identity)) score = 4;
+    else if (color && (base === `${identity} ${color}` || compactCode(base) === compactCode(`${identity} ${color}`))) score = 4;
+    else if (identity && (base.startsWith(identity) || compactCode(base).startsWith(compactCode(identity)))) score = 3;
     else if (codeOk && sizeOk && groupOk) score = 2;
     if (color && (line.colors ?? []).some((item) => item.name?.trim().toLowerCase() === color)) score += 1;
     if (score > (best?.score ?? 0)) best = { score, price: kopecks(line.price) };
@@ -657,8 +670,7 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
     const byId = new Map(catalog.products.map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());
-      const typed = String(line?.productCode ?? "").trim().toLowerCase();
-      const matches = product && [product.code, product.article, product.name, ...product.barcodes].some((value) => String(value || "").trim().toLowerCase() === typed);
+      const matches = product ? lineMatchesCatalogProduct(product, String(line?.productCode ?? "")) : false;
       return matches && product ? { ...line, productId: product.id, productName: product.name } : { ...line, productId: null, productName: null };
     });
     const saved = reviseShipment(res.locals.factory.id, String(req.params.id), {
@@ -684,8 +696,7 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
     const byId = new Map(catalog.products.map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());
-      const typed = String(line?.productCode ?? "").trim().toLowerCase();
-      const matches = product && [product.code, product.article, product.name, ...product.barcodes].some((value) => String(value || "").trim().toLowerCase() === typed);
+      const matches = product ? lineMatchesCatalogProduct(product, String(line?.productCode ?? "")) : false;
       return matches && product ? { ...line, productId: product.id, productName: product.name } : { ...line, productId: null, productName: null };
     });
     const created = createShipment(res.locals.factory.id, {

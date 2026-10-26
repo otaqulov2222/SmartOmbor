@@ -653,8 +653,18 @@ export function catalogLoadedAt(): string | null {
   return cache?.loadedAt ?? null;
 }
 
-function compactCode(value: string): string {
+export function compactCode(value: string): string {
   return value.trim().replace(/[\s-]/g, "").toLowerCase();
+}
+
+export function normalizeBordoCode(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleUpperCase("ru-RU");
+}
+
+export function sameProductCode(left: string, right: string) {
+  const a = compactCode(left);
+  const b = compactCode(right);
+  return Boolean(a) && a === b;
 }
 
 function indexKeys(value: string): string[] {
@@ -725,9 +735,15 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   if (tokens[0] && /^bordo$/i.test(tokens[0])) tokens.shift();
   if (tokens.length < 2) return null;
   const factoryCode = tokens[0];
-  const productCode = tokens[tokens.length - 1];
-  const middle = tokens.slice(1, -1);
-  const groupCode = middle.find((token) => /^\d{3,6}$/.test(token)) || (middle.length === 1 ? middle[0] : "") || "";
+  const rest = tokens.slice(1);
+  let groupCode = "";
+  let productTokens = rest;
+  if (rest.length >= 2 && /^\d{3,6}$/.test(rest[0])) {
+    groupCode = rest[0];
+    productTokens = rest.slice(1);
+  }
+  const productCode = productTokens.join(" ");
+  if (!productCode) return null;
   return { factoryCode, groupCode, productCode, size, color };
 }
 
@@ -783,7 +799,7 @@ export function listWaybillProducts(
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
     const parts = parseBordoName(product.name);
     if (parts) {
-      if (!sameToken(parts.productCode, code)) return false;
+      if (!sameProductCode(parts.productCode, code)) return false;
       if (size && !sameToken(parts.size, size)) return false;
       if (group && parts.groupCode && !sameToken(parts.groupCode, group)) return false;
       if (group && !parts.groupCode && lastNumericToken(product.category || "") !== group) return false;
