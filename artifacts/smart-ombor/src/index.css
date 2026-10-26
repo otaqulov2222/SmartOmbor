@@ -1184,11 +1184,20 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table tr { display: grid; width: 100%; padding: .75rem .85rem; border: 1px solid var(--line); border-radius: .9rem; background: #fff; overflow: hidden; }
   .waybill-table tr.has-colors { background: #f5f8ff; box-shadow: inset 4px 0 0 var(--brand); padding-left: 1.05rem; }
   .waybill-table tr.has-colors td, .waybill-table tr.has-colors td:first-child { background: transparent; box-shadow: none; }
-  .waybill-table td { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr); justify-content: stretch; align-items: stretch; gap: .22rem; padding: .42rem 0; border: 0; text-align: left; min-width: 0; height: auto; overflow: hidden; }
+  .waybill-table td { display: grid; width: 100%; max-width: 100%; grid-template-columns: minmax(0, 1fr); justify-content: stretch; align-items: start; gap: .22rem; padding: .42rem 0; border: 0; text-align: left; min-width: 0; height: auto; overflow: visible; }
   .waybill-table td:first-child { padding-top: 0; padding-bottom: .55rem; margin-bottom: .15rem; border-bottom: 1px solid var(--line); font-size: 1rem; }
   .waybill-table td:first-child::before, .waybill-table td[data-label=""]::before { content: none; }
-  .waybill-table td.waybill-colors-cell { white-space: normal; min-width: 0; }
-  .waybill-table td.waybill-colors-cell .color-chips { flex-wrap: wrap; justify-content: flex-start; }
+  .waybill-table td.waybill-colors-cell,
+  .waybill-table td.waybill-type,
+  .waybill-table td.waybill-size,
+  .waybill-table td.num {
+    width: 100%; max-width: 100%; min-width: 0; white-space: normal;
+  }
+  .waybill-table td.waybill-colors-cell .color-chips {
+    display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center;
+    gap: .28rem; width: 100%; max-width: 100%;
+  }
+  .waybill-table td.waybill-colors-cell .color-chip { flex: none; max-width: 100%; }
   .waybill-table td::before { content: attr(data-label); font-size: .72rem; font-weight: 700; color: var(--muted); text-align: left; flex: none; max-width: none; }
   .waybill-table td.waybill-line-tools, .waybill-table td.waybill-line-tools::before { display: grid; }
   .waybill-table td.waybill-line-tools::before { content: none; }
