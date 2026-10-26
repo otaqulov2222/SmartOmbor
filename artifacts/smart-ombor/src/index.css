@@ -1070,6 +1070,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .btn-sm { min-height: 2.9rem; padding: .55rem .8rem; font-size: .95rem; }
   .icon-btn, .menu-btn, .sidebar-close { width: 2.9rem; height: 2.9rem; flex: none; }
   .input, select.input { min-height: 2.9rem; height: 2.9rem; }
+  .pct-box, .waybill-table .pct-box, .waybill-table .waybill-type .pct-box, .product-add .sale-triple-row .pct-box { height: 2.9rem; }
+  .pct-box .input, .pct-box .input:disabled, .waybill-table .pct-box .input, .waybill-table .pct-box .input:disabled { min-height: 0; height: 100%; }
+  .waybill-table .input { min-height: 2.9rem; height: 2.9rem; }
   .table td::before, .mini-table td::before, .waybill-table td::before { pointer-events: none; }
   .page-head { align-items: stretch; flex-direction: column; gap: .75rem; }
   .page-head h1 { font-size: 1.28rem; overflow-wrap: break-word; word-break: normal; }

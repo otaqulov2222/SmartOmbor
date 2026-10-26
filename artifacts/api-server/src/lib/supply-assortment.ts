@@ -759,6 +759,7 @@ export async function buildSupplyPositions(
       continue;
     }
     const code = item.line.productCode.trim();
+    const codeKey = code.replace(/\s+/g, "");
     const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
     const priced = saleForLine(item.line);
     const sales = salesForLine(item.line);
@@ -773,7 +774,7 @@ export async function buildSupplyPositions(
       ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
       ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
       ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-      ...(code.length >= 8 ? { code } : {}),
+      ...(codeKey.length >= 8 ? { code: codeKey } : {}),
       ...(code ? { article: code } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
