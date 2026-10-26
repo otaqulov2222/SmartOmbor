@@ -391,7 +391,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 a.kpi:hover { background: var(--surface-2); }
 .kpi strong { font-size: clamp(1.05rem, 1.15vw, 1.35rem); white-space: nowrap; }
 @media (max-width: 1180px) { .kpi strong { font-size: 1.3rem; } }
-@media (max-width: 560px) { .kpi strong { white-space: normal; } }
+@media (max-width: 560px) { .kpi strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 .dash-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1rem; align-items: start; }
 .dash-col { display: grid; gap: 1rem; min-width: 0; }
 .wh-list, .attn-list, .doc-list, .rank-list, .user-list { display: grid; }
@@ -760,7 +760,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .settings-connect { flex-direction: column; align-items: stretch; }
   .settings-connect .btn { width: 100%; }
   .form-grid, .detail-grid, .metrics-3, .metrics.metrics-3, .board, .maker-row, .auth, .metrics, .dash-col, .stack, .partner-kpis, .product-kpis, .product-sheet { grid-template-columns: minmax(0, 1fr); }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis { grid-template-columns: minmax(0, 1fr); }
   .gate { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1.6rem; height: auto; min-height: 100dvh; padding: 1.5rem 1.15rem calc(1.5rem + env(safe-area-inset-bottom)); background: #fff; overflow: visible; }
   .metric strong { font-size: 1.25rem; word-break: normal; }
   .maker-open-head { flex-direction: column; }
@@ -769,9 +769,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .maker-summary strong { font-size: 1.45rem; }
   .maker-sort { width: 100%; }
   .maker-sort button { flex: 1; }
-  .kpi { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .kpi:nth-child(2n) { border-right: 0; }
-  .kpi:nth-last-child(-n+2) { border-bottom: 0; }
+  .kpi { border-right: 0; border-bottom: 1px solid var(--line); padding: .85rem 1rem; overflow: hidden; }
+  .kpi:last-child { border-bottom: 0; }
   .manual { grid-template-columns: 1fr; } .manual .btn { width: 100%; }
   .scan-tools { grid-template-columns: minmax(0, 1fr); }
   .scan-actions { grid-template-columns: minmax(0, 1fr); width: 100%; }
@@ -813,7 +812,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .markup-row { grid-template-columns: 1fr 1fr; }
   .markup-row .form-actions { grid-column: 1 / -1; }
   .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis { grid-template-columns: minmax(0, 1fr); }
   .metrics { grid-template-columns: 1fr; }
   .gate { padding-inline: 1rem; }
   .spark { height: 120px; }
@@ -1080,9 +1079,9 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .page-head h1 { font-size: 1.28rem; overflow-wrap: break-word; word-break: normal; }
   .page-head p { font-size: .88rem; }
   .page-actions, .partner-bar, .factory-actions, .waybill-tools, .waybill-head-tools, .card-head, .form-actions, .scan-session, .scan-row-actions, .yx-send, .yx-actions, .cabinet-tools { align-items: stretch; }
-  .page-actions { width: 100%; flex: none; margin-left: 0; display: flex; flex-wrap: wrap; justify-content: stretch; gap: .5rem; }
-  .page-actions > * { flex: 1 1 calc(50% - .25rem); width: auto; min-width: 0; max-width: 100%; }
-  .page-actions .dash-day { flex: 1 1 100%; width: 100%; }
+  .page-actions { width: 100%; flex: none; margin-left: 0; display: grid; grid-template-columns: 1fr 1fr; justify-content: stretch; gap: .5rem; }
+  .page-actions > * { min-width: 0; max-width: 100%; }
+  .page-actions .dash-day, .page-actions > :only-child { grid-column: 1 / -1; width: 100%; }
   .page-actions .btn, .toolbar > .btn, .partner-bar > .btn, .factory-actions .btn, .waybill-tools .btn, .waybill-head-tools .btn, .form-actions .btn, .yx-send .btn, .yx-actions .btn {
     width: 100%; height: auto; min-width: 0; max-width: 100%; min-height: 2.75rem; padding: .65rem .9rem; flex: none;
     font-size: .95rem; line-height: 1.2; gap: .4rem; border-radius: .8rem;
@@ -1113,7 +1112,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .topbar .chip span { display: none; }
   .scan-btn span { display: none; }
   .scan-btn { width: 2.9rem; height: 2.9rem; padding: 0; flex: none; }
-  .product-kpis b, .kpi strong, .metric strong, .factory-id h1, .modal h2, .shipment header strong, .cabinet-kpis b { overflow-wrap: break-word; word-break: normal; white-space: normal; }
+  .product-kpis b, .metric strong, .factory-id h1, .modal h2, .shipment header strong, .cabinet-kpis b { overflow-wrap: break-word; word-break: normal; white-space: normal; }
+  .kpi strong { overflow-wrap: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1.12rem; }
   .waybill-sum, .partner-kpis b, .yx-totals b, .waybill-table td.num, .yx-sum { white-space: nowrap; overflow-wrap: normal; }
   .scan-row h2, .scan-row p, .product-copy b, .attn-copy b, .doc-copy b { overflow-wrap: break-word; word-break: normal; }
   .product-kpis b, .partner-kpis b { font-size: 1.15rem; }
@@ -1227,10 +1227,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .settings-connect .input, .settings-token { width: 100%; }
   .user-row { flex-wrap: wrap; }
   .notice { align-items: flex-start; }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis { grid-template-columns: minmax(0, 1fr); }
   .metrics, .product-kpis, .partner-kpis { grid-template-columns: 1fr; }
-  .kpi { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .kpi:nth-child(2n) { border-right: 0; }
-  .kpi:nth-last-child(-n+2) { border-bottom: 0; }
+  .kpi { border-right: 0; border-bottom: 1px solid var(--line); padding: .85rem 1rem; overflow: hidden; }
+  .kpi:last-child { border-bottom: 0; }
+  .kpi strong { font-size: 1.12rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sale-triple-row, .product-add .sale-triple-row, .sale-triple.compact .sale-triple-row { grid-template-columns: minmax(5.4rem, 1fr) 5.8rem; }
 }
