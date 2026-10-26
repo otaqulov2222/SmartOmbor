@@ -805,7 +805,10 @@ export function listWaybillProducts(
       if (group && !parts.groupCode && lastNumericToken(product.category || "") !== group) return false;
       return true;
     }
-    if (!wholeToken(product.name, code, 1)) return false;
+    const compact = compactCode(code);
+    const byIdentity = sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code);
+    const byName = wholeToken(product.name, code, 1) || (compact.length >= 3 && compactCode(product.name).includes(compact));
+    if (!byIdentity && !byName) return false;
     if (size && !product.name.trim().endsWith(size)) return false;
     if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group && !wholeToken(product.name, group)) return false;
     return true;

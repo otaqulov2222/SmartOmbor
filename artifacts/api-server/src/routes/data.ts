@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -729,12 +729,13 @@ router.post("/products", async (req, res, next) => {
     const quoted = (Object.entries(prices) as Array<[string, number | null]>).filter((entry): entry is [string, number] => entry[1] != null);
     if (quoted.length > 0 || cost != null) {
       const [priceTypes, currencies] = await Promise.all([
-        moysklad<Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>>("/context/companysettings/pricetype"),
+        moysklad<unknown>("/context/companysettings/pricetype"),
         moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
       ]);
       const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+      const types = priceTypeRows(priceTypes);
       const salePrices = quoted.flatMap(([typeName, price]) => {
-        const priceType = priceTypes.find((row) => row.name === typeName)?.meta;
+        const priceType = matchPriceType(types, typeName);
         return currency && priceType ? [{ value: Math.round(price * 100), currency: { meta: currency }, priceType: { meta: priceType } }] : [];
       });
       if (!currency || salePrices.length !== quoted.length) {
@@ -818,15 +819,31 @@ router.post("/products", async (req, res, next) => {
   }
 });
 
+function priceTypeRows(raw: unknown): Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }> {
+  const list = Array.isArray(raw) ? raw : Array.isArray((raw as { rows?: unknown[] })?.rows) ? (raw as { rows: unknown[] }).rows : [];
+  return list.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const item = row as { name?: string; meta?: { href?: string; type?: string; mediaType?: string } };
+    if (!item.meta?.href) return [];
+    return [{ name: item.name, meta: { href: item.meta.href, type: item.meta.type || "pricetype", mediaType: item.meta.mediaType || "application/json" } }];
+  });
+}
+
+function matchPriceType(rows: Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>, typeName: string) {
+  const wanted = typeName.trim().toLowerCase();
+  return rows.find((row) => (row.name || "").trim().toLowerCase() === wanted)?.meta;
+}
+
 async function uzsSalePrices(quoted: Array<[string, number]>) {
   if (quoted.length === 0) return [];
   const [priceTypes, currencies] = await Promise.all([
-    moysklad<Array<{ name?: string; meta: { href: string; type: string; mediaType: string } }>>("/context/companysettings/pricetype"),
+    moysklad<unknown>("/context/companysettings/pricetype"),
     moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
   ]);
   const currency = currencies.rows.find((row) => row.isoCode === "UZS")?.meta;
+  const types = priceTypeRows(priceTypes);
   const salePrices = quoted.flatMap(([typeName, price]) => {
-    const priceType = priceTypes.find((row) => row.name === typeName)?.meta;
+    const priceType = matchPriceType(types, typeName);
     return currency && priceType ? [{ value: Math.round(price * 100), currency: { meta: currency }, priceType: { meta: priceType } }] : [];
   });
   if (!currency || salePrices.length !== quoted.length) return null;
@@ -978,8 +995,7 @@ router.get("/products/suggest", async (req, res, next) => {
       return;
     }
     const catalog = peekCatalog() ?? await loadCatalog();
-    const needle = code.toLowerCase();
-    const exact = catalog.products.filter((product) => product.code?.toLowerCase() === needle || product.article?.toLowerCase() === needle);
+    const exact = catalog.products.filter((product) => sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code));
     const sample = exact.find((product) => product.category || product.factory || product.cost || product.salePrice) || exact[0] || null;
     const folders = await moyskladAll<{ id?: string; name?: string; pathName?: string }>("/entity/productfolder");
     const folderRows = folders.rows.filter((row) => row.id && row.name).map((row) => ({ id: row.id as string, name: row.name as string, pathName: row.pathName }));
@@ -1077,7 +1093,8 @@ router.put("/products/:id", async (req, res, next) => {
     };
     const quoted = (Object.entries(merged) as Array<[string, number | null]>).filter((entry): entry is [string, number] => entry[1] != null);
     const payload: Record<string, unknown> = { name };
-    if (code) payload.code = code;
+    const codeKey = code.replace(/\s+/g, "");
+    if (codeKey) payload.code = codeKey;
     if (article) payload.article = article;
     const existingCodes = (current.barcodes ?? []).flatMap((item) => Object.values(item)).filter((value) => value.length > 0);
     if (barcode && barcode !== existingCodes[0]) {

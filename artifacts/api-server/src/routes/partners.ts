@@ -652,9 +652,8 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
       const name = product.name.toLowerCase();
       let score = 0;
       const token = new RegExp(`(^|\\D)${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`);
-      if (code === query || article === query) score = 4;
-      else if (token.test(name)) score = 3;
-      else if (code === compact || article === compact) score = 2;
+      if (code === query || article === query || compactCode(code) === compact || compactCode(article) === compact) score = 4;
+      else if (token.test(name) || (compact.length >= 3 && compactCode(name).includes(compact))) score = 3;
       if (score) scored.push({ score, id: product.id, name: product.name, code: product.code, article: product.article, barcode: product.barcodes[0] ?? null });
     }
     scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

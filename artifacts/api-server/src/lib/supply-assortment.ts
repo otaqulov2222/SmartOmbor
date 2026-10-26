@@ -175,7 +175,7 @@ export async function writeProductCard(
     );
   }
   if (extras.packSize && extras.packSize > 1) await ensurePachka(productId, extras.packSize);
-  if (hasSaleMarkup(current.salePrices)) return;
+  if (hasAllSaleMarkups(current.salePrices)) return;
   const sales = extras.sales && Object.values(extras.sales).some((value) => typeof value === "number" && value > 0)
     ? extras.sales
     : (kopecks > 0 && priceType ? { [priceType]: som } : null);
@@ -474,8 +474,9 @@ async function listedAllPrices(current: Price[] | undefined, sales: Partial<Reco
   const rows = [...types.values()].map((type) => {
     const existing = (current ?? []).find((price) => price.priceType?.meta?.href === type.meta.href);
     const som = Object.entries(sales).find(([name, value]) => samePriceType(name, type.name) && typeof value === "number" && value > 0)?.[1];
+    const keep = (existing?.value ?? 0) > 0 ? existing?.value : null;
     return {
-      value: som != null ? Math.round(som * 100) : (existing?.value ?? 0),
+      value: keep ?? (som != null ? Math.round(som * 100) : 0),
       currency: existing?.currency ?? { meta: currencyMeta },
       priceType: { meta: type.meta, name: type.name },
     };
@@ -587,8 +588,9 @@ function saleTypeOf(line: ShipmentLine): string {
   return line.price > 0 ? "Exclusive" : "";
 }
 
-function hasSaleMarkup(prices?: Price[]) {
-  return (prices ?? []).some((price) => Boolean(price.priceType?.name) && SALE_TYPES.includes(price.priceType?.name || "") && (price.value ?? 0) > 0);
+function hasAllSaleMarkups(prices?: Price[]) {
+  const present = (prices ?? []).filter((price) => (price.value ?? 0) > 0 && price.priceType?.name);
+  return SALE_TYPES.every((type) => present.some((price) => samePriceType(price.priceType?.name || "", type)));
 }
 
 function saleForLine(line: ShipmentLine) {
@@ -849,7 +851,7 @@ export async function buildSupplyPositions(
           }
           const priced = saleForLine(item.line);
           const sales = salesForLine(item.line);
-          const listed = hasSaleMarkup(current) ? null : (sales ? await listedAllPrices(current, sales, currencyMeta) : await listedPrices(current, priced.type, priced.sale, currencyMeta));
+          const listed = hasAllSaleMarkups(current) ? null : (sales ? await listedAllPrices(current, sales, currencyMeta) : await listedPrices(current, priced.type, priced.sale, currencyMeta));
           const saleBody = listed ? { salePrices: priceBody(listed) } : {};
           const buyBody = item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {};
           if (listed || item.line.price > 0) {
