@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -558,11 +558,12 @@ router.get("/warehouses", async (_req, res, next) => {
 });
 
 function matchesSearch(product: CatalogProduct, search: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) return true;
-  return [product.name, product.code, product.article, product.category, product.factory, ...product.barcodes]
-    .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(needle));
+  const raw = search.trim();
+  if (!raw) return true;
+  const folded = compactCode(raw);
+  const fields = [product.name, product.code, product.article, product.category, product.factory, ...product.barcodes].filter(Boolean).map(String);
+  if (fields.some((value) => value.toLocaleLowerCase("en-US").includes(raw.toLocaleLowerCase("en-US")))) return true;
+  return folded.length >= 2 && fields.some((value) => compactCode(value).includes(folded));
 }
 
 function ean13(code: string) {

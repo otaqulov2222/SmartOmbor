@@ -636,24 +636,23 @@ router.get("/factory/me", requireFactory, (_req, res) => {
 
 router.get("/factory/products", requireFactory, async (req, res, next) => {
   try {
-    const query = String(req.query.q ?? "").trim().toLowerCase();
+    const query = String(req.query.q ?? "").trim();
     if (query.length < 2) {
       res.json({ items: [] });
       return;
     }
     const catalog = await loadCatalog();
     const account = res.locals.factory as { code?: string; name?: string; catalogName?: string };
-    const compact = query.replace(/[\s-]/g, "");
+    const compact = compactCode(query);
     const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];
     for (const product of catalog.products) {
       if (!productBelongsToFactory(product, account.code || "", account.catalogName || account.name || "")) continue;
-      const code = (product.code || "").toLowerCase();
-      const article = (product.article || "").toLowerCase();
-      const name = product.name.toLowerCase();
+      const code = product.code || "";
+      const article = product.article || "";
       let score = 0;
-      const token = new RegExp(`(^|\\D)${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`);
-      if (code === query || article === query || compactCode(code) === compact || compactCode(article) === compact) score = 4;
-      else if (token.test(name) || (compact.length >= 3 && compactCode(name).includes(compact))) score = 3;
+      const token = new RegExp(`(^|\\D)${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`, "i");
+      if (compactCode(code) === compact || compactCode(article) === compact) score = 4;
+      else if (token.test(product.name) || (compact.length >= 3 && compactCode(product.name).includes(compact))) score = 3;
       if (score) scored.push({ score, id: product.id, name: product.name, code: product.code, article: product.article, barcode: product.barcodes[0] ?? null });
     }
     scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
