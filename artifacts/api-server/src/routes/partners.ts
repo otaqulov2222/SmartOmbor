@@ -298,24 +298,19 @@ async function replaceZeroSupply(supplyId: string) {
 }
 
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>) {
-  const chunk = 80;
-  const head = positions.slice(0, chunk);
-  const tail = positions.slice(chunk);
   const attempts: Array<{ applicable: boolean; label: string }> = [
     { applicable: true, label: "posted" },
     { applicable: true, label: "posted-retry" },
     { applicable: false, label: "draft" },
   ];
   let last: unknown;
-  let created: { id: string; name?: string } | null = null;
   for (const attempt of attempts) {
     try {
-      created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+      return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
         ...core,
         applicable: attempt.applicable,
-        positions: head,
+        positions,
       });
-      break;
     } catch (error) {
       last = error;
       const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
@@ -331,14 +326,7 @@ async function postSupplyDocument(core: Record<string, unknown>, positions: Arra
       if (!retry) throw error;
     }
   }
-  if (!created) throw last instanceof Error ? last : new MoySkladError("Kirim yozilmadi", 502);
-  for (let offset = 0; offset < tail.length; offset += chunk) {
-    const batch = tail.slice(offset, offset + chunk);
-    for (const position of batch) {
-      await moyskladSend(`/entity/supply/${encodeURIComponent(created.id)}/positions`, position);
-    }
-  }
-  return created;
+  throw last instanceof Error ? last : new MoySkladError("Kirim yozilmadi", 502);
 }
 
 router.get("/counterparties", async (req, res, next) => {

@@ -672,11 +672,11 @@ export function compactCode(value: string): string {
 }
 
 export function normalizeBordoColor(value: string) {
-  return foldGlyphs(value)
+  return value.normalize("NFKC")
+    .replace(/[Рр]/g, "R")
     .trim()
     .replace(/[\s\-_.\/]+/g, "")
-    .toLocaleUpperCase("en-US")
-    .replace(/P/g, "R");
+    .toLocaleUpperCase("en-US");
 }
 
 export function sameBordoColor(left: string, right: string) {

@@ -930,7 +930,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-table tr.has-colors td { background: #f5f8ff; }
 .waybill-table tr.has-colors td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
 .waybill-table th.waybill-colors-cell,
-.waybill-table td.waybill-colors-cell { width: 4.4rem; max-width: 4.4rem; white-space: nowrap; text-align: center; }
+.waybill-table td.waybill-colors-cell { width: 5.6rem; min-width: 5.6rem; max-width: 5.6rem; white-space: nowrap; text-align: center; }
 .waybill-table .color-empty { color: var(--muted); }
 .color-count { display: inline-grid; place-items: center; min-width: 1.85rem; height: 1.5rem; padding: 0 .4rem; border-radius: 999px; background: #e8eeff; color: #1e3a8a; font-size: .78rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .waybill-table tr.waybill-color-strip td { padding: .4rem .85rem .55rem; background: #eef3ff; border-top: 0; box-shadow: inset 3px 0 0 var(--brand); }
@@ -1207,6 +1207,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     background: #eef3ff; box-shadow: inset 4px 0 0 var(--brand); overflow: visible;
   }
   .waybill-table tr.has-colors { border-bottom-left-radius: 0; border-bottom-right-radius: 0; padding-bottom: .35rem; }
+  .waybill-table tr.has-colors:has(+ tr .waybill-colors) { border-radius: .9rem; padding-bottom: .75rem; }
   .waybill-table tr.waybill-color-strip td {
     display: block; width: 100%; max-width: 100%; padding: 0; border: 0; background: transparent; box-shadow: none;
   }

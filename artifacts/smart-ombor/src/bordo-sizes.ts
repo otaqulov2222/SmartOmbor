@@ -7,7 +7,8 @@ export function isBordoSize(value: string): value is BordoSize {
 }
 
 export function bordoColorKey(value: string) {
-  return [...value.normalize('NFKC')].map(ch => (ch === 'Р' || ch === 'р' || ch === 'P' || ch === 'p' ? 'R' : ch)).join('')
+  return value.normalize('NFKC')
+    .replace(/[Рр]/g, 'R')
     .replace(/[\s\-_.\/]+/g, '')
     .toLocaleUpperCase('en-US');
 }
