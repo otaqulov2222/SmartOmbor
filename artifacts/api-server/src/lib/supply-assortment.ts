@@ -1,4 +1,4 @@
-import { compactCode, matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, sameProductCode, type Catalog } from "./catalog";
+import { canonicalFactoryCode, compactCode, matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, sameFactoryCode, sameProductCode, type Catalog } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -617,7 +617,7 @@ export async function stampWaybillCardPrices(
   const seen = new Set<string>();
   for (const line of lines) {
     if (!(line.price > 0)) continue;
-    const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
     const matched = await findExistingBordoProduct(line, scope);
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
@@ -635,7 +635,7 @@ export async function stampWaybillCardPrices(
 
 function productIdentity(line: ShipmentLine, factoryCode: string) {
   return [
-    compactCode(line.factoryCode || factoryCode),
+    compactCode(canonicalFactoryCode(line.factoryCode || factoryCode, factoryCode)),
     compactCode(line.sectionCode),
     compactCode(line.productCode),
     line.size.trim().toLowerCase(),
@@ -644,7 +644,7 @@ function productIdentity(line: ShipmentLine, factoryCode: string) {
 
 function parentIdentity(line: ShipmentLine, factoryCode: string) {
   return [
-    compactCode(line.factoryCode || factoryCode),
+    compactCode(canonicalFactoryCode(line.factoryCode || factoryCode, factoryCode)),
     compactCode(line.productCode),
     line.size.trim().toLowerCase(),
   ].join("\0");
@@ -663,13 +663,13 @@ export async function findExistingBordoProduct(
   if (line.productId) {
     const byId = await productById(line.productId);
     const parts = byId?.name ? parseBordoName(byId.name) : null;
-    const factory = (line.factoryCode || scope.factoryCode).trim().toLowerCase();
+    const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
     const codeOk = !parts || sameProductCode(parts.productCode, line.productCode);
     const sizeOk = !line.size.trim() || !parts || parts.size === line.size.trim();
-    const factoryOk = !parts || !factory || parts.factoryCode.toLowerCase() === factory;
+    const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
     if (byId && codeOk && sizeOk && factoryOk) return byId;
   }
-  const factory = line.factoryCode || scope.factoryCode;
+  const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
@@ -732,7 +732,7 @@ export async function buildSupplyPositions(
     const parts = receiptParts(line);
     if (!parts.length) continue;
     requireWaybillLine(line);
-    const name = ["Bordo", line.factoryCode || scope.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
     const parent = await findExistingBordoProduct(line, scope);
     if (parent?.name) {
       const parts = parseBordoName(parent.name);

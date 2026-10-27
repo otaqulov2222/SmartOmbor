@@ -661,6 +661,23 @@ export function normalizeBordoCode(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLocaleUpperCase("ru-RU");
 }
 
+export function canonicalFactoryCode(value: string, fallback = ""): string {
+  const raw = normalizeBordoCode(value);
+  const fb = normalizeBordoCode(fallback);
+  if (/^\d{3,6}$/.test(raw)) return raw;
+  if (/^\d{3,6}$/.test(fb) && compactCode(raw).endsWith(compactCode(fb))) return fb;
+  const tail = raw.match(/(\d{3,6})$/);
+  if (tail) return tail[1];
+  if (/^\d{3,6}$/.test(fb)) return fb;
+  return raw || fb;
+}
+
+export function sameFactoryCode(left: string, right: string) {
+  const a = canonicalFactoryCode(left);
+  const b = canonicalFactoryCode(right);
+  return Boolean(a) && a === b;
+}
+
 export function sameProductCode(left: string, right: string) {
   const a = compactCode(left);
   const b = compactCode(right);
@@ -753,7 +770,7 @@ export function productBelongsToFactory(product: { name: string; factory: string
   if (label && factory && (factory === label || factory.includes(label) || label.includes(factory))) return true;
   const code = factoryCode.trim().toLowerCase();
   const parts = parseBordoName(product.name);
-  if (code && parts && sameToken(parts.factoryCode, code)) return true;
+  if (code && parts && sameFactoryCode(parts.factoryCode, code)) return true;
   return code.length >= 3 && wholeToken(`${product.factory || ""} ${product.name}`.toLowerCase(), code);
 }
 

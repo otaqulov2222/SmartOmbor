@@ -4,7 +4,7 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 import { parseMarkups, parsePct, type SaleMarkup } from "./markup";
-import { normalizeBordoCode } from "./catalog";
+import { canonicalFactoryCode, normalizeBordoCode } from "./catalog";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -170,7 +170,7 @@ export function getAccount(id: string) {
 export function createAccount(input: { name: string; code: string; catalogName: string; login: string; password: string }) {
   const store = load();
   const login = input.login.trim().toLowerCase();
-  const code = input.code.trim().toUpperCase();
+  const code = canonicalFactoryCode(input.code, input.code.trim().toUpperCase());
   if (store.accounts.some((account) => account.login === login)) {
     throw Object.assign(new Error("login_taken"), { status: 409 });
   }
@@ -202,7 +202,7 @@ export function updateAccount(id: string, input: { name: string; code: string; l
   const account = store.accounts.find((item) => item.id === id);
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
   const login = input.login.trim().toLowerCase();
-  const code = input.code.trim().toUpperCase();
+  const code = canonicalFactoryCode(input.code, input.code.trim().toUpperCase());
   const name = input.name.trim();
   if (!name || !code || !login) throw Object.assign(new Error("required"), { status: 400 });
   if (store.accounts.some((item) => item.id !== id && item.login === login)) {
@@ -318,7 +318,7 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
   const quantity = Math.max(0, Number(raw.quantity) || 0) || (pairs > 0 ? 0 : colorQty);
   return {
     id: randomBytes(6).toString("hex"),
-    factoryCode: normalizeBordoCode(String(raw.factoryCode || factoryCode)),
+    factoryCode: canonicalFactoryCode(String(raw.factoryCode || factoryCode), factoryCode),
     sectionCode: normalizeBordoCode(String(raw.sectionCode ?? "")),
     productCode: normalizeBordoCode(String(raw.productCode ?? "")),
     model: String(raw.model ?? "").trim(),

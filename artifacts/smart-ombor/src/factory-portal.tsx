@@ -42,6 +42,13 @@ function codeValue(value: string) {
   return codeInput(value).trim();
 }
 
+function factoryCodeOf(account: { code: string }) {
+  const raw = account.code.trim().toUpperCase();
+  if (/^\d{3,6}$/.test(raw)) return raw;
+  const tail = raw.match(/(\d{3,6})$/);
+  return tail ? tail[1] : raw;
+}
+
 function unitsOf(line: Draft) {
   const pack = num(line.pairs);
   const boxes = num(line.boxes);
@@ -138,7 +145,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const { t } = useI18n();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
-  const [lines, setLines] = useState<Draft[]>(() => [blank(account.code)]);
+  const [lines, setLines] = useState<Draft[]>(() => [blank(factoryCodeOf(account))]);
   const [error, setError] = useState('');
   const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
@@ -164,7 +171,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     const merged = { ...line, ...next };
     const code = merged.productCode.trim();
     if (!code) { if (next) patch(line.key, next); return; }
-    const qs = new URLSearchParams({ code, factory: account.code });
+    const qs = new URLSearchParams({ code, factory: factoryCodeOf(account) });
     if (merged.size.trim()) qs.set('size', merged.size.trim());
     if (merged.groupCode.trim()) qs.set('group', merged.groupCode.trim());
     void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; groupCode?: string; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
@@ -185,7 +192,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     setEditingStatus(null);
     setDate(new Date().toISOString().slice(0, 10));
     setNote('');
-    setLines([blank(account.code)]);
+    setLines([blank(factoryCodeOf(account))]);
   };
 
   const beginRevise = (item: Shipment) => {
@@ -195,7 +202,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     setNote(item.note || '');
     setLines(withBlank(item.lines.map(line => ({
       key: line.id,
-      factoryCode: line.factoryCode || account.code,
+      factoryCode: factoryCodeOf({ code: line.factoryCode || account.code }),
       groupCode: line.sectionCode || '',
       productCode: line.productCode,
       model: line.model || '',
@@ -220,7 +227,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
     const payload = filled.map(line => ({
       id: editingId ? line.key : undefined,
-      factoryCode: account.code,
+      factoryCode: factoryCodeOf(account),
       sectionCode: codeValue(line.groupCode),
       productId: null,
       productName: null,
@@ -322,7 +329,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })} onBlur={e => fillPassport(line, { price: digits(e.target.value) })}/></label>
           <label className="yx-cell yx-sum-cell"><span>{t('zavod.sum')}</span><input className="input yx-sum" aria-label={t('zavod.sum')} value={sum ? money(sum) : ''} readOnly/></label>
-          <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank(account.code)]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
+          <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank(factoryCodeOf(account))]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
         </div>;
       })}
     </div>
