@@ -1,4 +1,4 @@
-import { canonicalFactoryCode, compactCode, matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, sameFactoryCode, sameProductCode, type Catalog } from "./catalog";
+import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, productCodeMatches, sameFactoryCode, type Catalog } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -238,10 +238,33 @@ async function productById(id: string) {
   return null;
 }
 
+function namesEquivalent(left: string, right: string) {
+  return foldProductName(left) === foldProductName(right);
+}
+
 async function productByName(name: string) {
-  const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=name=${encodeURIComponent(name)}`);
-  const hit = page.rows.find((row) => row.id && row.name === name);
-  return hit?.id ? productById(hit.id) : null;
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const folded = foldProductName(trimmed);
+  const candidates = [...new Set([trimmed, trimmed.replace(/\s+/g, " "), folded].filter(Boolean))];
+  for (const candidate of candidates) {
+    try {
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=25&filter=name=${encodeURIComponent(candidate)}`);
+      const hit = page.rows.find((row) => row.id && namesEquivalent(row.name || "", trimmed));
+      if (hit?.id) return productById(hit.id);
+    } catch (error) {
+      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+    }
+  }
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(folded)}`);
+    const hit = page.rows.find((row) => row.id && namesEquivalent(row.name || "", trimmed));
+    if (hit?.id) return productById(hit.id);
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+    logger.warn({ name: trimmed, err: error instanceof Error ? error.message : error }, "MoySklad product-by-name search skipped");
+  }
+  return null;
 }
 
 function uniqueNameConflict(error: unknown) {
@@ -653,7 +676,21 @@ function parentIdentity(line: ShipmentLine, factoryCode: string) {
 function productCodeForms(value: string) {
   const spaced = value.trim().replace(/\s+/g, " ");
   const tight = spaced.replace(/\s+/g, "");
-  return [...new Set([spaced, tight].filter(Boolean))];
+  const upper = spaced.toLocaleUpperCase("ru-RU");
+  const lower = spaced.toLocaleLowerCase("ru-RU");
+  return [...new Set([spaced, tight, upper, lower].filter(Boolean))];
+}
+
+function searchQueries(factory: string, groupCode: string, productCode: string, size: string) {
+  const codes = productCodeForms(productCode);
+  const primary = codes[0] || "";
+  const queries = [
+    ["Bordo", factory, groupCode, primary, size].filter(Boolean).join(" "),
+    ["Bordo", factory, primary, size].filter(Boolean).join(" "),
+    [factory, primary, size].filter(Boolean).join(" "),
+    ...codes.slice(1).map((code) => [factory, code, size].filter(Boolean).join(" ")),
+  ];
+  return [...new Set(queries.map((item) => item.trim().replace(/\s+/g, " ")).filter((item) => item.length >= 3))];
 }
 
 export async function findExistingBordoProduct(
@@ -664,8 +701,8 @@ export async function findExistingBordoProduct(
     const byId = await productById(line.productId);
     const parts = byId?.name ? parseBordoName(byId.name) : null;
     const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
-    const codeOk = !parts || sameProductCode(parts.productCode, line.productCode);
-    const sizeOk = !line.size.trim() || !parts || parts.size === line.size.trim();
+    const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
+    const sizeOk = !line.size.trim() || !parts || parts.size === line.size.trim().replace(/[–—]/g, "-");
     const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
     if (byId && codeOk && sizeOk && factoryOk) return byId;
   }
@@ -682,9 +719,7 @@ export async function findExistingBordoProduct(
     const row = await productById(catalogMatch.id);
     if (row) return row;
   }
-  for (const code of productCodeForms(line.productCode)) {
-    const query = [factory, code, line.size].filter(Boolean).join(" ");
-    if (query.length < 3) continue;
+  for (const query of searchQueries(factory, groupCode, line.productCode, line.size)) {
     try {
       const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
       const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
@@ -694,9 +729,21 @@ export async function findExistingBordoProduct(
         groupCode,
         productCode: line.productCode,
         size: line.size,
+      }) || matchNamedProducts(rows, {
+        factoryCode: factory,
+        factoryName: scope.factoryName,
+        groupCode: "",
+        productCode: line.productCode,
+        size: line.size,
       });
       if (matched?.id) {
         const row = await productById(matched.id);
+        if (row) return row;
+      }
+      const wanted = foldProductName(["Bordo", factory, groupCode, line.productCode, line.size].filter(Boolean).join(" "));
+      const folded = rows.find((row) => namesEquivalent(row.name, wanted) || namesEquivalent(row.name, ["Bordo", factory, line.productCode, line.size].filter(Boolean).join(" ")));
+      if (folded?.id) {
+        const row = await productById(folded.id);
         if (row) return row;
       }
     } catch (error) {
@@ -706,7 +753,7 @@ export async function findExistingBordoProduct(
   }
   const names = [...new Set(productCodeForms(line.productCode).flatMap((code) => [
     ["Bordo", factory, groupCode, code, line.size].filter(Boolean).join(" ").trim(),
-    ...(groupCode.trim() ? [] : [["Bordo", factory, code, line.size].filter(Boolean).join(" ").trim()]),
+    ["Bordo", factory, code, line.size].filter(Boolean).join(" ").trim(),
   ]))].filter((item) => item.length >= 2);
   for (const candidate of names) {
     const hit = await productByName(candidate);

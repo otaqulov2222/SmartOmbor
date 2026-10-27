@@ -684,6 +684,18 @@ export function sameProductCode(left: string, right: string) {
   return Boolean(a) && a === b;
 }
 
+export function productCodeMatches(nameCode: string, typed: string) {
+  if (sameProductCode(nameCode, typed)) return true;
+  const named = normalizeBordoCode(nameCode).split(" ").filter(Boolean);
+  const want = normalizeBordoCode(typed).split(" ").filter(Boolean);
+  if (!want.length || named.length < want.length) return false;
+  return want.every((token, i) => compactCode(token) === compactCode(named[i]));
+}
+
+export function foldProductName(value: string) {
+  return value.trim().replace(/[–—]/g, "-").replace(/\s+/g, " ").replace(/\s+\d{4,}$/, "").toLocaleUpperCase("ru-RU");
+}
+
 function indexKeys(value: string): string[] {
   const compact = compactCode(value);
   if (compact.length < 3) return [];
@@ -718,7 +730,14 @@ let barcodeIndex = new Map<string, CatalogProduct[]>();
 function wholeToken(name: string, token: string, min = 3) {
   const clean = token.trim();
   if (clean.length < min) return false;
-  return new RegExp(`(^|\\D)${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`).test(name);
+  return new RegExp(`(^|\\D)${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\D|$)`, "i").test(name);
+}
+
+function nameHasSize(name: string, size: string) {
+  if (!size.trim()) return true;
+  const haystack = name.replace(/[–—]/g, "-").replace(/\s+/g, " ");
+  const needle = size.trim().replace(/[–—]/g, "-");
+  return new RegExp(`(?:^|\\s)${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`).test(haystack);
 }
 
 function sameToken(left: string, right: string) {
@@ -732,7 +751,7 @@ export function lastNumericToken(label: string) {
 }
 
 export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string } | null {
-  let raw = name.trim();
+  let raw = name.trim().replace(/[–—]/g, "-").replace(/\s+/g, " ");
   let color = "";
   const paren = raw.match(/\(([^)]+)\)\s*$/);
   if (paren && paren.index != null) {
@@ -744,10 +763,11 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
     color = color || tail[1];
     raw = raw.slice(0, tail.index).trim();
   }
-  const sizeHit = raw.match(/(\d{2}-\d{2})$/);
-  if (!sizeHit) return null;
-  const size = sizeHit[1];
-  const head = raw.slice(0, -size.length).trim();
+  raw = raw.replace(/\s+\d{4,}$/, "");
+  const sizeMatch = [...raw.matchAll(/\d{2}-\d{2}/g)].pop();
+  if (!sizeMatch || sizeMatch.index == null) return null;
+  const size = sizeMatch[0];
+  const head = raw.slice(0, sizeMatch.index).trim();
   const tokens = head.split(/\s+/).filter(Boolean);
   if (tokens[0] && /^bordo$/i.test(tokens[0])) tokens.shift();
   if (tokens.length < 2) return null;
@@ -758,6 +778,9 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   if (rest.length >= 2 && /^\d{3,6}$/.test(rest[0])) {
     groupCode = rest[0];
     productTokens = rest.slice(1);
+  }
+  while (productTokens.length >= 2 && /^\d{4,}$/.test(productTokens[productTokens.length - 1])) {
+    productTokens = productTokens.slice(0, -1);
   }
   const productCode = productTokens.join(" ");
   if (!productCode) return null;
@@ -816,7 +839,7 @@ export function listWaybillProducts(
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
     const parts = parseBordoName(product.name);
     if (parts) {
-      if (!sameProductCode(parts.productCode, code)) return false;
+      if (!productCodeMatches(parts.productCode, code)) return false;
       if (size && !sameToken(parts.size, size)) return false;
       if (group && parts.groupCode && !sameToken(parts.groupCode, group)) return false;
       if (group && !parts.groupCode && lastNumericToken(product.category || "") !== group) return false;
@@ -824,9 +847,9 @@ export function listWaybillProducts(
     }
     const compact = compactCode(code);
     const byIdentity = sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code);
-    const byName = wholeToken(product.name, code, 1) || (compact.length >= 3 && compactCode(product.name).includes(compact));
+    const byName = wholeToken(product.name, code, 1) || productCodeMatches(product.name, code) || (compact.length >= 3 && compactCode(product.name).includes(compact));
     if (!byIdentity && !byName) return false;
-    if (size && !product.name.trim().endsWith(size)) return false;
+    if (size && !nameHasSize(product.name, size)) return false;
     if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group && !wholeToken(product.name, group)) return false;
     return true;
   });
@@ -843,8 +866,8 @@ export function pickPassport(rows: CatalogProduct[]): { id: string; name: string
   if (rows.length === 1) return { id: rows[0].id, name: rows[0].name };
   const withGroup = rows.filter((product) => Boolean(parseBordoName(product.name)?.groupCode));
   const pool = withGroup.length ? withGroup : rows;
-  const longest = [...pool].sort((a, b) => b.stock - a.stock || b.name.length - a.name.length)[0];
-  return longest ? { id: longest.id, name: longest.name } : null;
+  const chosen = [...pool].sort((a, b) => b.name.length - a.name.length || b.stock - a.stock)[0];
+  return chosen ? { id: chosen.id, name: chosen.name } : null;
 }
 
 export function matchWaybillProduct(

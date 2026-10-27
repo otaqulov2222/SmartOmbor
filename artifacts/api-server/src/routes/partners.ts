@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory, productCodeMatches, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -192,7 +192,7 @@ function lineMatchesCatalogProduct(
   if (!code) return true;
   if (sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code)) return true;
   const parsed = parseBordoName(product.name);
-  if (parsed && sameProductCode(parsed.productCode, code)) return true;
+  if (parsed && productCodeMatches(parsed.productCode, code)) return true;
   const needle = compactCode(code);
   return Boolean(needle) && product.barcodes.some((value) => compactCode(value) === needle);
 }
@@ -236,8 +236,8 @@ function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sect
     if (!(line.price > 0)) continue;
     const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
     let score = 0;
-    const codeOk = parsed ? sameProductCode(parsed.productCode, line.productCode) : false;
-    const sizeOk = parsed ? parsed.size === line.size.trim() : false;
+    const codeOk = parsed ? productCodeMatches(parsed.productCode, line.productCode) : false;
+    const sizeOk = parsed ? parsed.size === line.size.trim().replace(/[–—]/g, "-") : false;
     const groupOk = !line.sectionCode.trim() || (parsed ? sameProductCode(parsed.groupCode, line.sectionCode) : false);
     if (base === identity || compactCode(base) === compactCode(identity)) score = 4;
     else if (color && (base === `${identity} ${color}` || compactCode(base) === compactCode(`${identity} ${color}`))) score = 4;
