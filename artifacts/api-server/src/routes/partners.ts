@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
-import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
+import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -233,43 +233,42 @@ function supplyGone(error: unknown) {
 
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
   const raw = name.trim();
-  const color = raw.match(/\(([^)]+)\)\s*$/)?.[1]?.trim().toLowerCase() || "";
-  const base = raw.replace(/\s*\([^)]+\)\s*$/, "").trim().toLowerCase();
   const parsed = parseBordoName(raw);
+  const color = parsed?.color || raw.match(/\(([^)]+)\)\s*$/)?.[1]?.trim() || "";
+  const base = raw.replace(/\s*\([^)]+\)\s*$/, "").trim().toLowerCase();
   let best: { score: number; price: number } | null = null;
   for (const line of lines) {
     if (!(line.price > 0)) continue;
     const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
     let score = 0;
     const codeOk = parsed ? productCodeMatches(parsed.productCode, line.productCode) : false;
-    const sizeOk = parsed ? parsed.size === line.size.trim().replace(/[–—]/g, "-") : false;
+    const sizeOk = parsed ? compactCode(parsed.size) === compactCode(line.size) : false;
     const groupOk = !line.sectionCode.trim() || (parsed ? sameProductCode(parsed.groupCode, line.sectionCode) : false);
     if (base === identity || compactCode(base) === compactCode(identity)) score = 4;
-    else if (color && (base === `${identity} ${color}` || compactCode(base) === compactCode(`${identity} ${color}`))) score = 4;
+    else if (color && (base === `${identity} ${color}`.toLowerCase() || compactCode(base) === compactCode(`${identity} ${color}`))) score = 4;
     else if (identity && (base.startsWith(identity) || compactCode(base).startsWith(compactCode(identity)))) score = 3;
     else if (codeOk && sizeOk && groupOk) score = 2;
-    if (color && (line.colors ?? []).some((item) => item.name?.trim().toLowerCase() === color)) score += 1;
+    if (color && (line.colors ?? []).some((item) => sameBordoColor(item.name || "", color))) score += 2;
+    else if (color && parsed?.color) score -= 1;
     if (score > (best?.score ?? 0)) best = { score, price: kopecks(line.price) };
   }
-  return best?.price ?? 0;
+  return best && best.score > 0 ? best.price : 0;
 }
 
 async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
   const doc = await moysklad<{ applicable?: boolean; sum?: number; deleted?: string }>(`/entity/supply/${encodeURIComponent(supplyId)}`);
   if (doc.deleted) throw new MoySkladError("Операция находится в корзине. Обновление операции запрещено.", 400);
-  const page = await moysklad<{ rows: Array<{ id: string; price?: number; assortment?: { name?: string; meta?: { href?: string; type?: string } } }> }>(
-    `/entity/supply/${encodeURIComponent(supplyId)}/positions?expand=assortment&limit=100`,
+  const page = await moyskladAll<{ id: string; price?: number; assortment?: { name?: string; meta?: { href?: string; type?: string } } }>(
+    `/entity/supply/${encodeURIComponent(supplyId)}/positions?expand=assortment`,
   );
-  const expected = lines.flatMap((line) => receiptParts(line).map((part) => (part.quantity > 0 ? kopecks(line.price) : 0))).filter((price) => price > 0);
-  const zero = page.rows.map((row, index) => ({ row, index })).filter((item) => !(item.row.price > 0));
+  const zero = page.rows.filter((row) => !(row.price > 0));
   if (!zero.length) return (doc.sum ?? 0) > 0;
   if (doc.applicable) {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
   }
   let wrote = 0;
-  for (const item of zero) {
-    const row = item.row;
-    const price = priceFromWaybill(row.assortment?.name || "", lines) || expected[item.index] || 0;
+  for (const row of zero) {
+    const price = priceFromWaybill(row.assortment?.name || "", lines);
     if (!(price > 0)) continue;
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}/positions/${encodeURIComponent(row.id)}`, {
       price,
@@ -299,19 +298,24 @@ async function replaceZeroSupply(supplyId: string) {
 }
 
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>) {
+  const chunk = 80;
+  const head = positions.slice(0, chunk);
+  const tail = positions.slice(chunk);
   const attempts: Array<{ applicable: boolean; label: string }> = [
     { applicable: true, label: "posted" },
     { applicable: true, label: "posted-retry" },
     { applicable: false, label: "draft" },
   ];
   let last: unknown;
+  let created: { id: string; name?: string } | null = null;
   for (const attempt of attempts) {
     try {
-      return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+      created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
         ...core,
         applicable: attempt.applicable,
-        positions,
+        positions: head,
       });
+      break;
     } catch (error) {
       last = error;
       const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
@@ -327,7 +331,14 @@ async function postSupplyDocument(core: Record<string, unknown>, positions: Arra
       if (!retry) throw error;
     }
   }
-  throw last;
+  if (!created) throw last instanceof Error ? last : new MoySkladError("Kirim yozilmadi", 502);
+  for (let offset = 0; offset < tail.length; offset += chunk) {
+    const batch = tail.slice(offset, offset + chunk);
+    for (const position of batch) {
+      await moyskladSend(`/entity/supply/${encodeURIComponent(created.id)}/positions`, position);
+    }
+  }
+  return created;
 }
 
 router.get("/counterparties", async (req, res, next) => {

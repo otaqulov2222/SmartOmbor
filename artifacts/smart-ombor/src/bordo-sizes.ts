@@ -6,6 +6,12 @@ export function isBordoSize(value: string): value is BordoSize {
   return (BORDO_SIZES as readonly string[]).includes(value);
 }
 
+export function bordoColorKey(value: string) {
+  return [...value.normalize('NFKC')].map(ch => (ch === 'Р' || ch === 'р' || ch === 'P' || ch === 'p' ? 'R' : ch)).join('')
+    .replace(/[\s\-_.\/]+/g, '')
+    .toLocaleUpperCase('en-US');
+}
+
 export function tashkentDay(value?: string | Date | null) {
   if (typeof value === 'string') {
     const trimmed = value.trim();

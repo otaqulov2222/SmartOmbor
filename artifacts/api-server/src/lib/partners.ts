@@ -4,7 +4,7 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 import { parseMarkups, parsePct, type SaleMarkup } from "./markup";
-import { canonicalFactoryCode, normalizeBordoCode, normalizeBordoSize } from "./catalog";
+import { canonicalFactoryCode, normalizeBordoCode, normalizeBordoColor, normalizeBordoSize } from "./catalog";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -281,8 +281,14 @@ export function accountFromToken(token: string) {
 
 function billableUnits(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">) {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = Array.isArray(line.colors) ? line.colors.filter((color) => color.name && color.quantity > 0) : [];
-  if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
+  const boxesByColor = new Map<string, number>();
+  for (const color of line.colors ?? []) {
+    const name = normalizeBordoColor(String(color?.name ?? ""));
+    const quantity = Math.max(0, Number(color?.quantity) || 0);
+    if (!name || quantity <= 0) continue;
+    boxesByColor.set(name, (boxesByColor.get(name) || 0) + quantity);
+  }
+  if (pack > 0 && boxesByColor.size) return [...boxesByColor.values()].reduce((sum, quantity) => sum + quantity * pack, 0);
   if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
   return pack;
@@ -308,11 +314,18 @@ export function listShipments(factoryId?: string) {
 }
 
 function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLine {
-  const colors = Array.isArray(raw.colors)
-    ? raw.colors
-        .map((color) => ({ name: String(color?.name ?? "").trim().toLocaleUpperCase("ru-RU"), quantity: Math.max(0, Number(color?.quantity) || 0) }))
-        .filter((color) => color.name && color.quantity > 0)
-    : [];
+  const merged = new Map<string, { name: string; quantity: number }>();
+  if (Array.isArray(raw.colors)) {
+    for (const color of raw.colors) {
+      const name = normalizeBordoColor(String(color?.name ?? ""));
+      const quantity = Math.max(0, Number(color?.quantity) || 0);
+      if (!name || quantity <= 0) continue;
+      const prev = merged.get(name);
+      if (prev) prev.quantity += quantity;
+      else merged.set(name, { name, quantity });
+    }
+  }
+  const colors = [...merged.values()];
   const pairs = Math.max(0, Number(raw.pairs) || 0);
   const colorQty = colors.reduce((sum, color) => sum + color.quantity, 0);
   const quantity = Math.max(0, Number(raw.quantity) || 0) || (pairs > 0 ? 0 : colorQty);

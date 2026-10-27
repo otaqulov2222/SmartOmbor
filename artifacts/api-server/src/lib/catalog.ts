@@ -671,6 +671,18 @@ export function compactCode(value: string): string {
   return foldGlyphs(value).trim().replace(/[\s\-_.\/]+/g, "").toLocaleLowerCase("en-US");
 }
 
+export function normalizeBordoColor(value: string) {
+  return foldGlyphs(value)
+    .trim()
+    .replace(/[\s\-_.\/]+/g, "")
+    .toLocaleUpperCase("en-US")
+    .replace(/P/g, "R");
+}
+
+export function sameBordoColor(left: string, right: string) {
+  return normalizeBordoColor(left) === normalizeBordoColor(right);
+}
+
 export function normalizeBordoCode(value: string): string {
   return foldGlyphs(value).trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US");
 }

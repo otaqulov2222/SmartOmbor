@@ -1,4 +1,4 @@
-import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoSize, parseBordoName, productCodeMatches, sameBordoCard, sameFactoryCode, type Catalog } from "./catalog";
+import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, productCodeMatches, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -97,9 +97,22 @@ export async function ensurePachka(productId: string, packSize: number): Promise
   }
 }
 
+function colorRows(line: Pick<ShipmentLine, "colors">) {
+  const merged = new Map<string, { name: string; quantity: number }>();
+  for (const color of line.colors ?? []) {
+    const quantity = Math.max(0, Number(color?.quantity) || 0);
+    const name = normalizeBordoColor(String(color?.name ?? ""));
+    if (!name || quantity <= 0) continue;
+    const prev = merged.get(name);
+    if (prev) prev.quantity += quantity;
+    else merged.set(name, { name, quantity });
+  }
+  return [...merged.values()];
+}
+
 export function pieceCount(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): number {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
+  const colors = colorRows(line);
   if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
   if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   return line.quantity > 0 ? line.quantity : pack;
@@ -107,8 +120,8 @@ export function pieceCount(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantit
 
 export function receiptParts(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): Array<{ color: string | null; quantity: number }> {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter((color) => color.name?.trim() && color.quantity > 0);
-  if (pack > 0 && colors.length) return colors.map((color) => ({ color: color.name.trim(), quantity: color.quantity * pack }));
+  const colors = colorRows(line);
+  if (pack > 0 && colors.length) return colors.map((color) => ({ color: color.name, quantity: color.quantity * pack }));
   const total = pieceCount(line);
   if (total <= 0) return [];
   return [{ color: null, quantity: total }];
@@ -123,6 +136,11 @@ function requireWaybillLine(line: ShipmentLine) {
   if (!line.productCode.trim()) throw new MoySkladError("Mahsulot kodi kiritilmagan", 400);
   if (!line.size.trim()) throw new MoySkladError(`Razmer tanlanmagan (${label})`, 400);
   if (!(line.price > 0)) throw new MoySkladError(`Narx kiritilmagan (${label})`, 400);
+  const colors = colorRows(line);
+  const colorBoxes = colors.reduce((sum, color) => sum + color.quantity, 0);
+  if (colors.length && line.boxes > 0 && colorBoxes !== line.boxes) {
+    throw new MoySkladError(`Ranglar yig‘indisi ${colorBoxes} qop, qatorda ${line.boxes} qop (${label})`, 400);
+  }
   if (pieceCount(line) <= 0) throw new MoySkladError(`Miqdor yo‘q (${label})`, 400);
 }
 
@@ -192,22 +210,16 @@ export async function writeProductCard(
   );
 }
 
-function normalizeColor(value: string) {
-  return value.trim().toLocaleUpperCase("ru-RU").replace(/[\s-]+/g, "").replace(/^Р/u, "R");
-}
-
-function sameColor(left: string, right: string) {
-  return normalizeColor(left) === normalizeColor(right);
-}
-
 function variantColor(variant: VariantRow) {
   const chars = variant.characteristics ?? [];
   const named = chars.find((item) => /^(rang|цвет|color)$/i.test(item.name?.trim() || ""));
   if (named?.value?.trim()) return named.value.trim();
+  const parsed = parseBordoName(variant.name || "");
+  if (parsed?.color) return parsed.color;
   if (chars[0]?.value?.trim()) return chars[0].value.trim();
   const fromName = (variant.name || "").match(/\(([^)]+)\)\s*$/);
   if (fromName?.[1]) return fromName[1].trim();
-  const tail = (variant.name || "").match(/\s+(R-?\d+)\s*$/i);
+  const tail = (variant.name || "").match(/\s+([A-Z0-9]*R-?\d+[A-Z0-9]*)\s*$/i);
   return tail?.[1]?.trim() || "";
 }
 
@@ -248,7 +260,7 @@ function rowMatchesName(rowName: string, wanted: string) {
   if (!parsed) return false;
   const parts = parseBordoName(rowName);
   if (!parts) return false;
-  if (compactCode(parts.color) !== compactCode(parsed.color)) return false;
+  if (!sameBordoColor(parts.color, parsed.color)) return false;
   return sameFactoryCode(parts.factoryCode, parsed.factoryCode)
     && productCodeMatches(parts.productCode, parsed.productCode)
     && compactCode(parts.size) === compactCode(parsed.size);
@@ -339,7 +351,9 @@ async function ensureVariant(
   catalog: Catalog,
   used: Set<string>,
 ): Promise<VariantRow | null> {
-  const found = known.find((row) => sameColor(variantColor(row), color));
+  const wanted = normalizeBordoColor(color);
+  if (!wanted) return null;
+  const found = known.find((row) => sameBordoColor(variantColor(row), wanted));
   if (found?.id) {
     await ensureBarcodes("variant", found.id, catalog, used);
     return found;
@@ -351,18 +365,18 @@ async function ensureVariant(
   const attempts: Array<Record<string, unknown>> = [
     {
       product: { meta: product.meta },
-      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: wanted }],
       barcodes: [{ ean13: barcode }],
       ...(prices.length ? { salePrices: prices.map((price) => ({ value: price.value, currency: price.currency, priceType: { meta: price.priceType?.meta } })) } : {}),
     },
     {
       product: { meta: product.meta },
-      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: wanted }],
       barcodes: [{ ean13: barcode }],
     },
     {
       product: { meta: product.meta },
-      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: color }],
+      characteristics: [{ id: rang.id, name: rang.name, meta: entityMeta(rang.href, "attributemetadata"), value: wanted }],
     },
   ];
   for (const body of attempts) {
@@ -370,13 +384,13 @@ async function ensureVariant(
       const created = await moyskladSend<VariantRow>("/entity/variant", body);
       used.add(barcode);
       if (created.id) await ensureBarcodes("variant", created.id, catalog, used);
-      known.push({ ...created, characteristics: [{ name: "rang", value: color }] });
+      known.push({ ...created, characteristics: [{ name: "rang", value: wanted }] });
       return created;
     } catch (error) {
       if (uniqueNameConflict(error)) {
         const rows = await variantsOf(product.id);
         known.splice(0, known.length, ...rows);
-        const hit = rows.find((row) => sameColor(variantColor(row), color));
+        const hit = rows.find((row) => sameBordoColor(variantColor(row), wanted));
         if (hit?.id) {
           await ensureBarcodes("variant", hit.id, catalog, used);
           return hit;
@@ -407,7 +421,7 @@ async function colorNamedProduct(
     used: Set<string>;
   },
 ): Promise<ProductRow> {
-  const name = `${parent.name || ""} ${color}`.trim();
+  const name = `${parent.name || ""} ${normalizeBordoColor(color)}`.trim();
   const sale = extras.price > 0 && extras.priceType ? (markedSale(extras.price, extras.priceType, loadMarkup()) ?? extras.price) : extras.price;
   const existing = await productByName(name);
   if (existing) {
@@ -719,7 +733,7 @@ export async function findExistingBordoProduct(
     const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
     const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(normalizeBordoSize(line.size));
     const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
-    if (byId && codeOk && sizeOk && factoryOk) return byId;
+    if (byId && codeOk && sizeOk && factoryOk && !parts?.color) return byId;
   }
   const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
@@ -894,6 +908,7 @@ export async function buildSupplyPositions(
       known = await variantsOf(product.id);
       variantCache.set(product.id, known);
     }
+    known = known ?? [];
     for (const part of parts) {
       if (!part.color) {
         positions.push({
@@ -904,7 +919,7 @@ export async function buildSupplyPositions(
         });
         continue;
       }
-      const variant = await ensureVariant(product, part.color, known ?? [], scope.catalog, usedBarcodes);
+      const variant = await ensureVariant(product, part.color, known, scope.catalog, usedBarcodes);
       let assortment: { meta: Meta };
       let stockId: string;
       if (variant?.id) {
@@ -941,7 +956,7 @@ export async function buildSupplyPositions(
         const refreshed = await variantsOf(product.id);
         known.splice(0, known.length, ...refreshed);
         variantCache.set(product.id, known);
-        const existingVariant = known.find((row) => sameColor(variantColor(row), part.color));
+        const existingVariant = known.find((row) => sameBordoColor(variantColor(row), part.color));
         if (existingVariant?.id) {
           assortment = { meta: existingVariant.meta?.href ? existingVariant.meta : entityMeta(`${BASE}/entity/variant/${existingVariant.id}`, "variant") };
           stockId = existingVariant.id;
@@ -1002,5 +1017,15 @@ export async function buildSupplyPositions(
       });
     }
   }
-  return { positions, links, created };
+  const collapsed: SupplyPosition[] = [];
+  for (const position of positions) {
+    const href = position.assortment.meta.href;
+    const prev = collapsed.find((item) => item.stockId === position.stockId && item.price === position.price && item.assortment.meta.href === href);
+    if (prev) {
+      prev.quantity += position.quantity;
+      continue;
+    }
+    collapsed.push({ ...position });
+  }
+  return { positions: collapsed, links, created };
 }

@@ -6,7 +6,7 @@ import { Link, useLocation, useSearch } from 'wouter';
 import { listProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
 import { downloadXlsx, type Sheet } from '@/lib/xlsx';
-import { BORDO_SIZES, isBordoSize, tashkentDay } from '@/bordo-sizes';
+import { BORDO_SIZES, bordoColorKey, isBordoSize, tashkentDay } from '@/bordo-sizes';
 
 type Account = { id: string; name: string; code: string; catalogName: string; login: string; password?: string | null; active: boolean; createdAt: string; counterpartyId?: string | null; counterpartyName?: string | null };
 type ColorLine = { name: string; quantity: number };
@@ -199,9 +199,22 @@ function fromPassport(current: { group: string; size: string; pack: string; pric
   return patch;
 }
 
+function mergeColors(colors: ColorLine[]) {
+  const merged = new Map<string, ColorLine>();
+  for (const color of colors) {
+    const name = bordoColorKey(color.name);
+    const quantity = Math.max(0, Number(color.quantity) || 0);
+    if (!name || quantity <= 0) continue;
+    const prev = merged.get(name);
+    if (prev) prev.quantity += quantity;
+    else merged.set(name, { name, quantity });
+  }
+  return [...merged.values()];
+}
+
 function lineUnits(line: Line) {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
+  const colors = mergeColors(line.colors ?? []);
   if (pack > 0 && colors.length) return colors.reduce((sum, color) => sum + color.quantity * pack, 0);
   if (pack > 0 && line.boxes > 0) return pack * line.boxes;
   if (line.quantity > 0) return line.quantity;
@@ -229,8 +242,8 @@ function supplyError(body: { error?: string; detail?: string }, t: (key: 'partne
 
 function receiptParts(line: Line) {
   const pack = line.pairs > 0 ? line.pairs : 0;
-  const colors = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
-  if (pack > 0 && colors.length) return colors.map(color => ({ color: color.name.trim(), quantity: color.quantity * pack }));
+  const colors = mergeColors(line.colors ?? []);
+  if (pack > 0 && colors.length) return colors.map(color => ({ color: color.name, quantity: color.quantity * pack }));
   const total = lineUnits(line);
   if (total <= 0) return [];
   return [{ color: null as string | null, quantity: total }];
@@ -238,7 +251,7 @@ function receiptParts(line: Line) {
 
 function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: boolean; markup: SaleMarkup; onSave: (patch: Partial<Line>) => Promise<boolean> }) {
   const { t, fmt, money } = useI18n();
-  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+  const colors = mergeColors(line.colors ?? []);
   const [factoryCode, setFactoryCode] = useState(line.factoryCode || '');
   const [sectionCode, setSectionCode] = useState(line.sectionCode || '');
   const [productCode, setProductCode] = useState(line.productCode || '');
@@ -351,7 +364,7 @@ function ColorMarks({ colors, fmt }: { colors: ColorLine[]; fmt: (value: number)
 }
 
 function colorText(line: Line, fmt: (value: number) => string) {
-  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+  const colors = mergeColors(line.colors ?? []);
   return colors.length ? colors.map(color => `${color.name} · ${fmt(color.quantity)}`).join(', ') : '';
 }
 
@@ -521,7 +534,7 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
 function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]) => Promise<boolean> }) {
   const { t, fmt } = useI18n();
   const [rows, setRows] = useState(() => {
-    const saved = (line.colors ?? []).filter(color => color.name && color.quantity > 0).map(color => ({ name: color.name.toLocaleUpperCase('ru-RU'), quantity: String(color.quantity) }));
+    const saved = mergeColors(line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) }));
     return [...saved, { name: '', quantity: '' }];
   });
   const [busy, setBusy] = useState(false);
@@ -545,9 +558,9 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
       return [...next, { name: '', quantity: '' }];
     });
   };
-  const filled = rows
+  const filled = mergeColors(rows
     .map(row => ({ name: row.name.trim(), quantity: Math.max(0, Number(row.quantity.replace(',', '.')) || 0) }))
-    .filter(row => row.name && row.quantity > 0);
+    .filter(row => row.name && row.quantity > 0));
   const sum = filled.reduce((total, row) => total + row.quantity, 0);
   const boxes = line.boxes;
   const diff = Math.abs(sum - boxes);
@@ -724,6 +737,20 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
     if (!agent && !row.account?.counterpartyId) { setPostError(t('partners.agentMissing')); return; }
+    const mismatch = posting.lines.find(line => {
+      const colors = mergeColors(line.colors ?? []);
+      if (!colors.length || !(line.boxes > 0)) return false;
+      return colors.reduce((sum, color) => sum + color.quantity, 0) !== line.boxes;
+    });
+    if (mismatch) {
+      const colors = mergeColors(mismatch.colors ?? []);
+      const sum = colors.reduce((total, color) => total + color.quantity, 0);
+      const diff = Math.abs(sum - mismatch.boxes);
+      setPostError(sum > mismatch.boxes
+        ? t('partners.colorOver', { sum: fmt(sum), boxes: fmt(mismatch.boxes), diff: fmt(diff) })
+        : t('partners.colorUnder', { sum: fmt(sum), boxes: fmt(mismatch.boxes), diff: fmt(diff) }));
+      return;
+    }
     setBusy(true); setPostError('');
     try {
       if (row.account && (agent ? agent.id !== row.account.counterpartyId : Boolean(row.account.counterpartyId))) {
@@ -878,7 +905,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
               <div className="waybill-scroll"><table className="waybill-table">
                 <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="waybill-colors-cell">{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
                 <tbody>{(shipment.lines ?? []).map(line => {
-                  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+                  const colors = mergeColors(line.colors ?? []);
                   const colored = colors.length > 0;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
@@ -973,7 +1000,7 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pack = asNumber(pairs);
-  const colorBoxes = (line.colors ?? []).filter(color => color.name.trim() && color.quantity > 0);
+  const colorBoxes = mergeColors(line.colors ?? []);
   const pieces = pack > 0 && colorBoxes.length ? colorBoxes.reduce((sum, color) => sum + color.quantity * pack, 0) : pack > 0 && asNumber(boxes) > 0 ? pack * asNumber(boxes) : pack;
   const sum = pieces * asNumber(price);
   const fill = async () => {
