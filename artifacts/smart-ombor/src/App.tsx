@@ -448,7 +448,7 @@ function DashboardPage() {
 }
 
 /* ---------- products ---------- */
-const PRODUCT_SIZES = ['20-23', '22-27', '24-29', '30-35', '36-40', '40-44'] as const;
+const PRODUCT_SIZES = ['20-23', '20-25', '22-27', '24-29', '30-35', '36-40', '40-44', '41-43'] as const;
 
 function moneyDigits(value: string) {
   return value.replace(/[^\d]/g, '');
