@@ -263,7 +263,8 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       if (!response.ok) throw new Error('alerts');
       return response.json();
     },
-    refetchInterval: 20_000,
+    staleTime: 15_000,
+    refetchInterval: 45_000,
   });
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   const navItem = (href: string) => {

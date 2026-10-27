@@ -2041,6 +2041,13 @@ function toDate(value: string | Date | number | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 export function formatDate(value: string | Date | number | null | undefined) {
+  if (typeof value === 'string') {
+    const day = value.trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      const [year, month, date] = day.split('-');
+      return `${date}.${month}.${year}`;
+    }
+  }
   const d = toDate(value);
   return d ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}` : '—';
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
-import { BORDO_SIZES, isBordoSize } from '@/bordo-sizes';
+import { BORDO_SIZES, isBordoSize, tashkentDay } from '@/bordo-sizes';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
@@ -142,7 +142,7 @@ function LangMini({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void
 
 function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, lang, setLang, onSignOut }: { account: Account; shipments: Shipment[]; token: string; onSent: () => void; dateLabel: (value: string) => string; money: (value: number) => string; fmt: (value: number) => string; lang: Lang; setLang: (lang: Lang) => void; onSignOut: () => void }) {
   const { t } = useI18n();
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => tashkentDay());
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<Draft[]>(() => [blank(factoryCodeOf(account))]);
   const [error, setError] = useState('');
@@ -189,7 +189,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   const resetForm = () => {
     setEditingId(null);
     setEditingStatus(null);
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(tashkentDay());
     setNote('');
     setLines([blank(factoryCodeOf(account))]);
   };

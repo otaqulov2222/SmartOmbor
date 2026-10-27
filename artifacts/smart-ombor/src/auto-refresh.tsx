@@ -4,6 +4,11 @@ import { useSyncMoysklad } from '@workspace/api-client-react';
 
 export const AUTO_REFRESH_MS = 5 * 60 * 1000;
 export const AUTO_REFRESH_KEY = ['auto-refresh'] as const;
+const KEEP_DURING_CATALOG_SYNC = new Set(['auto-refresh', 'partner-detail', 'partner-factories', 'partner-alerts']);
+
+function keepDuringCatalogSync(queryKey: readonly unknown[]) {
+  return KEEP_DURING_CATALOG_SYNC.has(String(queryKey[0] ?? ''));
+}
 
 export type AutoRefreshState = { pending: boolean; last: string | null; nextAt: number };
 
@@ -42,7 +47,9 @@ export function useCatalogRefresh() {
       onSettled: async (data, error) => {
         try {
           if (!error && data?.status === 'running') await waitForCatalogSync(data.finishedAt);
-          if (!error) await cache.invalidateQueries({ predicate: q => q.queryKey[0] !== AUTO_REFRESH_KEY[0] });
+          if (!error && data?.error !== 'already-fresh') {
+            await cache.invalidateQueries({ predicate: q => !keepDuringCatalogSync(q.queryKey) });
+          }
         } catch (caught) {
           setPollError(caught instanceof Error ? caught : new Error('sync'));
         } finally {
@@ -82,9 +89,11 @@ export function AutoRefresh() {
       stamp(true, cache.getQueryData<AutoRefreshState>(AUTO_REFRESH_KEY)?.last ?? null);
       try {
         const response = await fetch('/api/moysklad/sync', { method: 'POST' }).catch(() => undefined);
-        const body = response && response.ok ? await response.json().catch(() => null) as { status?: string; finishedAt?: string | null } | null : null;
+        const body = response && response.ok ? await response.json().catch(() => null) as { status?: string; finishedAt?: string | null; error?: string | null } | null : null;
         if (body?.status === 'running') await waitForCatalogSync(body.finishedAt).catch(() => undefined);
-        await cache.invalidateQueries({ predicate: q => q.queryKey[0] !== AUTO_REFRESH_KEY[0] });
+        if (body && body.error !== 'already-fresh') {
+          await cache.invalidateQueries({ predicate: q => !keepDuringCatalogSync(q.queryKey) });
+        }
       } finally {
         stamp(false, new Date().toISOString());
         inflight.current = false;

@@ -6,7 +6,7 @@ import { Link, useLocation, useSearch } from 'wouter';
 import { listProducts, useListWarehouses } from '@workspace/api-client-react';
 import { useI18n } from '@/i18n';
 import { downloadXlsx, type Sheet } from '@/lib/xlsx';
-import { BORDO_SIZES, isBordoSize } from '@/bordo-sizes';
+import { BORDO_SIZES, isBordoSize, tashkentDay } from '@/bordo-sizes';
 
 type Account = { id: string; name: string; code: string; catalogName: string; login: string; password?: string | null; active: boolean; createdAt: string; counterpartyId?: string | null; counterpartyName?: string | null };
 type ColorLine = { name: string; quantity: number };
@@ -83,8 +83,17 @@ function blankLine(factoryCode: string): Line {
   };
 }
 function todayKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return tashkentDay();
+}
+
+function matchPartnerRow(items: Row[], selected: string) {
+  const needle = selected.trim().toLowerCase();
+  if (!needle) return null;
+  return items.find(row => row.name.toLowerCase() === needle)
+    || items.find(row => (row.account?.name || '').toLowerCase() === needle)
+    || items.find(row => (row.account?.catalogName || '').toLowerCase() === needle)
+    || items.find(row => (row.account?.code || '').toLowerCase() === needle)
+    || null;
 }
 
 type Shipment = {
@@ -421,8 +430,11 @@ export function PartnersPage() {
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
   const cache = useQueryClient();
+  const held = useRef<Row | null>(null);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
+    staleTime: 60_000,
+    placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
       if (!response.ok) throw new Error('load');
@@ -433,10 +445,15 @@ export function PartnersPage() {
     const needle = q.trim().toLowerCase();
     return (list.data?.items ?? []).filter(row => !needle || row.name.toLowerCase().includes(needle) || (row.account?.code || '').toLowerCase().includes(needle) || (row.account?.login || '').includes(needle));
   }, [list.data, q]);
-  const current = (list.data?.items ?? []).find(row => row.name === selected) ?? null;
+  const current = matchPartnerRow(list.data?.items ?? [], selected);
+  if (current) held.current = current;
+  const row = current ?? (held.current && matchPartnerRow([held.current], selected) ? held.current : null);
 
-  if (selected && current) {
-    return <PartnerDetail row={current} onBack={() => setLocation('/partners')} />;
+  if (selected && row) {
+    return <PartnerDetail row={row} onBack={() => setLocation('/partners')} />;
+  }
+  if (selected && list.isFetching) {
+    return <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div>;
   }
 
   return <>
@@ -626,6 +643,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
+    staleTime: 60_000,
+    placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
       if (!response.ok) throw new Error('load');
@@ -633,11 +652,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     },
   });
   const products = useQuery({
-    queryKey: ['partner-catalog', row.name, catalogOpen],
+    queryKey: ['partner-catalog', row.account?.catalogName || row.name],
+    enabled: catalogOpen,
+    staleTime: 60_000,
     queryFn: async () => {
       const pageSize = 100;
-      const first = await listProducts({ factory: row.name, page: 1, pageSize: catalogOpen ? pageSize : 1 });
-      if (!catalogOpen || first.total <= first.items.length) return first;
+      const first = await listProducts({ factory: row.name, page: 1, pageSize });
+      if (first.total <= first.items.length) return first;
       const pages = Math.ceil(first.total / pageSize);
       const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, index) => listProducts({ factory: row.name, page: index + 2, pageSize })));
       return { ...first, items: [first.items, ...rest.map((page) => page.items)].flat() };
@@ -802,7 +823,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
-  const visible = useMemo(() => shipments.filter(shipment => !day || String(shipment.date ?? '').slice(0, 10) === day), [shipments, day]);
+  const visible = useMemo(() => shipments.filter(shipment => !day || tashkentDay(shipment.date) === day), [shipments, day]);
   const pairs = visible.reduce((sum, shipment) => sum + shipment.pairs, 0);
   const amount = visible.reduce((sum, shipment) => sum + shipment.amount, 0);
   const passwordShown = detail.data?.account.password || row.account?.password || '';
@@ -836,7 +857,9 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     </div>
     <section className="card factory-sheet">
       <div className="card-head"><h2>{t('partners.incoming')}</h2><div className="waybill-head-tools"><label className="waybill-filter"><span>{t('common.date')}</span><input className="input" type="date" value={day} onChange={e => setDay(e.target.value)} data-testid="input-shipment-date"/></label>{visible.length > 0 && <WaybillExport shipments={visible} filename={`${row.account?.code || row.name}-${day || 'all'}`} title={t('partners.incoming')} factory={row.name} code={row.account?.code || ''}/>}</div></div>
-      {visible.length ? (
+      {detail.isLoading && !shipments.length ? (
+        <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div>
+      ) : visible.length ? (
         <div className="shipment-list">{visible.map(shipment => (
           <article key={shipment.id} className="waybill" data-testid={`shipment-${shipment.id}`}>
             <header>
@@ -884,10 +907,10 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         ))}</div>
       ) : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
     </section>
-    {(products.data?.total ?? products.data?.items?.length ?? 0) > 0 && <section className={`card partner-catalog ${catalogOpen ? 'is-open' : ''}`}>
+    {(row.productCount > 0 || (products.data?.total ?? products.data?.items?.length ?? 0) > 0) && <section className={`card partner-catalog ${catalogOpen ? 'is-open' : ''}`}>
       <button type="button" className="partner-catalog-toggle" aria-expanded={catalogOpen} onClick={() => setCatalogOpen(open => !open)}>
         <h2>{t('partners.catalog')}</h2>
-        <span className="card-meta">{fmt(products.data?.total ?? products.data?.items?.length ?? 0)}</span>
+        <span className="card-meta">{fmt(products.data?.total ?? products.data?.items?.length ?? row.productCount)}</span>
         {catalogOpen ? <ChevronDown size={18}/> : <ChevronUp size={18}/>}
       </button>
       {catalogOpen && <>

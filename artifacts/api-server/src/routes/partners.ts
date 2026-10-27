@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, productBelongsToFactory, productCodeMatches, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -56,9 +56,9 @@ router.get("/partner-alerts", (_req, res) => {
 
 router.get("/partner-factories", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog();
     const grouped = new Map<string, { name: string; productCount: number; stock: number }>();
-    for (const product of catalog.products) {
+    for (const product of catalog?.products ?? []) {
       const name = product.factory?.trim();
       if (!name) continue;
       const current = grouped.get(name) || { name, productCount: 0, stock: 0 };
@@ -68,34 +68,39 @@ router.get("/partner-factories", async (_req, res, next) => {
     }
     const accounts = listAccounts();
     const shipments = listShipments();
-    const rows = [...grouped.values()]
-      .map((row) => {
-        const account = accounts.find((item) => item.catalogName === row.name || item.name === row.name) ?? null;
-        const own = account ? shipments.filter((item) => item.factoryId === account.id) : [];
-        return {
-          ...row,
-          account,
-          shipmentCount: own.length,
-          pendingCount: own.filter((item) => item.status === "sent").length,
-          lastShipment: own[0]?.createdAt ?? null,
-        };
-      })
-      .sort((a, b) => b.productCount - a.productCount || a.name.localeCompare(b.name));
-    const extras = accounts
-      .filter((account) => !rows.some((row) => row.account?.id === account.id))
-      .map((account) => {
-        const own = shipments.filter((item) => item.factoryId === account.id);
-        return {
-          name: account.name,
-          productCount: 0,
-          stock: 0,
-          account,
-          shipmentCount: own.length,
-          pendingCount: own.filter((item) => item.status === "sent").length,
-          lastShipment: own[0]?.createdAt ?? null,
-        };
-      });
-    res.json({ items: [...rows, ...extras] });
+    const used = new Set<string>();
+    const sameFactory = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase();
+    const catalogRowFor = (account: { name: string; catalogName: string }) =>
+      grouped.get(account.catalogName)
+      || grouped.get(account.name)
+      || [...grouped.values()].find((row) => sameFactory(row.name, account.catalogName) || sameFactory(row.name, account.name))
+      || null;
+    const rows = accounts.map((account) => {
+      const own = shipments.filter((item) => item.factoryId === account.id);
+      const catalogRow = catalogRowFor(account);
+      if (catalogRow) used.add(catalogRow.name);
+      return {
+        name: catalogRow?.name || account.name,
+        productCount: catalogRow?.productCount ?? 0,
+        stock: catalogRow?.stock ?? 0,
+        account,
+        shipmentCount: own.length,
+        pendingCount: own.filter((item) => item.status === "sent").length,
+        lastShipment: own[0]?.createdAt ?? null,
+      };
+    });
+    const extras = [...grouped.values()]
+      .filter((row) => !used.has(row.name) && !rows.some((item) => sameFactory(item.name, row.name)))
+      .map((row) => ({
+        ...row,
+        account: null,
+        shipmentCount: 0,
+        pendingCount: 0,
+        lastShipment: null as string | null,
+      }));
+    res.json({
+      items: [...rows, ...extras].sort((a, b) => b.shipmentCount - a.shipmentCount || b.productCount - a.productCount || a.name.localeCompare(b.name)),
+    });
   } catch (error) {
     next(error);
   }
@@ -204,8 +209,8 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const catalog = await loadCatalog();
-    linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
+    const catalog = peekCatalog();
+    if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {
@@ -641,7 +646,7 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
       res.json({ items: [] });
       return;
     }
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     const account = res.locals.factory as { code?: string; name?: string; catalogName?: string };
     const compact = compactCode(query);
     const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];
@@ -664,8 +669,8 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
 
 router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
   try {
-    const catalog = await loadCatalog();
-    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    const catalog = peekCatalog();
+    const byId = new Map((catalog?.products ?? []).map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());
       const matches = product ? lineMatchesCatalogProduct(product, String(line?.productCode ?? "")) : false;
@@ -676,7 +681,7 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
+    if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === saved.id) ?? saved;
     res.json(shipment);
   } catch (error) {
@@ -690,8 +695,8 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
 
 router.post("/factory/shipments", requireFactory, async (req, res, next) => {
   try {
-    const catalog = await loadCatalog();
-    const byId = new Map(catalog.products.map((product) => [product.id, product]));
+    const catalog = peekCatalog();
+    const byId = new Map((catalog?.products ?? []).map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());
       const matches = product ? lineMatchesCatalogProduct(product, String(line?.productCode ?? "")) : false;
@@ -702,7 +707,7 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
+    if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === created.id) ?? created;
     res.status(201).json(shipment);
   } catch (error) {

@@ -337,6 +337,19 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
   };
 }
 
+export function tashkentDay(value?: string | Date | null) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  }
+  const dt = value instanceof Date ? value : value ? new Date(value) : new Date();
+  if (Number.isNaN(+dt)) {
+    const raw = String(value ?? "");
+    return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : "";
+  }
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tashkent" }).format(dt);
+}
+
 export function createShipment(factoryId: string, input: { date?: string; note?: string; lines: Partial<ShipmentLine>[] }) {
   const store = load();
   const account = store.accounts.find((item) => item.id === factoryId);
@@ -349,7 +362,7 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
     id: randomBytes(8).toString("hex"),
     number: `${account.code}-${String(seq).padStart(3, "0")}`,
     factoryId,
-    date: input.date || new Date().toISOString().slice(0, 10),
+    date: tashkentDay(input.date) || tashkentDay(),
     status: "sent",
     note: String(input.note ?? "").trim(),
     lines,
@@ -393,7 +406,7 @@ export function updateShipment(id: string, input: { date?: string; note?: string
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
-  if (input.date) shipment.date = String(input.date).slice(0, 10);
+  if (input.date) shipment.date = tashkentDay(input.date) || shipment.date;
   shipment.note = String(input.note ?? shipment.note).trim();
   shipment.lines = lines;
   save(store);

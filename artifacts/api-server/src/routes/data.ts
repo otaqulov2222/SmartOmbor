@@ -1135,7 +1135,7 @@ router.put("/products/:id", async (req, res, next) => {
 router.get("/products", async (req, res, next) => {
   try {
     const query = ListProductsQueryParams.parse(numericQuery(req.query, ["idleDays", "page", "pageSize"]));
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     let items = catalog.products.filter((product) => matchesSearch(product, query.search ?? ""));
     if (query.factory) items = items.filter((product) => product.factory === query.factory);
     if (query.category) items = items.filter((product) => product.category === query.category);
