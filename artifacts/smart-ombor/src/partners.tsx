@@ -81,7 +81,7 @@ function blankLine(factoryCode: string): Line {
     productId: null, productName: null,
   };
 }
-const LINE_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'];
+const LINE_SIZES = ['20-23', '22-27', '24-29', '30-35', '36-40', '40-44'];
 function todayKey() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;

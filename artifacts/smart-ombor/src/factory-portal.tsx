@@ -9,7 +9,7 @@ type Shipment = { id: string; number: string; date: string; status: string; note
 type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; model: string; size: string; pairs: string; boxes: string; price: string; priceType: string; colors: ColorLine[] };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
-const LINE_SIZES = ['20-23', '24-29', '30-35', '36-40', '40-44'] as const;
+const LINE_SIZES = ['20-23', '22-27', '24-29', '30-35', '36-40', '40-44'] as const;
 
 function blank(factoryCode: string): Draft {
   return { key: Math.random().toString(36).slice(2), factoryCode, groupCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', price: '', priceType: '', colors: [] };
