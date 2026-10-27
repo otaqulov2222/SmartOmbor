@@ -16,6 +16,7 @@ import {
   loginFactory,
   markShipmentPosted,
   clearShipmentPosted,
+  moyskladDateTime,
   deleteAccount,
   deleteShipment,
   resetPassword,
@@ -231,6 +232,54 @@ function supplyGone(error: unknown) {
   return error.status === 404 || /корзин|recycle|trash|удален/i.test(error.message);
 }
 
+const supplyTails = new Map<string, Promise<void>>();
+
+function acquireSupplyLock(id: string): Promise<() => void> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = supplyTails.get(id) ?? Promise.resolve();
+  const mine = previous.catch(() => undefined).then(() => held);
+  supplyTails.set(id, mine);
+  return previous.catch(() => undefined).then(() => () => {
+    release();
+    if (supplyTails.get(id) === mine) supplyTails.delete(id);
+  });
+}
+
+type SupplyHit = { id: string; name?: string; deleted?: string; applicable?: boolean; externalCode?: string; incomingNumber?: string };
+
+function nextCalendarDay(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  const next = new Date(Date.UTC(year, (month || 1) - 1, (date || 1) + 1));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
+  const day = typeof shipment.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(shipment.date)
+    ? shipment.date.slice(0, 10)
+    : moyskladDateTime().slice(0, 10);
+  const until = nextCalendarDay(day);
+  const filters = [
+    `externalCode=${shipment.id}`,
+    `name=${shipment.number};moment>=${day} 00:00:00;moment<${until} 00:00:00`,
+    `incomingNumber=${shipment.number};moment>=${day} 00:00:00;moment<${until} 00:00:00`,
+  ];
+  for (const filter of filters) {
+    try {
+      const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(filter)}`);
+      const ranked = page.rows.filter((row) => row.id && !row.deleted);
+      ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
+      const hit = ranked[0];
+      if (hit?.id) return { id: hit.id, name: hit.name || shipment.number };
+    } catch {
+      /* try the next unique key */
+    }
+  }
+  return null;
+}
+
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
   const raw = name.trim();
   const parsed = parseBordoName(raw);
@@ -297,36 +346,34 @@ async function replaceZeroSupply(supplyId: string) {
   }
 }
 
-async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>) {
-  const attempts: Array<{ applicable: boolean; label: string }> = [
-    { applicable: true, label: "posted" },
-    { applicable: true, label: "posted-retry" },
-    { applicable: false, label: "draft" },
-  ];
-  let last: unknown;
-  for (const attempt of attempts) {
+async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }) {
+  const existing = await findExistingSupply(shipment);
+  if (existing) return existing;
+  try {
+    return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+      ...core,
+      applicable: true,
+      positions,
+    });
+  } catch (error) {
+    const found = await findExistingSupply(shipment);
+    if (found) return found;
+    const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
+    const draftOk = permissionDenied(error) || /applicable|проведен/i.test(text);
+    if (!draftOk) throw error;
+    logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create as draft");
     try {
       return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
         ...core,
-        applicable: attempt.applicable,
+        applicable: false,
         positions,
       });
-    } catch (error) {
-      last = error;
-      const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
-      if (/incoming|входящ/i.test(text)) {
-        delete core.incomingNumber;
-        delete core.incomingDate;
-      }
-      if (/externalcode|external/i.test(text)) delete core.externalCode;
-      if (/уникал|unique|уже существ|корзин/i.test(text)) delete core.name;
-      const retry = permissionDenied(error)
-        || /pack|uom|barcode|applicable|incoming|входящ|уникал|unique|уже существ|корзин|external/i.test(text);
-      logger.warn({ label: attempt.label, err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
-      if (!retry) throw error;
+    } catch (draftError) {
+      const again = await findExistingSupply(shipment);
+      if (again) return again;
+      throw draftError;
     }
   }
-  throw last instanceof Error ? last : new MoySkladError("Kirim yozilmadi", 502);
 }
 
 router.get("/counterparties", async (req, res, next) => {
@@ -392,6 +439,7 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
 });
 
 router.post("/partner-factories/shipments/:id/supply", async (req, res, next) => {
+  const unlock = await acquireSupplyLock(String(req.params.id));
   try {
     const shipment = listShipments().find((item) => item.id === String(req.params.id));
     if (!shipment) {
@@ -436,6 +484,20 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       }
       await replaceZeroSupply(shipment.moyskladId);
       clearShipmentPosted(shipment.id);
+    }
+    const reused = await findExistingSupply(shipment);
+    if (reused) {
+      try {
+        await fillZeroSupplyPrices(reused.id, shipment.lines);
+      } catch (error) {
+        if (!supplyGone(error)) {
+          logger.warn({ supply: reused.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill on reuse failed");
+        }
+      }
+      const saved = markShipmentPosted(shipment.id, { id: reused.id, number: reused.name || shipment.number });
+      void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: reused.name || shipment.number });
+      res.json({ id: reused.id, number: reused.name || shipment.number, shipment: saved, already: true });
+      return;
     }
     const account = getAccount(shipment.factoryId);
     let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
@@ -527,12 +589,13 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
         inTransit: 0,
       });
     }
-    const when = /^\d{4}-\d{2}-\d{2}/.test(shipment.date) ? `${shipment.date.slice(0, 10)} 12:00:00` : `${new Date().toISOString().slice(0, 10)} 12:00:00`;
+    const postedAt = moyskladDateTime();
+    const incomingDay = /^\d{4}-\d{2}-\d{2}/.test(shipment.date) ? shipment.date.slice(0, 10) : postedAt.slice(0, 10);
     const supplyCore: Record<string, unknown> = {
       name: shipment.number,
-      moment: when,
+      moment: postedAt,
       incomingNumber: shipment.number,
-      incomingDate: when,
+      incomingDate: `${incomingDay} ${postedAt.slice(11)}`,
       vatEnabled: false,
       vatIncluded: false,
       externalCode: shipment.id,
@@ -550,7 +613,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       vatEnabled: false,
       assortment: item.assortment,
     }));
-    const created = await postSupplyDocument(supplyCore, supplyPositions);
+    const created = await postSupplyDocument(supplyCore, supplyPositions, shipment);
     try {
       await fillZeroSupplyPrices(created.id, shipment.lines);
     } catch (error) {
@@ -574,6 +637,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     res.status(502).json({ error: "rejected", detail });
+  } finally {
+    unlock();
   }
 });
 
