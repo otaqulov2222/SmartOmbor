@@ -258,7 +258,6 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     setPrice(line.price ? String(line.price) : '');
     setPctMap(pctMapOf(line, markup));
   }, [line, markup]);
-  const chips = <ColorMarks colors={colors} fmt={fmt}/>;
   const preview = lineUnits({ ...line, pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
   const commit = (next?: Partial<Line>) => {
     const markupValues = next?.markup ?? parsePctMap(pctMap);
@@ -322,7 +321,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
       <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
       <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
       <td data-label={t('zavod.priceType')}>{markupLabel(line, markup)}</td>
-      <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
+      <td className="waybill-colors-cell" data-label={t('zavod.colors')}><ColorCount colors={colors} fmt={fmt}/></td>
       <td className="num" data-label={t('zavod.sum')}>{money(lineUnits(line) * line.price)}</td>
     </>;
   }
@@ -336,9 +335,14 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td className="waybill-type" data-label={t('zavod.priceType')}><MarkupTriple compact values={pctMap} locked={kept} onChange={setPctMap} onBlur={next => { setPctMap(next); commit({ markup: parsePctMap(next) }); }}/></td>
-    <td className="waybill-colors-cell" data-label={t('zavod.colors')}>{chips}</td>
+    <td className="waybill-colors-cell" data-label={t('zavod.colors')}><ColorCount colors={colors} fmt={fmt}/></td>
     <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;
+}
+
+function ColorCount({ colors, fmt }: { colors: ColorLine[]; fmt: (value: number) => string }) {
+  if (!colors.length) return <span className="color-empty">—</span>;
+  return <span className="color-count">{fmt(colors.length)}</span>;
 }
 
 function ColorMarks({ colors, fmt }: { colors: ColorLine[]; fmt: (value: number) => string }) {
@@ -872,14 +876,16 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             </header>
             {openShipment === shipment.id && (
               <div className="waybill-scroll"><table className="waybill-table">
-                <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th>{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
+                <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="waybill-colors-cell">{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
                 <tbody>{(shipment.lines ?? []).map(line => {
-                  const colored = (line.colors ?? []).some(color => color.name && color.quantity > 0);
+                  const colors = (line.colors ?? []).filter(color => color.name && color.quantity > 0);
+                  const colored = colors.length > 0;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
                       <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} markup={markup} onSave={patch => saveLine(shipment, line, patch)}/>
                       <td className="waybill-line-tools" data-label="">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
                     </tr>
+                    {colored && colorFor !== line.id && <tr className="waybill-color-strip"><td colSpan={12}><div className="color-strip"><em>{t('zavod.colors')}</em><ColorMarks colors={colors} fmt={fmt}/></div></td></tr>}
                     {colorFor === line.id && <tr><td className="waybill-colors" colSpan={12}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;
                 })}</tbody>
