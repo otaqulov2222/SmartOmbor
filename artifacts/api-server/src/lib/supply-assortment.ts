@@ -317,11 +317,9 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
     try {
       return await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
     } catch (error) {
-      if (uniqueNameConflict(error)) {
-        const existing = await productByName(String(payload.name ?? ""));
-        if (existing) return existing;
-        throw error;
-      }
+      const existing = await productByName(String(payload.name ?? ""));
+      if (existing) return existing;
+      if (uniqueNameConflict(error)) throw error;
       if (!permissionDenied(error)) throw error;
       const drop = error instanceof MoySkladError && error.parameter && error.parameter in payload
         ? error.parameter
@@ -387,14 +385,12 @@ async function ensureVariant(
       known.push({ ...created, characteristics: [{ name: "rang", value: wanted }] });
       return created;
     } catch (error) {
-      if (uniqueNameConflict(error)) {
-        const rows = await variantsOf(product.id);
-        known.splice(0, known.length, ...rows);
-        const hit = rows.find((row) => sameBordoColor(variantColor(row), wanted));
-        if (hit?.id) {
-          await ensureBarcodes("variant", hit.id, catalog, used);
-          return hit;
-        }
+      const rows = await variantsOf(product.id).catch(() => known);
+      known.splice(0, known.length, ...rows);
+      const hit = rows.find((row) => sameBordoColor(variantColor(row), wanted));
+      if (hit?.id) {
+        await ensureBarcodes("variant", hit.id, catalog, used);
+        return hit;
       }
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
       if (!permissionDenied(error) && body === attempts[attempts.length - 1]) throw error;
@@ -497,6 +493,14 @@ async function ensureFolder(folders: FolderRow[], groupCode: string): Promise<Fo
     folders.push(folder);
     return folder;
   } catch (error) {
+    try {
+      const fresh = await productFolders();
+      folders.splice(0, folders.length, ...fresh);
+      const hit = matchProductFolder(folders, code);
+      if (hit) return hit;
+    } catch {
+      /* keep the create error */
+    }
     logger.warn({ section: code, err: error instanceof Error ? error.message : error }, "MoySklad folder could not be created");
     return null;
   }

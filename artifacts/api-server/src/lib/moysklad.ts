@@ -82,7 +82,8 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
       return (await response.json()) as T;
     } catch (error) {
       last = error;
-      const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
+      const tooMany = error instanceof MoySkladError && error.status === 429;
+      const retry = tooMany || (method !== "POST" && (networkFailure(error) || temporaryMoySklad(error)));
       if (!retry || attempt === 5) throw error;
     } finally {
       freeSlot();

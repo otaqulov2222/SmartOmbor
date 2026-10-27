@@ -229,7 +229,10 @@ function kopecks(som: number) {
 
 function supplyGone(error: unknown) {
   if (!(error instanceof MoySkladError)) return false;
-  return error.status === 404 || /корзин|recycle|trash|удален/i.test(error.message);
+  const path = error.path || "";
+  const onSupplyDoc = /\/entity\/supply\/[^/?]+$/i.test(path) && !/\/positions\//i.test(path);
+  if (error.status === 404 && onSupplyDoc) return true;
+  return /операция находится в корзине|находится в корзине/i.test(error.message);
 }
 
 const supplyTails = new Map<string, Promise<void>>();
@@ -346,31 +349,35 @@ async function replaceZeroSupply(supplyId: string) {
   }
 }
 
-async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }) {
+async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
   const existing = await findExistingSupply(shipment);
-  if (existing) return existing;
+  if (existing) return { ...existing, reused: true };
   try {
-    return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+    const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
       ...core,
       applicable: true,
       positions,
     });
+    return { id: created.id, name: created.name, reused: false };
   } catch (error) {
     const found = await findExistingSupply(shipment);
-    if (found) return found;
+    if (found) return { ...found, reused: true };
     const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
     const draftOk = permissionDenied(error) || /applicable|проведен/i.test(text);
     if (!draftOk) throw error;
     logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create as draft");
+    const beforeDraft = await findExistingSupply(shipment);
+    if (beforeDraft) return { ...beforeDraft, reused: true };
     try {
-      return await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
+      const draft = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
         ...core,
         applicable: false,
         positions,
       });
+      return { id: draft.id, name: draft.name, reused: false };
     } catch (draftError) {
       const again = await findExistingSupply(shipment);
-      if (again) return again;
+      if (again) return { ...again, reused: true };
       throw draftError;
     }
   }
@@ -614,15 +621,17 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       assortment: item.assortment,
     }));
     const created = await postSupplyDocument(supplyCore, supplyPositions, shipment);
+    const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
     try {
       await fillZeroSupplyPrices(created.id, shipment.lines);
     } catch (error) {
       logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
     }
-    applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
-    const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
+    if (!created.reused) {
+      applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
+    }
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
-    res.status(201).json({ id: created.id, number: created.name || shipment.number, shipment: saved });
+    res.status(created.reused ? 200 : 201).json({ id: created.id, number: created.name || shipment.number, shipment: saved, already: created.reused });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
     logger.warn({

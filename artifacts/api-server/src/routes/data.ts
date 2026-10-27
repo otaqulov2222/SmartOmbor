@@ -750,13 +750,10 @@ router.post("/products", async (req, res, next) => {
     try {
       created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
     } catch (error) {
-      const conflict = error instanceof MoySkladError && (error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message));
-      const again = conflict
-        ? await findExistingBordoProduct(
-            { factoryCode, sectionCode: groupCode, productCode, size },
-            { factoryCode, factoryName: partner.name, catalog },
-          )
-        : null;
+      const again = await findExistingBordoProduct(
+        { factoryCode, sectionCode: groupCode, productCode, size },
+        { factoryCode, factoryName: partner.name, catalog },
+      ).catch(() => null);
       if (!again?.id) throw error;
       if (packSize > 1) await ensurePachka(again.id, packSize);
       res.json({ id: again.id, name: again.name || name, reused: true });
