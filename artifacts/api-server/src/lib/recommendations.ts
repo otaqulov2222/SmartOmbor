@@ -75,7 +75,7 @@ const COLOR_WORDS: Array<[RegExp, string]> = [
 ];
 
 export function productTraits(name: string): { size: string | null; color: string | null } {
-  const sizeMatch = name.match(/(\d{2})\s*[-–]\s*(\d{2})/);
+  const sizeMatch = [...name.matchAll(/(\d{2})\s*[-–]\s*(\d{2})/g)].pop();
   const color = COLOR_WORDS.find(([pattern]) => pattern.test(name))?.[1] ?? null;
-  return { size: sizeMatch ? `${sizeMatch[1]}–${sizeMatch[2]}` : null, color };
+  return { size: sizeMatch ? `${sizeMatch[1]}-${sizeMatch[2]}` : null, color };
 }

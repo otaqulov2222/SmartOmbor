@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
+import { BORDO_SIZES, isBordoSize } from '@/bordo-sizes';
 
 type Account = { id: string; name: string; code: string; login: string };
 type ColorLine = { name: string; quantity: number };
@@ -9,8 +10,6 @@ type Shipment = { id: string; number: string; date: string; status: string; note
 type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; model: string; size: string; pairs: string; boxes: string; price: string; priceType: string; colors: ColorLine[] };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
-const LINE_SIZES = ['20-23', '20-25', '22-27', '24-29', '30-35', '36-40', '40-44', '41-43'] as const;
-
 function blank(factoryCode: string): Draft {
   return { key: Math.random().toString(36).slice(2), factoryCode, groupCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', price: '', priceType: '', colors: [] };
 }
@@ -324,7 +323,7 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
           <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillPassport(line, { productCode: codeValue(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
-          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!LINE_SIZES.includes(line.size as typeof LINE_SIZES[number]) && line.size ? <option value={line.size}>{line.size}</option> : null}{LINE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!isBordoSize(line.size) && line.size ? <option value={line.size}>{line.size}</option> : null}{BORDO_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
           <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })} onBlur={e => fillPassport(line, { price: digits(e.target.value) })}/></label>

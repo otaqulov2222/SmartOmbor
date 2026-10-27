@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -640,7 +640,7 @@ router.post("/products", async (req, res, next) => {
     const factoryCode = normalizeBordoCode(String(req.body?.factoryCode ?? ""));
     const groupCode = normalizeBordoCode(String(req.body?.groupCode ?? ""));
     const productCode = normalizeBordoCode(String(req.body?.productCode ?? req.body?.code ?? ""));
-    const size = String(req.body?.size ?? "").trim();
+    const size = normalizeBordoSize(String(req.body?.size ?? ""));
     const requestedMarkups = parseMarkups(req.body?.markups, String(req.body?.priceType ?? "").trim(), req.body?.markupPct);
     const builtName = ["Bordo", factoryCode, groupCode, productCode, size].filter(Boolean).join(" ").trim();
     const name = factoryCode ? builtName : String(req.body?.name ?? "").trim() || builtName;
@@ -905,7 +905,7 @@ router.get("/products/passport", async (req, res, next) => {
   try {
     const factory = normalizeBordoCode(String(req.query.factory ?? ""));
     const code = normalizeBordoCode(String(req.query.code ?? ""));
-    const size = String(req.query.size ?? "").trim();
+    const size = normalizeBordoSize(String(req.query.size ?? ""));
     const group = normalizeBordoCode(String(req.query.group ?? ""));
     if (!code) {
       res.json({ found: false, options: [] });

@@ -675,6 +675,17 @@ export function normalizeBordoCode(value: string): string {
   return foldGlyphs(value).trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US");
 }
 
+export const BORDO_SIZES = ["20-23", "20-25", "22-27", "24-29", "30-35", "36-40", "40-44", "41-43"] as const;
+
+export function normalizeBordoSize(value: string): string {
+  const folded = foldGlyphs(value).trim().replace(/\s+/g, "");
+  if (!folded) return "";
+  const known = BORDO_SIZES.find((size) => compactCode(size) === compactCode(folded));
+  if (known) return known;
+  const hit = folded.match(/^(\d{1,2})-(\d{1,2})$/);
+  return hit ? `${Number(hit[1])}-${Number(hit[2])}` : value.trim().replace(/[–—−]/g, "-");
+}
+
 export function canonicalFactoryCode(value: string, fallback = ""): string {
   const raw = normalizeBordoCode(value);
   const fb = normalizeBordoCode(fallback);
@@ -733,7 +744,7 @@ export function sameBordoCard(
   if (parts.color) return false;
   if (!sameFactoryCode(parts.factoryCode, input.factoryCode)) return false;
   if (!productCodeMatches(parts.productCode, input.productCode)) return false;
-  if (input.size.trim() && compactCode(parts.size) !== compactCode(input.size)) return false;
+  if (input.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(input.size))) return false;
   return true;
 }
 
@@ -810,9 +821,10 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
     raw = raw.slice(0, tail.index).trim();
   }
   raw = raw.replace(/\s+\d{4,}$/, "");
-  const sizeMatch = [...raw.matchAll(/\d{1,2}-\d{1,2}/g)].pop();
+  const sizeMatches = [...raw.matchAll(/\d{1,2}-\d{1,2}/g)];
+  const sizeMatch = [...sizeMatches].reverse().find((item) => BORDO_SIZES.some((size) => compactCode(size) === compactCode(item[0]))) ?? sizeMatches[sizeMatches.length - 1];
   if (!sizeMatch || sizeMatch.index == null) return null;
-  const size = sizeMatch[0];
+  const size = normalizeBordoSize(sizeMatch[0]);
   const after = raw.slice(sizeMatch.index + size.length).trim();
   if (after && !/^\d{4,}$/.test(after)) color = color || after.replace(/^\((.*)\)$/, "$1").trim();
   const head = raw.slice(0, sizeMatch.index).trim();

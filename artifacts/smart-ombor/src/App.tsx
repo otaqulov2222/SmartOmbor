@@ -30,6 +30,7 @@ import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
+import { BORDO_SIZES } from '@/bordo-sizes';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -448,7 +449,6 @@ function DashboardPage() {
 }
 
 /* ---------- products ---------- */
-const PRODUCT_SIZES = ['20-23', '20-25', '22-27', '24-29', '30-35', '36-40', '40-44', '41-43'] as const;
 
 function moneyDigits(value: string) {
   return value.replace(/[^\d]/g, '');
@@ -666,7 +666,7 @@ function ProductAddDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       {factoryMissing ? <p className="field-note" data-testid="status-factory-missing">{t('products.factoryMissing')} <Link href="/partners" className="notice-link" onClick={onClose}>{t('products.factoryMissing.action')}</Link></p> : null}
       <label className="field">{t('zavod.groupCode')}<TextInput testId="input-product-group" value={draft.groupCode} onChange={setText('groupCode')} autoCapitalize="characters"/></label>
       <label className="field">{t('zavod.product')}<TextInput testId="input-product-code" value={draft.productCode} onChange={setText('productCode')} autoCapitalize="characters"/></label>
-      <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{PRODUCT_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+      <label className="field">{t('products.field.size')}<select className="input" value={draft.size} onChange={event => setDraft(current => ({ ...current, size: event.target.value }))} data-testid="select-product-size"><option value="">{t('products.sizeEmpty')}</option>{BORDO_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
       <label className="field">{t('products.field.pack')}<TextInput testId="input-product-pack" inputMode="numeric" value={draft.packSize} onChange={setText('packSize')}/></label>
       <label className="field">{t('products.field.cost')}<TextInput testId="input-product-cost" inputMode="numeric" value={draft.cost} onChange={event => setDraft(current => ({ ...current, cost: moneyDigits(event.target.value) }))}/></label>
       <label className="field">{t('products.field.barcode')}<TextInput testId="input-product-barcode" inputMode="numeric" value={draft.barcode} onChange={setText('barcode')} placeholder={t('products.barcodeAuto')}/></label>
@@ -1021,9 +1021,9 @@ function RecommendationsPage() {
     return { windowDays, sold, cover };
   };
   const traits = (name: string) => {
-    const size = name.match(/(\d{2})\s*[-–]\s*(\d{2})/);
+    const size = [...name.matchAll(/(\d{2})\s*[-–]\s*(\d{2})/g)].pop();
     const color = RECO_COLORS.find(([pattern]) => pattern.test(name));
-    return { size: size ? `${size[1]}–${size[2]}` : '—', color: color ? t(color[1]) : '—' };
+    return { size: size ? `${size[1]}-${size[2]}` : '—', color: color ? t(color[1]) : '—' };
   };
   const needle = search.trim().toLowerCase();
   const rows = (q.data ?? []).filter(row => !needle || `${row.product.name} ${row.product.code || ''} ${row.product.article || ''} ${traits(row.product.name).size} ${traits(row.product.name).color}`.toLowerCase().includes(needle));

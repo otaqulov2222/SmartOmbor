@@ -1,4 +1,4 @@
-import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, parseBordoName, productCodeMatches, sameBordoCard, sameFactoryCode, type Catalog } from "./catalog";
+import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoSize, parseBordoName, productCodeMatches, sameBordoCard, sameFactoryCode, type Catalog } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -655,7 +655,7 @@ export async function stampWaybillCardPrices(
   const seen = new Set<string>();
   for (const line of lines) {
     if (!(line.price > 0)) continue;
-    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
     const matched = await findExistingBordoProduct(line, scope);
     if (!matched?.id || seen.has(matched.id)) continue;
     seen.add(matched.id);
@@ -676,7 +676,7 @@ function productIdentity(line: ShipmentLine, factoryCode: string) {
     compactCode(canonicalFactoryCode(line.factoryCode || factoryCode, factoryCode)),
     compactCode(line.sectionCode),
     compactCode(line.productCode),
-    line.size.trim().toLowerCase(),
+    compactCode(normalizeBordoSize(line.size)),
   ].join("\0");
 }
 
@@ -684,7 +684,7 @@ function parentIdentity(line: ShipmentLine, factoryCode: string) {
   return [
     compactCode(canonicalFactoryCode(line.factoryCode || factoryCode, factoryCode)),
     compactCode(line.productCode),
-    line.size.trim().toLowerCase(),
+    compactCode(normalizeBordoSize(line.size)),
   ].join("\0");
 }
 
@@ -717,24 +717,25 @@ export async function findExistingBordoProduct(
     const parts = byId?.name ? parseBordoName(byId.name) : null;
     const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
     const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
-    const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(line.size);
+    const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(normalizeBordoSize(line.size));
     const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
     if (byId && codeOk && sizeOk && factoryOk) return byId;
   }
   const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
+  const size = normalizeBordoSize(line.size);
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
     factoryName: scope.factoryName,
     groupCode,
     productCode: line.productCode,
-    size: line.size,
+    size,
   });
   if (catalogMatch?.id) {
     const row = await productById(catalogMatch.id);
     if (row) return row;
   }
-  for (const query of searchQueries(factory, groupCode, line.productCode, line.size)) {
+  for (const query of searchQueries(factory, groupCode, line.productCode, size)) {
     try {
       const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
       const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
@@ -743,13 +744,13 @@ export async function findExistingBordoProduct(
         factoryName: scope.factoryName,
         groupCode,
         productCode: line.productCode,
-        size: line.size,
+        size,
       }) || matchNamedProducts(rows, {
         factoryCode: factory,
         factoryName: scope.factoryName,
         groupCode: "",
         productCode: line.productCode,
-        size: line.size,
+        size,
       });
       if (matched?.id) {
         const row = await productById(matched.id);
@@ -758,7 +759,7 @@ export async function findExistingBordoProduct(
       const identity = rows.find((row) => sameBordoCard(row.name, {
         factoryCode: factory,
         productCode: line.productCode,
-        size: line.size,
+        size,
         groupCode,
       }));
       if (identity?.id) {
@@ -771,8 +772,8 @@ export async function findExistingBordoProduct(
     }
   }
   const names = [...new Set(productCodeForms(line.productCode).flatMap((code) => [
-    ["Bordo", factory, groupCode, code, line.size].filter(Boolean).join(" ").trim(),
-    ["Bordo", factory, code, line.size].filter(Boolean).join(" ").trim(),
+    ["Bordo", factory, groupCode, code, size].filter(Boolean).join(" ").trim(),
+    ["Bordo", factory, code, size].filter(Boolean).join(" ").trim(),
   ]))].filter((item) => item.length >= 2);
   for (const candidate of names) {
     const hit = await productByName(candidate);
@@ -798,7 +799,7 @@ export async function buildSupplyPositions(
     const parts = receiptParts(line);
     if (!parts.length) continue;
     requireWaybillLine(line);
-    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim();
+    const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
     const parent = await findExistingBordoProduct(line, scope);
     if (parent?.name) {
       const parts = parseBordoName(parent.name);

@@ -4,7 +4,7 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 import { parseMarkups, parsePct, type SaleMarkup } from "./markup";
-import { canonicalFactoryCode, normalizeBordoCode } from "./catalog";
+import { canonicalFactoryCode, normalizeBordoCode, normalizeBordoSize } from "./catalog";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -322,7 +322,7 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     sectionCode: normalizeBordoCode(String(raw.sectionCode ?? "")),
     productCode: normalizeBordoCode(String(raw.productCode ?? "")),
     model: String(raw.model ?? "").trim(),
-    size: String(raw.size ?? "").trim(),
+    size: normalizeBordoSize(String(raw.size ?? "")),
     pairs,
     boxes: Math.max(0, Number(raw.boxes) || 0),
     quantity,
