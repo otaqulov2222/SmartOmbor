@@ -179,7 +179,6 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
         ...next,
         ...(!merged.groupCode.trim() && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
         ...(!merged.size.trim() && data.size ? { size: data.size } : {}),
-        ...(!merged.pairs.trim() && data.packSize && data.packSize > 1 ? { pairs: String(data.packSize) } : {}),
         ...(!merged.price.trim() && (data.cost || data.salePrice) ? { price: String(data.cost || data.salePrice) } : {}),
         ...(!merged.priceType && data.priceType ? { priceType: data.priceType } : {}),
       });

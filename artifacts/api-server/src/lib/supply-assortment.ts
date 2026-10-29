@@ -110,6 +110,11 @@ function colorRows(line: Pick<ShipmentLine, "colors">) {
   return [...merged.values()];
 }
 
+export function packSizeOf(line: { pachka?: number }): number {
+  const pachka = Math.max(0, Math.round(Number(line.pachka) || 0));
+  return pachka > 1 ? pachka : 0;
+}
+
 export function pieceCount(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): number {
   const pack = line.pairs > 0 ? line.pairs : 0;
   const colors = colorRows(line);
@@ -318,7 +323,13 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
       return await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
     } catch (error) {
       const existing = await productByName(String(payload.name ?? ""));
-      if (existing) return existing;
+      if (existing && rowMatchesName(existing.name, String(payload.name ?? ""))) return existing;
+      if (uniqueNameConflict(error) && ("article" in payload || "code" in payload)) {
+        logger.warn({ name: payload.name }, "MoySklad product create retry without shared article");
+        delete payload.article;
+        delete payload.code;
+        continue;
+      }
       if (uniqueNameConflict(error)) throw error;
       if (!permissionDenied(error)) throw error;
       const drop = error instanceof MoySkladError && error.parameter && error.parameter in payload
@@ -679,10 +690,9 @@ export async function stampWaybillCardPrices(
     seen.add(matched.id);
     const priced = saleForLine(line);
     await writeProductCard(matched.id, priced.sale, priced.type, currencyMeta, {
-      article: line.productCode.trim(),
       supplierMeta: scope.supplierMeta,
       description: cardDescription(line),
-      packSize: line.pairs > 1 ? line.pairs : 0,
+      packSize: packSizeOf(line),
       buySom: line.price,
       sales: salesForLine(line) ?? undefined,
     });
@@ -845,9 +855,7 @@ export async function buildSupplyPositions(
       byIdentity.set(item.key, known);
       continue;
     }
-    const code = item.line.productCode.trim();
-    const codeKey = code.replace(/\s+/g, "");
-    const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
+    const packSize = packSizeOf(item.line);
     const priced = saleForLine(item.line);
     const sales = salesForLine(item.line);
     const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : (priced.sale > 0 ? await listedPrices(undefined, priced.type, priced.sale, currencyMeta) : null);
@@ -861,8 +869,6 @@ export async function buildSupplyPositions(
       ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
       ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
       ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-      ...(codeKey.length >= 8 ? { code: codeKey } : {}),
-      ...(code ? { article: code } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
     if (listed) product.salePrices = listed;
@@ -892,11 +898,10 @@ export async function buildSupplyPositions(
     if (item.line.price > 0) {
       const priced = saleForLine(item.line);
       await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
-        article: item.line.productCode.trim(),
         supplierMeta: scope.supplierMeta,
         description: cardDescription(item.line),
         folderMeta: item.folder?.meta ?? null,
-        packSize: item.line.pairs > 1 ? item.line.pairs : 0,
+        packSize: packSizeOf(item.line),
         buySom: item.line.price,
         sales: salesForLine(item.line) ?? undefined,
       });
@@ -904,7 +909,7 @@ export async function buildSupplyPositions(
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
-    const packSize = item.line.pairs > 1 ? item.line.pairs : 0;
+    const packSize = packSizeOf(item.line);
     const packKey = `${product.id}:${packSize}`;
     if (!packCache.has(packKey)) packCache.set(packKey, await ensurePachka(product.id, packSize));
     let known = variantCache.get(product.id);
@@ -978,7 +983,6 @@ export async function buildSupplyPositions(
           if (item.line.price > 0) {
             const priced = saleForLine(item.line);
             await writeProductCard(existingColor.id, priced.sale, priced.type, currencyMeta, {
-              article: item.line.productCode.trim(),
               supplierMeta: scope.supplierMeta,
               packSize,
               buySom: item.line.price,
@@ -1001,7 +1005,7 @@ export async function buildSupplyPositions(
           price: item.line.price,
           priceType: saleTypeOf(item.line),
           sales: salesForLine(item.line),
-          article: item.line.productCode.trim(),
+          article: "",
           description: cardDescription(item.line),
           packSize,
           catalog: scope.catalog,

@@ -18,6 +18,7 @@ export type ShipmentLine = {
   size: string;
   pairs: number;
   boxes: number;
+  pachka: number;
   quantity: number;
   price: number;
   priceType: string;
@@ -338,6 +339,7 @@ function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLin
     size: normalizeBordoSize(String(raw.size ?? "")),
     pairs,
     boxes: Math.max(0, Number(raw.boxes) || 0),
+    pachka: Math.max(0, Math.round(Number(raw.pachka) || 0)),
     quantity,
     price: Math.max(0, Number(raw.price) || 0),
     priceType: ["Exclusive", "Premium", "Standard"].includes(String(raw.priceType ?? "")) ? String(raw.priceType) : "",
@@ -424,6 +426,7 @@ export function updateShipment(id: string, input: { date?: string; note?: string
     const next = cleanLine(line, account.code);
     const previous = shipment.lines.find((item) => item.id === line.id);
     if (previous) next.id = previous.id;
+    if (previous && (line as { pachka?: unknown }).pachka == null) next.pachka = previous.pachka;
     if (!previous?.productId) return next;
     const same = previous.factoryCode === next.factoryCode && previous.sectionCode === next.sectionCode && previous.productCode === next.productCode && previous.model === next.model && previous.size === next.size;
     if (!same) return next;
