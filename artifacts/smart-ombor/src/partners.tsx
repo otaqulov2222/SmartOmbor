@@ -115,6 +115,7 @@ type DraftLine = {
   model: string;
   size: string;
   pairs: string;
+  pachka: string;
   boxes: string;
   quantity: string;
   price: string;
@@ -131,6 +132,7 @@ function draftFrom(line: Line, markup: SaleMarkup = DEFAULT_MARKUP): DraftLine {
     model: line.model,
     size: line.size,
     pairs: line.pairs ? String(line.pairs) : '',
+    pachka: line.pachka && line.pachka > 1 ? String(line.pachka) : '',
     boxes: line.boxes ? String(line.boxes) : '',
     quantity: line.quantity ? String(line.quantity) : '',
     price: line.price ? String(line.price) : '',
@@ -140,7 +142,7 @@ function draftFrom(line: Line, markup: SaleMarkup = DEFAULT_MARKUP): DraftLine {
 }
 
 function blankDraft(markup: SaleMarkup = DEFAULT_MARKUP): DraftLine {
-  return { key: Math.random().toString(36).slice(2), factoryCode: '', sectionCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', quantity: '', price: '', markup: defaultPctMap(markup), colors: [{ name: '', quantity: '' }] };
+  return { key: Math.random().toString(36).slice(2), factoryCode: '', sectionCode: '', productCode: '', model: '', size: '', pairs: '', pachka: '', boxes: '', quantity: '', price: '', markup: defaultPctMap(markup), colors: [{ name: '', quantity: '' }] };
 }
 
 function asNumber(value: string) {
@@ -257,6 +259,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
   const [productCode, setProductCode] = useState(line.productCode || '');
   const [size, setSize] = useState(line.size || '');
   const [pairs, setPairs] = useState(line.pairs ? String(line.pairs) : '');
+  const [pachka, setPachka] = useState(line.pachka && line.pachka > 1 ? String(line.pachka) : '');
   const [boxes, setBoxes] = useState(line.boxes ? String(line.boxes) : '');
   const [price, setPrice] = useState(line.price ? String(line.price) : '');
   const [pctMap, setPctMap] = useState<PctMap>(() => pctMapOf(line, markup));
@@ -267,6 +270,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     setProductCode(line.productCode || '');
     setSize(line.size || '');
     setPairs(line.pairs ? String(line.pairs) : '');
+    setPachka(line.pachka && line.pachka > 1 ? String(line.pachka) : '');
     setBoxes(line.boxes ? String(line.boxes) : '');
     setPrice(line.price ? String(line.price) : '');
     setPctMap(pctMapOf(line, markup));
@@ -277,6 +281,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     const patch: Partial<Line> = {
       size,
       pairs: asNumber(pairs),
+      pachka: asNumber(pachka),
       boxes: asNumber(boxes),
       price: asNumber(price),
       markup: markupValues,
@@ -286,7 +291,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
       productCode: codeValue(next?.productCode ?? productCode),
     };
     const sameMarkup = PRICE_TYPES.every(type => (patch.markup?.[type] ?? null) === (line.markup?.[type] ?? (line.priceType === type ? line.markupPct : null) ?? null));
-    const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && patch.boxes === line.boxes && patch.price === line.price && sameMarkup && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
+    const unchanged = patch.factoryCode === (line.factoryCode || '') && patch.sectionCode === (line.sectionCode || '') && patch.productCode === (line.productCode || '') && patch.size === (line.size || '') && patch.pairs === line.pairs && (patch.pachka ?? 0) === (line.pachka ?? 0) && patch.boxes === line.boxes && patch.price === line.price && sameMarkup && (patch.productId ?? line.productId ?? null) === (line.productId ?? null);
     if (unchanged) return;
     void onSave(patch);
   };
@@ -302,12 +307,13 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
         size: sizeVal,
         pack: next?.pairs != null ? String(next.pairs) : pairs,
         price: next?.price != null ? String(next.price) : price,
-        pachka: next?.pachka != null ? String(next.pachka) : String(line.pachka || ''),
+        pachka: next?.pachka != null ? String(next.pachka) : pachka,
         markup: pctMap,
       }, data) : {};
       if (extra.sectionCode) setSectionCode(codeInput(extra.sectionCode));
       if (extra.size) setSize(extra.size);
       if (extra.pairs) setPairs(String(extra.pairs));
+      if (extra.pachka) setPachka(String(extra.pachka));
       if (extra.price) setPrice(String(extra.price));
       if (extra.markup) {
         setPctMap(current => {
@@ -332,6 +338,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
       <td data-label={t('zavod.product')}><b>{line.productCode || '—'}</b></td>
       <td data-label={t('zavod.size')}>{line.size || '—'}</td>
       <td className="num" data-label={t('zavod.pairs')}>{fmt(line.pairs)}</td>
+      <td className="num waybill-pachka" data-label={t('zavod.pachka')}>{line.pachka && line.pachka > 1 ? fmt(line.pachka) : '—'}</td>
       <td className="num" data-label={t('zavod.boxes')}>{fmt(line.boxes)}</td>
       <td className="num" data-label={t('zavod.price')}>{line.price ? money(line.price) : '—'}</td>
       <td data-label={t('zavod.priceType')}>{markupLabel(line, markup)}</td>
@@ -346,6 +353,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     <td data-label={t('zavod.product')}><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
     <td className="waybill-size" data-label={t('zavod.size')}><select className="input" aria-label={t('zavod.size')} value={size} onChange={event => { setSize(event.target.value); applyPassport({ size: event.target.value }); }}><option value=""/>{!isBordoSize(size) && size && <option value={size}>{size}</option>}{BORDO_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></td>
     <td data-label={t('zavod.pairs')}><input className="input" aria-label={t('zavod.pairs')} inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => applyPassport()}/></td>
+    <td className="waybill-pachka" data-label={t('zavod.pachka')}><input className="input" aria-label={t('zavod.pachka')} inputMode="numeric" value={pachka} onChange={event => setPachka(event.target.value.replace(/[^\d]/g, ''))} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onBlur={() => commit()}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => applyPassport()}/></td>
     <td className="waybill-type" data-label={t('zavod.priceType')}><MarkupTriple compact values={pctMap} locked={kept} onChange={setPctMap} onBlur={next => { setPctMap(next); commit({ markup: parsePctMap(next) }); }}/></td>
@@ -389,7 +397,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
-  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.brand'), t('zavod.factoryCode'), t('zavod.groupCode'), t('zavod.product'), t('zavod.size'), t('zavod.pairs'), t('zavod.boxes'), t('zavod.price'), t('zavod.priceType'), t('zavod.colors'), t('zavod.sum')];
+  const headers = [t('common.number'), t('common.date'), t('common.status'), t('zavod.brand'), t('zavod.factoryCode'), t('zavod.groupCode'), t('zavod.product'), t('zavod.size'), t('zavod.pairs'), t('zavod.pachka'), t('zavod.boxes'), t('zavod.price'), t('zavod.priceType'), t('zavod.colors'), t('zavod.sum')];
   const excel = () => {
     const rows = shipments.flatMap(shipment => shipment.lines.map(line => [
       shipment.number,
@@ -401,6 +409,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
       line.productCode,
       line.size,
       line.pairs,
+      line.pachka && line.pachka > 1 ? line.pachka : '',
       line.boxes,
       line.price,
       markupLabel(line, DEFAULT_MARKUP),
@@ -413,8 +422,8 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   };
   const pdf = () => {
     const blocks = shipments.map(shipment => {
-      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(markupLabel(line, DEFAULT_MARKUP))}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
-      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.brand'))}</th><th>${htmlEscape(t('zavod.factoryCode'))}</th><th>${htmlEscape(t('zavod.groupCode'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.priceType'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
+      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${line.pachka && line.pachka > 1 ? fmt(line.pachka) : '—'}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(markupLabel(line, DEFAULT_MARKUP))}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
+      return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.brand'))}</th><th>${htmlEscape(t('zavod.factoryCode'))}</th><th>${htmlEscape(t('zavod.groupCode'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.pachka'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.priceType'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
     }).join('');
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"/><title>${htmlEscape(title)}</title><style>
       *{box-sizing:border-box} body{margin:0;font:12px/1.45 Inter,Segoe UI,sans-serif;color:#0f1b2d}
@@ -532,9 +541,8 @@ function CreatePartner({ onClose, onCreated }: { onClose: () => void; onCreated:
   </div></div>, document.body);
 }
 
-function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[], pachka: number) => Promise<boolean> }) {
+function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]) => Promise<boolean> }) {
   const { t, fmt } = useI18n();
-  const [pachka, setPachka] = useState(line.pachka && line.pachka > 1 ? String(line.pachka) : '');
   const [rows, setRows] = useState(() => {
     const saved = mergeColors(line.colors ?? []).map(color => ({ name: color.name, quantity: String(color.quantity) }));
     return [...saved, { name: '', quantity: '' }];
@@ -579,12 +587,11 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
     if (!ready) return;
     setBusy(true);
     setFailed(false);
-    const ok = await onSave(filled, asNumber(pachka));
+    const ok = await onSave(filled);
     setBusy(false);
     if (!ok) setFailed(true);
   };
   return <div className="color-edit" onMouseDown={event => event.stopPropagation()}>
-    <label className="pachka-field"><span>{t('zavod.pachka')}</span><input className="input" inputMode="numeric" value={pachka} aria-label={t('zavod.pachka')} onChange={event => setPachka(event.target.value.replace(/[^\d]/g, ''))}/></label>
     {rows.map((row, index) => <div key={index} className="color-pair">
       <input className="input" ref={node => { nameRefs.current[index] = node; }} value={row.name} aria-label={t('zavod.colorName')} placeholder={t('zavod.colorName')} autoCapitalize="characters" onChange={event => edit(index, 'name', event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.parentElement?.querySelector<HTMLInputElement>('.color-qty')?.focus(); } }}/>
       <span>/</span>
@@ -912,7 +919,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             </header>
             {openShipment === shipment.id && (
               <div className="waybill-scroll"><table className="waybill-table">
-                <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="waybill-colors-cell">{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
+                <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.pachka')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="waybill-colors-cell">{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
                 <tbody>{(shipment.lines ?? []).map(line => {
                   const colors = mergeColors(line.colors ?? []);
                   const colored = colors.length > 0;
@@ -921,8 +928,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                       <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} markup={markup} onSave={patch => saveLine(shipment, line, patch)}/>
                       <td className="waybill-line-tools" data-label="">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
                     </tr>
-                    {colored && colorFor !== line.id && <tr className="waybill-color-strip"><td colSpan={12}><div className="color-strip"><em>{t('zavod.colors')}</em><ColorMarks colors={colors} fmt={fmt}/>{(line.pachka ?? 0) > 1 && <em>{t('zavod.pachka')} {fmt(line.pachka)}</em>}</div></td></tr>}
-                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={12}><LineColors line={line} onSave={async (colors, pachka) => { const ok = await saveLine(shipment, line, { colors, pachka }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
+                    {colored && colorFor !== line.id && <tr className="waybill-color-strip"><td colSpan={13}><div className="color-strip"><em>{t('zavod.colors')}</em><ColorMarks colors={colors} fmt={fmt}/></div></td></tr>}
+                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={13}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;
                 })}</tbody>
               </table></div>
@@ -1047,8 +1054,8 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
       <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => void fill()}/></label>
       <label className="field"><span>{t('zavod.size')}</span><select className="input" value={size} onChange={event => { setSize(event.target.value); void loadPassport({ factory: factoryCode.trim(), code: productCode.trim(), size: event.target.value, group: sectionCode.trim() }).then(data => { if (!data) return; const extra = fromPassport({ group: sectionCode, size: event.target.value, pack: pairs, price, pachka, markup: pctMap }, data); if (extra.sectionCode) setSectionCode(extra.sectionCode); if (extra.pairs) setPairs(String(extra.pairs)); if (extra.pachka) setPachka(String(extra.pachka)); if (extra.price) setPrice(String(extra.price)); if (extra.markup) setPctMap(current => { const nextMap = { ...current }; for (const type of PRICE_TYPES) { if (extra.markup?.[type] != null) nextMap[type] = String(extra.markup[type]); } return nextMap; }); }); }}><option value=""/>{!isBordoSize(size) && size && <option value={size}>{size}</option>}{BORDO_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
       <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={pairs} onChange={event => setPairs(event.target.value)} onBlur={() => void fill()}/></label>
-      <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.pachka')}</span><input className="input" inputMode="numeric" value={pachka} onChange={event => setPachka(event.target.value.replace(/[^\d]/g, ''))}/></label>
+      <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)}/></label>
       <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onBlur={() => void fill()}/></label>
       <label className="field span-2"><span>{t('zavod.priceType')}</span><MarkupTriple values={pctMap} onChange={setPctMap}/></label>
       <label className="field"><span>{t('zavod.sum')}</span><input className="input" value={sum ? money(sum) : ''} readOnly/></label>
@@ -1071,7 +1078,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
     if (!merged.productCode.trim()) { if (next) patch(line.key, next); return; }
     void loadPassport({ factory: merged.factoryCode.trim(), code: merged.productCode.trim(), size: merged.size, group: merged.sectionCode.trim() }).then(data => {
       if (!data) { if (next) patch(line.key, next); return; }
-      const extra = fromPassport({ group: merged.sectionCode, size: merged.size, pack: merged.pairs, price: merged.price, markup: merged.markup }, data);
+      const extra = fromPassport({ group: merged.sectionCode, size: merged.size, pack: merged.pairs, price: merged.price, pachka: merged.pachka, markup: merged.markup }, data);
       const nextMarkup = extra.markup ? { ...merged.markup } : null;
       if (nextMarkup && extra.markup) {
         for (const type of PRICE_TYPES) {
@@ -1083,6 +1090,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
         ...(extra.sectionCode ? { sectionCode: extra.sectionCode } : {}),
         ...(extra.size ? { size: extra.size } : {}),
         ...(extra.pairs ? { pairs: String(extra.pairs) } : {}),
+        ...(extra.pachka ? { pachka: String(extra.pachka) } : {}),
         ...(extra.price ? { price: String(extra.price) } : {}),
         ...(nextMarkup ? { markup: nextMarkup } : {}),
       });
@@ -1110,6 +1118,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
             model: line.model,
             size: line.size,
             pairs: asNumber(line.pairs),
+            pachka: asNumber(line.pachka),
             boxes: asNumber(line.boxes),
             quantity: asNumber(line.quantity),
             price: asNumber(line.price),
@@ -1138,6 +1147,7 @@ function WaybillEditor({ shipment, markup, onClose, onSaved }: { shipment: Shipm
         <label className="field"><span>{t('zavod.product')}</span><input className="input" autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillLine(line, { productCode: codeValue(e.target.value) })}/></label>
         <label className="field"><span>{t('zavod.size')}</span><select className="input" value={line.size} onChange={e => fillLine(line, { size: e.target.value })}><option value=""/>{!isBordoSize(line.size) && line.size && <option value={line.size}>{line.size}</option>}{BORDO_SIZES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="field"><span>{t('zavod.pairs')}</span><input className="input" inputMode="decimal" value={line.pairs} onChange={e => patch(line.key, { pairs: e.target.value })} onBlur={e => fillLine(line, { pairs: e.target.value })}/></label>
+        <label className="field"><span>{t('zavod.pachka')}</span><input className="input" inputMode="numeric" value={line.pachka} onChange={e => patch(line.key, { pachka: e.target.value.replace(/[^\d]/g, '') })}/></label>
         <label className="field"><span>{t('zavod.boxes')}</span><input className="input" inputMode="decimal" value={line.boxes} onChange={e => patch(line.key, { boxes: e.target.value })}/></label>
         <label className="field"><span>{t('zavod.price')}</span><input className="input" inputMode="decimal" value={line.price} onChange={e => patch(line.key, { price: e.target.value })} onBlur={e => fillLine(line, { price: e.target.value })}/></label>
         <label className="field span-2"><span>{t('zavod.priceType')}</span><MarkupTriple values={line.markup} onChange={next => patch(line.key, { markup: next })}/></label>

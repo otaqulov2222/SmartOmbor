@@ -910,8 +910,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
 .waybill-lines { display: grid; }
 .waybill-scroll { overflow-x: auto; }
-.waybill-table { width: 100%; min-width: 58rem; border-collapse: collapse; font-size: .84rem; }
+.waybill-table { width: 100%; min-width: 62rem; border-collapse: collapse; font-size: .84rem; }
 .waybill-table .input { height: 2.15rem; width: 100%; min-width: 4.4rem; padding: 0 .5rem; }
+.waybill-table .waybill-pachka { width: 4.8rem; min-width: 4.8rem; }
+.waybill-table .waybill-pachka .input { min-width: 3.6rem; }
 .waybill-table .waybill-size { min-width: 6.8rem; }
 .waybill-table .waybill-size .input { min-width: 6.8rem; }
 .waybill-table .waybill-type { min-width: 13rem; }
@@ -942,9 +944,6 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .color-chip i { min-width: 1.15rem; height: 1.1rem; padding: 0 .3rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-size: .68rem; font-weight: 750; display: inline-grid; place-items: center; }
 .waybill-colors { background: #f4f7ff; padding: .7rem .85rem; }
 .color-edit { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
-.pachka-field { display: inline-flex; align-items: center; gap: .4rem; margin: 0; }
-.pachka-field span { color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
-.pachka-field .input { width: 4.6rem; height: 2.25rem; }
 .color-pair { display: flex; align-items: center; gap: .35rem; padding: .2rem .35rem .2rem .45rem; background: #fff; border: 1px solid #c9d4f5; border-radius: .75rem; }
 .color-pair .input { width: 6.4rem; height: 2.25rem; position: relative; z-index: 1; text-transform: uppercase; font-weight: 750; letter-spacing: .03em; }
 .color-pair .color-qty { width: 4.6rem; text-transform: none; font-weight: 650; }
@@ -1200,6 +1199,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .waybill-table td.waybill-colors-cell,
   .waybill-table td.waybill-type,
   .waybill-table td.waybill-size,
+  .waybill-table td.waybill-pachka,
   .waybill-table td.num {
     width: 100%; max-width: 100%; min-width: 0; white-space: normal; text-align: left;
   }
