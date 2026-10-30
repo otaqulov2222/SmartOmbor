@@ -17,7 +17,7 @@ type Me = {
 };
 type Task = {
   id: string; title: string; description: string; dueDate: string; dueTime: string; priority: string;
-  status: 'assigned' | 'accepted' | 'done'; assignees: Array<{ id: string; name: string }>; late?: boolean;
+  status: 'assigned' | 'accepted' | 'progress' | 'review' | 'done'; assignees: Array<{ id: string; name: string }>; late?: boolean;
 };
 
 const SESSION = 'smart-ombor-session';
@@ -365,7 +365,7 @@ export function OfficePage() {
     await startCam(next);
   };
 
-  const patchTask = async (id: string, status: 'accepted' | 'done') => {
+  const patchTask = async (id: string, status: 'accepted' | 'progress' | 'done') => {
     await fetch(`/api/office/tasks/${id}`, { method: 'PATCH', headers: officeHeaders(), body: JSON.stringify({ status }) });
     await loadTasks();
   };
@@ -503,7 +503,9 @@ export function OfficePage() {
           <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
           <div className="office-task-actions">
             {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
-            {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
+            {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
+            {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
+            {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
             {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
           </div>
         </article>) : <p className="office-empty">{t('office.noTasks')}</p>}

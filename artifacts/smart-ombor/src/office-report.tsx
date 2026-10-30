@@ -28,11 +28,6 @@ type Tabel = {
   items: TabelRow[];
   people?: PersonSum[];
 };
-type Person = { id: string; name: string; login: string; role: string };
-type Task = {
-  id: string; title: string; description: string; dueDate: string; dueTime: string; priority: string;
-  status: 'assigned' | 'accepted' | 'done'; assignees: Array<{ id: string; name: string }>; late?: boolean;
-};
 type Mode = 'day' | 'week' | 'month' | 'range';
 type Filter = 'all' | 'came' | 'absent' | 'late' | 'wait' | 'off' | 'early';
 
@@ -485,91 +480,5 @@ export function OfficeReportPage() {
         </div>
       </div>
     </div>, document.body)}
-  </div>;
-}
-
-export function OfficeTasksPage() {
-  const { t, date } = useI18n();
-  const [people, setPeople] = useState<Person[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [dueDate, setDueDate] = useState(tashkentDay());
-  const [dueTime, setDueTime] = useState('18:00');
-  const [priority, setPriority] = useState('normal');
-  const [picked, setPicked] = useState<string[]>([]);
-  const [note, setNote] = useState('');
-  const [ok, setOk] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const loadTasks = async () => {
-    const response = await fetch('/api/office/tasks', { headers: officeHeaders() });
-    if (response.ok) setTasks((await response.json() as { items: Task[] }).items);
-  };
-  useEffect(() => {
-    void loadTasks();
-    void fetch('/api/office/people', { headers: officeHeaders() }).then(async response => {
-      if (response.ok) setPeople((await response.json() as { items: Person[] }).items);
-    });
-  }, []);
-
-  const createTask = async () => {
-    setBusy(true); setNote('');
-    const response = await fetch('/api/office/tasks', {
-      method: 'POST', headers: officeHeaders(),
-      body: JSON.stringify({ title, description: body, assignedTo: picked, dueDate, dueTime, priority, remind: true }),
-    });
-    setBusy(false);
-    if (!response.ok) { setNote(t('office.taskNeed')); return; }
-    setTitle(''); setBody(''); setPicked([]);
-    setOk(t('office.taskOk'));
-    await loadTasks();
-  };
-
-  const statusOf = (status: Task['status']) => {
-    if (status === 'assigned') return t('office.accept');
-    if (status === 'accepted') return t('office.working');
-    return t('office.finished');
-  };
-
-  return <div className="tabel">
-    <div className="page-head">
-      <div>
-        <h1>{t('nav.officeTasks')}</h1>
-        <p>{t('office.tasksLead')}</p>
-      </div>
-    </div>
-    <section className="card">
-      <div className="card-head"><h2>{t('office.newTask')}</h2></div>
-      <div className="form-grid">
-        <label className="field"><span>{t('office.taskName')}</span><input className="input" value={title} onChange={e => setTitle(e.target.value)} maxLength={200}/></label>
-        <label className="field span-2"><span>{t('office.taskText')}</span><textarea className="input" value={body} onChange={e => setBody(e.target.value)} rows={4} maxLength={2000}/></label>
-      </div>
-      <div className="tabel-people">
-        {people.map(item => (
-          <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
-        ))}
-      </div>
-      <div className="form-grid">
-        <label className="field"><span>{t('common.date')}</span><input className="input" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}/></label>
-        <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={e => setDueTime(e.target.value)}/></label>
-      </div>
-      <div className="tabel-prio">
-        {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
-          <button type="button" key={id} className={priority === id ? 'is-on' : ''} onClick={() => setPriority(id)}>{t(key)}</button>
-        ))}
-      </div>
-      {note && <p className="muted">{note}</p>}
-      {ok && <p>{ok}</p>}
-      <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length} onClick={() => void createTask()}>{t('office.createTask')}</button></div>
-    </section>
-    <section className="card">
-      <div className="card-head"><h2>{t('office.tasks')}</h2><span className="card-meta">{tasks.length}</span></div>
-      {tasks.length ? tasks.map(task => <article className="tabel-task" key={task.id}>
-        <b>{task.title}</b>
-        <p>{task.description || t('office.noDesc')}</p>
-        <small>{date(task.dueDate)} {task.dueTime} · {task.assignees.map(item => item.name).join(', ')} · {statusOf(task.status)}{task.late ? ` · ${t('office.late')}` : ''}</small>
-      </article>) : <p className="muted">{t('office.noTasks')}</p>}
-    </section>
   </div>;
 }

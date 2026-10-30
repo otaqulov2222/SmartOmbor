@@ -29,7 +29,8 @@ import { AutoRefresh, AUTO_REFRESH_MS, useCatalogRefresh } from '@/auto-refresh'
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { OfficePage } from '@/office';
-import { OfficeReportPage, OfficeTasksPage } from '@/office-report';
+import { OfficeReportPage } from '@/office-report';
+import { OfficeTasksPage } from '@/office-tasks';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';

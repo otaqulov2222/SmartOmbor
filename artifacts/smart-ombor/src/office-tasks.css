@@ -1,0 +1,72 @@
+.tasks { display: grid; gap: 14px; min-width: 0; }
+.task-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.task-stat {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px;
+  text-align: left; box-shadow: inset 4px 0 0 #cbd5e1; cursor: pointer; font: inherit; color: inherit;
+}
+.task-stat span { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.task-stat b { display: block; font-size: 1.45rem; margin: 4px 0 2px; }
+.task-stat small { color: var(--muted); font-size: .75rem; }
+.task-stat.is-on { border-color: #2f54eb; box-shadow: inset 4px 0 0 #2f54eb, 0 0 0 2px rgb(47 84 235 / .14); }
+.task-stat.is-late { box-shadow: inset 4px 0 0 #ef4444; }
+.task-stat.is-today { box-shadow: inset 4px 0 0 #f59e0b; }
+.task-stat.is-progress { box-shadow: inset 4px 0 0 #3b82f6; }
+.task-stat.is-review { box-shadow: inset 4px 0 0 #8b5cf6; }
+.task-stat.is-done { box-shadow: inset 4px 0 0 #22c55e; }
+.task-tools { display: grid; gap: 10px; }
+.task-tools .search { max-width: none; }
+.task-board {
+  display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px;
+  overflow-x: auto; padding-bottom: 6px;
+}
+.task-col {
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 18px; padding: 10px;
+  min-height: 280px; min-width: 220px; display: grid; align-content: start; gap: 8px;
+}
+.task-col.is-late { background: #fff7f7; }
+.task-col.is-today { background: #fffbeb; }
+.task-col.is-progress { background: #f8fbff; }
+.task-col.is-review { background: #f8f5ff; }
+.task-col.is-done { background: #f3fdf6; }
+.task-col header { display: flex; align-items: center; gap: 6px; color: #334155; }
+.task-col header b { flex: 1; font-size: .92rem; }
+.task-col header em { font-style: normal; background: #fff; border-radius: 999px; padding: 2px 8px; font-size: .78rem; font-weight: 700; }
+.task-empty { color: var(--muted); font-size: .86rem; padding: 18px 8px; text-align: center; }
+.task-card {
+  background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px;
+  cursor: pointer; display: grid; gap: 6px; text-align: left;
+}
+.task-card:hover { border-color: #93c5fd; }
+.task-card p, .task-card small { color: var(--muted); margin: 0; }
+.task-card-foot { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabel-pill.is-low { background: #f1f5f9; color: #334155; }
+.tabel-pill.is-normal { background: #dbeafe; color: #1d4ed8; }
+.tabel-pill.is-high { background: #fef3c7; color: #92400e; }
+.tabel-pill.is-urgent { background: #fee2e2; color: #b42318; }
+.tabel-pill.is-assigned { background: #e2e8f0; color: #334155; }
+.tabel-pill.is-accepted { background: #dbeafe; color: #1d4ed8; }
+.tabel-pill.is-progress { background: #dbeafe; color: #1d4ed8; }
+.tabel-pill.is-review { background: #ede9fe; color: #6d28d9; }
+.tabel-pill.is-done { background: #dcfce7; color: #166534; }
+.task-editor { width: min(920px, 100%); max-height: min(92vh, 920px); overflow: auto; }
+.task-ok { color: #166534; font-weight: 700; }
+.task-editor-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; }
+.field-label { font-size: .8rem; font-weight: 700; color: var(--muted); margin: 8px 0 6px; }
+.task-check { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-weight: 600; }
+.task-flow { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.task-flow li { padding-left: 18px; border-left: 2px solid #e2e8f0; }
+.task-flow li.is-on { border-color: #2f54eb; }
+.task-flow b { display: block; }
+.task-flow span { color: var(--muted); font-size: .8rem; }
+.tabel-prio button.is-low.is-on { background: #64748b; }
+.tabel-prio button.is-high.is-on { background: #d97706; }
+.tabel-prio button.is-urgent.is-on { background: #dc2626; }
+@media (max-width: 1100px) {
+  .task-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .task-editor-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .task-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-board { grid-template-columns: repeat(5, minmax(240px, 1fr)); }
+  .tasks .page-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+}

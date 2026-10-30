@@ -10,7 +10,8 @@ export const OFFICE_ACCURACY_M = 150;
 
 export type PunchMethod = "face" | "qr";
 export type PunchKind = "in" | "out";
-export type OfficeTaskStatus = "assigned" | "accepted" | "done";
+export type OfficeTaskStatus = "assigned" | "accepted" | "progress" | "review" | "done";
+const TASK_STATUSES: OfficeTaskStatus[] = ["assigned", "accepted", "progress", "review", "done"];
 export type OfficePriority = "low" | "normal" | "high" | "urgent";
 export type OfficeExcuse = "" | "off" | "sick" | "vacation" | "trip" | "permit";
 export type TabelStatus = "present" | "late" | "out_missing" | "absent" | "off" | "sick" | "vacation" | "trip" | "permit";
@@ -79,7 +80,12 @@ function load(): Store {
           }))
         : [],
       faces: parsed.faces && typeof parsed.faces === "object" ? parsed.faces : {},
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+      tasks: Array.isArray(parsed.tasks)
+        ? parsed.tasks.map((row) => ({
+            ...row,
+            status: TASK_STATUSES.includes(row.status) ? row.status : "assigned",
+          }))
+        : [],
       fiksa: parsed.fiksa && typeof parsed.fiksa === "object" ? parsed.fiksa : {},
     };
   } catch {
@@ -299,7 +305,7 @@ export function createOfficeTask(input: {
   remind: boolean;
   createdBy: string;
 }) {
-  const title = input.title.trim();
+  const title = input.title.trim().slice(0, 200);
   const assignedTo = [...new Set(input.assignedTo.map((id) => id.trim()).filter(Boolean))];
   if (!title || !assignedTo.length) throw Object.assign(new Error("task"), { status: 400 });
   const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(input.dueDate) ? input.dueDate : tashkentParts().date;
@@ -309,7 +315,7 @@ export function createOfficeTask(input: {
   const task: OfficeTask = {
     id: randomUUID(),
     title,
-    description: input.description.trim(),
+    description: input.description.trim().slice(0, 2000),
     assignedTo,
     dueDate,
     dueTime,
@@ -327,20 +333,31 @@ export function createOfficeTask(input: {
   return task;
 }
 
-export function updateOfficeTask(id: string, accountId: string, director: boolean, patch: { status?: OfficeTaskStatus; note?: string }) {
+export function updateOfficeTask(id: string, accountId: string, director: boolean, patch: { status?: string; note?: string }) {
   const store = load();
   const task = store.tasks.find((row) => row.id === id);
   if (!task) throw Object.assign(new Error("not_found"), { status: 404 });
   if (!director && !task.assignedTo.includes(accountId)) throw Object.assign(new Error("forbidden"), { status: 403 });
   if (patch.note != null && director) task.note = patch.note.trim().slice(0, 500);
-  if (patch.status === "accepted" && task.status === "assigned") {
-    task.status = "accepted";
-    task.acceptedAt = new Date().toISOString();
-  } else if (patch.status === "done" && (task.status === "accepted" || director)) {
-    task.status = "done";
-    task.doneAt = new Date().toISOString();
-  } else if (patch.status && director) {
-    task.status = patch.status;
+  if (patch.status != null) {
+    const next = !director && patch.status === "done" ? "review" : patch.status;
+    if (!TASK_STATUSES.includes(next as OfficeTaskStatus)) throw Object.assign(new Error("status"), { status: 400 });
+    if (director) {
+      task.status = next as OfficeTaskStatus;
+    } else if (next === "accepted" && task.status === "assigned") {
+      task.status = "accepted";
+      task.acceptedAt = new Date().toISOString();
+    } else if (next === "progress" && (task.status === "accepted" || task.status === "assigned")) {
+      task.status = "progress";
+      if (!task.acceptedAt) task.acceptedAt = new Date().toISOString();
+    } else if (next === "review" && (task.status === "accepted" || task.status === "progress" || task.status === "assigned")) {
+      task.status = "review";
+      if (!task.acceptedAt) task.acceptedAt = new Date().toISOString();
+    } else {
+      throw Object.assign(new Error("status"), { status: 400 });
+    }
+    if (task.status === "accepted" && !task.acceptedAt) task.acceptedAt = new Date().toISOString();
+    if (task.status === "done") task.doneAt = new Date().toISOString();
   }
   save(store);
   return task;
