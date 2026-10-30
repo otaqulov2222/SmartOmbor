@@ -25,6 +25,7 @@ export type OfficePunch = {
   inLng: number | null;
   outLat: number | null;
   outLng: number | null;
+  note: string;
 };
 
 export type OfficeTask = {
@@ -159,25 +160,20 @@ export function faceMatches(accountId: string, hash: string) {
   return hamming(saved, hash) <= 14;
 }
 
-function minuteStamp(offset = 0) {
-  return Math.floor(Date.now() / 60_000) + offset;
-}
-
-function tokenFor(stamp: number, secret: string) {
-  const sign = createHmac("sha256", secret).update(`bordo-att-${stamp}`).digest("hex").slice(0, 10);
-  return `BORDO-${stamp}-${sign}`;
+function wallToken(secret: string) {
+  const sign = createHmac("sha256", secret).update("bordo-office-wall-v1").digest("hex").slice(0, 16);
+  return `BORDO-OFFICE-${sign}`;
 }
 
 export function currentQrToken() {
   const store = load();
-  const stamp = minuteStamp();
-  return { token: tokenFor(stamp, store.secret), expiresAt: (stamp + 1) * 60_000 };
+  return { token: wallToken(store.secret), kind: "wall" as const, office: "Asosiy ofis" };
 }
 
 export function qrTokenOk(token: string) {
   const store = load();
-  const value = token.trim();
-  return value === tokenFor(minuteStamp(), store.secret) || value === tokenFor(minuteStamp(-1), store.secret);
+  const value = token.trim().replace(/^https?:\/\/\S*?(BORDO-OFFICE-[0-9a-f]+).*$/i, "$1");
+  return value === wallToken(store.secret);
 }
 
 export function todayPunch(accountId: string) {
@@ -223,6 +219,7 @@ export function punch(input: {
       inLng: null,
       outLat: null,
       outLng: null,
+      note: "",
     };
     store.punches.push(row);
   }
@@ -340,4 +337,67 @@ export function updateOfficeTask(id: string, accountId: string, director: boolea
 
 export function fiksaOf(accountId: string) {
   return Math.max(0, Number(load().fiksa[accountId]) || 0);
+}
+
+function hmOf(iso: string | null) {
+  if (!iso) return "";
+  return tashkentParts(new Date(iso)).hm;
+}
+
+function minutesBetween(left: string, right: string) {
+  const [lh, lm] = left.split(":").map(Number);
+  const [rh, rm] = right.split(":").map(Number);
+  return lh * 60 + lm - (rh * 60 + rm);
+}
+
+export type TabelPerson = { id: string; name: string; login: string; role: string };
+
+export function tabelDay(day: string, people: TabelPerson[], start = "09:00", end = "18:00") {
+  const punches = load().punches.filter((row) => row.date === day);
+  const byId = new Map(punches.map((row) => [row.accountId, row]));
+  const items = people.map((person, index) => {
+    const row = byId.get(person.id);
+    const inHm = hmOf(row?.inAt ?? null);
+    const outHm = hmOf(row?.outAt ?? null);
+    const status = !row?.inAt ? "absent" : row.outAt ? "present" : "out_missing";
+    return {
+      n: index + 1,
+      accountId: person.id,
+      name: person.name,
+      login: person.login,
+      role: person.role,
+      status,
+      inAt: row?.inAt ?? null,
+      outAt: row?.outAt ?? null,
+      inHm,
+      outHm,
+      workedMs: row ? workedMs(row, row.outAt ? Date.parse(row.outAt) : Date.now()) : 0,
+      lateIn: inHm ? Math.max(0, minutesBetween(inHm, start)) : 0,
+      earlyIn: inHm ? Math.max(0, minutesBetween(start, inHm)) : 0,
+      earlyOut: outHm ? Math.max(0, minutesBetween(end, outHm)) : 0,
+      lateOut: outHm ? Math.max(0, minutesBetween(outHm, end)) : 0,
+      note: row?.note || "",
+      inMethod: row?.inMethod ?? null,
+      outMethod: row?.outMethod ?? null,
+    };
+  });
+  const came = items.filter((row) => row.status !== "absent").length;
+  const [year, month, date] = day.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+  const weekend = weekday === 0 || weekday === 6;
+  const absent = items.length - came;
+  return {
+    date: day,
+    start,
+    end,
+    stats: {
+      total: items.length,
+      came,
+      absent,
+      late: items.filter((row) => row.lateIn > 0).length,
+      off: weekend ? absent : 0,
+      waiting: items.filter((row) => row.status === "out_missing").length,
+    },
+    items,
+  };
 }

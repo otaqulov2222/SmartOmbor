@@ -1,0 +1,35 @@
+.tabel { display: grid; gap: 14px; }
+.tabel-banner {
+  background: #fff7ed; border: 1px solid #fdba74; color: #9a3412;
+  border-radius: 12px; padding: 10px 14px; font-size: .92rem;
+}
+.tabel-day { display: flex; align-items: center; gap: 8px; }
+.tabel-day b { min-width: 110px; text-align: center; }
+.tabel-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.tabel-stats article {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px;
+}
+.tabel-stats span { display: block; color: var(--muted); font-size: .78rem; }
+.tabel-stats b { display: block; font-size: 1.45rem; margin-top: 4px; }
+.tabel-stats .is-ok { border-color: #86efac; }
+.tabel-stats .is-bad { border-color: #fca5a5; }
+.tabel-stats .is-warn { border-color: #fcd34d; }
+.tabel-pill {
+  display: inline-flex; border-radius: 999px; padding: 4px 8px; font-size: .75rem; font-weight: 700;
+}
+.tabel-pill.is-absent { background: #fee2e2; color: #b42318; }
+.tabel-pill.is-out_missing { background: #dbeafe; color: #1d4ed8; }
+.tabel-pill.is-present { background: #dcfce7; color: #166534; }
+.tabel-qr { text-align: center; }
+.tabel-qr-mark { width: 220px; height: 220px; background: #fff; padding: 12px; border-radius: 16px; margin: 8px auto; display: block; }
+.tabel-people, .tabel-prio { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.tabel-people button, .tabel-prio button {
+  background: #f1f5f9; border-radius: 999px; padding: 7px 12px; font-size: .85rem;
+}
+.tabel-people button.is-on, .tabel-prio button.is-on { background: #2f54eb; color: #fff; }
+@media (max-width: 1100px) {
+  .tabel-stats { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .tabel-stats { grid-template-columns: 1fr 1fr; }
+}

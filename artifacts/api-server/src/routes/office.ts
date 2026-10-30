@@ -16,6 +16,7 @@ import {
   punchesFor,
   rangeDays,
   tashkentParts,
+  tabelDay,
   todayBoard,
   todayPunch,
   updateOfficeTask,
@@ -127,6 +128,13 @@ router.get("/office/board", (req, res) => {
       login: byId.get(row.accountId)?.login || "",
     })),
   });
+});
+
+router.get("/office/tabel", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : tashkentParts().date;
+  const people = listLocalPeople().filter((row) => row.role === "office" || row.role === "worker" || row.role === "accountant" || row.role === "manager" || row.role === "super_admin");
+  res.json(tabelDay(day, people));
 });
 
 router.get("/office/people", (req, res) => {

@@ -29,6 +29,7 @@ import { AutoRefresh, AUTO_REFRESH_MS, useCatalogRefresh } from '@/auto-refresh'
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { OfficePage } from '@/office';
+import { OfficeReportPage } from '@/office-report';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
@@ -58,6 +59,8 @@ const clerkAppearance = {
 type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
+  { key: 'nav.office', href: '/office/report', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.officeReport', href: '/office/hisobot', icon: FileBarChart, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
   { key: 'nav.scanner', href: '/scanner', icon: ScanBarcode, group: 'nav.group.workspace' },
@@ -65,7 +68,6 @@ const navigation: NavItem[] = [
   { key: 'nav.transfers', href: '/transfers', icon: ArrowLeftRight, group: 'nav.group.operations' },
   { key: 'nav.inventory', href: '/inventory', icon: ClipboardCheck, group: 'nav.group.operations' },
   { key: 'nav.tasks', href: '/tasks', icon: ClipboardList, group: 'nav.group.operations' },
-  { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.operations' },
   { key: 'nav.analytics', href: '/analytics', icon: BarChart3, group: 'nav.group.analytics' },
   { key: 'nav.nonMoving', href: '/non-moving', icon: Clock3, group: 'nav.group.analytics' },
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
@@ -76,9 +78,9 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
+const primaryHrefs = ['/dashboard', '/office/report', '/office/hisobot', '/recommendations', '/products', '/scanner', '/partners'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks', '/office'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
@@ -1507,6 +1509,8 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
+  { path: '/office/report', titleKey: 'nav.office', element: <OfficeReportPage/> },
+  { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
   { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
