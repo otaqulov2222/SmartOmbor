@@ -1,33 +1,53 @@
+.office-shell {
+  min-height: 100vh;
+  background: #050b14;
+  display: flex;
+  justify-content: center;
+}
+.office-ambient {
+  position: fixed; inset: 0;
+  background: url('/office-hero.jpg') center 18% / cover no-repeat;
+  filter: blur(48px) saturate(1.15) brightness(.28);
+  transform: scale(1.12);
+  pointer-events: none;
+}
 .office {
   --o-bg: #07111f;
   --o-card: #101827;
   --o-line: rgb(255 255 255 / .08);
   --o-ink: #e8eef8;
   --o-muted: #8ea0b8;
-  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+  width: 100%;
   max-width: 430px;
+  min-height: 100vh;
   margin: 0 auto;
   background: var(--o-bg);
   color: var(--o-ink);
   padding: 0 0 28px;
+  overflow: hidden;
 }
 .office * { box-sizing: border-box; }
 .office-hero {
   position: relative;
   overflow: hidden;
-  min-height: 210px;
-  padding: 14px 16px 92px;
-  border-radius: 0 0 28px 28px;
+  min-height: 248px;
+  padding: 14px 16px 86px;
+}
+.office-hero-img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: 70% 42%;
+  pointer-events: none;
+}
+.office-hero-fade {
+  position: absolute; inset: 0;
   background:
-    radial-gradient(circle at 74% 32%, #fde68a 0 4%, #f59e0b 10%, rgb(245 158 11 / 0) 28%),
-    linear-gradient(180deg, #1e3a5f 0%, #10233f 42%, #07111f 100%);
+    linear-gradient(180deg, rgb(7 17 31 / .18) 0%, rgb(7 17 31 / .08) 38%, rgb(7 17 31 / .72) 78%, var(--o-bg) 100%),
+    linear-gradient(90deg, rgb(7 17 31 / .35) 0%, transparent 42%);
+  pointer-events: none;
 }
-.office-sun {
-  position: absolute; right: 18%; top: 38%; width: 86px; height: 86px; border-radius: 999px;
-  background: radial-gradient(circle, #fff7ed 0 18%, #fbbf24 38%, rgb(245 158 11 / .15) 68%, transparent 70%);
-  filter: blur(.2px); pointer-events: none;
-}
-.office-mountains { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 110px; pointer-events: none; }
 .office-hero-bar {
   position: relative; z-index: 2;
   display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
@@ -35,98 +55,128 @@
 .office-back, .office-out {
   display: inline-flex; align-items: center; gap: 4px;
   color: #e2e8f0; font-size: .86rem; padding: 7px 12px; border-radius: 999px;
-  background: rgb(15 23 42 / .45); border: 1px solid rgb(255 255 255 / .08);
-  backdrop-filter: blur(8px);
+  background: rgb(15 23 42 / .42); border: 1px solid rgb(255 255 255 / .14);
+  backdrop-filter: blur(12px);
 }
 .office-day {
-  background: rgb(15 23 42 / .5); border: 1px solid rgb(255 255 255 / .1);
+  background: rgb(15 23 42 / .45); border: 1px solid rgb(255 255 255 / .14);
   border-radius: 16px; padding: 8px 12px; text-align: right; font-size: .78rem; color: #c7d2fe;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
 }
 .office-day b { display: block; color: #fff; font-size: .95rem; font-weight: 700; }
-.office-hero-copy { position: relative; z-index: 2; margin-top: 18px; }
-.office-hero-copy small { color: #c7d2fe; font-size: .9rem; }
-.office-hero-copy h1 { font-size: 1.7rem; letter-spacing: -.03em; margin-top: 2px; color: #fff; }
+.office-hero-copy { position: relative; z-index: 2; margin-top: 22px; text-shadow: 0 8px 24px rgb(0 0 0 / .45); }
+.office-hero-copy small { color: #dbeafe; font-size: .9rem; }
+.office-hero-copy h1 { font-size: 1.78rem; letter-spacing: -.03em; margin-top: 2px; color: #fff; }
 .office-hero-copy p { color: #cbd5e1; font-size: .92rem; margin-top: 2px; }
 .office-body { padding: 0 14px; }
 .office-clocks {
-  display: grid; grid-template-columns: 1.35fr .95fr; gap: 10px;
-  margin: -64px 0 12px; position: relative; z-index: 3;
+  display: grid; grid-template-columns: 1.38fr .92fr; gap: 10px;
+  margin: -58px 0 12px; position: relative; z-index: 3;
 }
 .office-clock, .office-hours {
-  border-radius: 18px; padding: 12px 14px 14px;
-  background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
-  box-shadow: 0 12px 28px rgb(37 99 235 / .28);
+  border-radius: 20px; padding: 12px 14px 14px; color: #fff;
+  box-shadow: 0 16px 32px rgb(15 23 42 / .28);
 }
-.office-hours { background: linear-gradient(135deg, #0f766e, #14b8a6); }
-.office-clock-top, .office-hours-top { display: flex; align-items: center; gap: 8px; font-size: .78rem; opacity: .92; }
+.office-clock {
+  background: linear-gradient(145deg, #3b82f6 0%, #2563eb 48%, #1d4ed8 100%);
+}
+.office-hours {
+  background: linear-gradient(145deg, #2dd4bf 0%, #0d9488 55%, #0f766e 100%);
+}
+.office-clock-top, .office-hours-top { display: flex; align-items: center; gap: 8px; font-size: .78rem; opacity: .94; line-height: 1.2; }
 .office-ico {
   width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center;
   background: rgb(255 255 255 / .16); flex: none;
 }
-.office-clock b, .office-hours b { display: block; font-size: 1.55rem; letter-spacing: .03em; margin: 6px 0 2px; }
-.office-clock small, .office-hours small { opacity: .82; font-size: .76rem; }
+.office-clock b, .office-hours b {
+  display: block; font-size: 1.55rem; letter-spacing: .04em; margin: 6px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+.office-clock small, .office-hours small { opacity: .86; font-size: .76rem; }
 .office-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .office-go {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  border-radius: 16px; padding: 12px 12px 11px; text-align: left; min-height: 82px;
-  border: 0; color: #fff;
+  border-radius: 18px; padding: 12px 12px 11px; text-align: left; min-height: 84px;
+  border: 0; color: #fff; transition: transform .16s ease, filter .16s ease;
 }
-.office-go.is-in { background: linear-gradient(135deg, #047857, #059669); }
-.office-go.is-out { background: linear-gradient(135deg, #9f1239, #e11d48); }
+.office-go:hover { transform: translateY(-1px); filter: brightness(1.06); }
+.office-go.is-in { background: linear-gradient(145deg, #10b981, #047857); }
+.office-go.is-out { background: linear-gradient(145deg, #fb7185, #be123c); }
 .office-go b { display: inline-flex; align-items: center; gap: 6px; font-size: .98rem; }
-.office-go em { display: block; font-style: normal; font-size: 1.05rem; margin: 4px 0 2px; font-weight: 650; }
+.office-go em { display: block; font-style: normal; font-size: 1.08rem; margin: 4px 0 2px; font-weight: 700; }
 .office-go small { display: block; opacity: .85; font-size: .75rem; }
-.office-go-arrow { opacity: .85; flex: none; }
+.office-go-arrow { opacity: .88; flex: none; }
 .office-map {
-  position: relative; border-radius: 18px; overflow: hidden; height: 232px;
+  position: relative; border-radius: 20px; overflow: hidden; height: 236px;
   border: 1px solid var(--o-line); margin-bottom: 16px; background: #0b1524;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .04);
 }
 .office-map-tiles {
   position: absolute; width: 768px; height: 768px; pointer-events: none;
-  filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(1.05) saturate(.7);
 }
 .office-map-tiles img { position: absolute; width: 256px; height: 256px; display: block; }
+.office-map-shade {
+  position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background:
+    radial-gradient(circle at 50% 46%, transparent 28%, rgb(7 17 31 / .18) 70%, rgb(7 17 31 / .42) 100%);
+}
 .office-pin {
   position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
   width: 122px; height: 122px; border-radius: 999px;
-  border: 2px dashed #34d399; background: rgb(16 185 129 / .12);
-  display: grid; place-items: center; pointer-events: none;
+  display: grid; place-items: center; pointer-events: none; z-index: 2;
 }
+.office-pin i {
+  position: absolute; inset: 0; border-radius: 999px;
+  border: 2px dashed #34d399; background: rgb(16 185 129 / .1);
+}
+.office-pin i:last-of-type {
+  inset: -14px; opacity: .45; animation: office-pulse 2.6s ease-out infinite;
+}
+.office-pin.is-here i:last-of-type { border-color: #6ee7b7; }
 .office-pin span {
-  width: 42px; height: 42px; border-radius: 999px; background: #2563eb;
-  display: grid; place-items: center; box-shadow: 0 8px 20px rgb(37 99 235 / .45); color: #fff;
+  width: 44px; height: 44px; border-radius: 999px; background: linear-gradient(180deg, #3b82f6, #1d4ed8);
+  display: grid; place-items: center; box-shadow: 0 10px 24px rgb(37 99 235 / .5); color: #fff; z-index: 1;
+}
+@keyframes office-pulse {
+  0% { transform: scale(.86); opacity: .55; }
+  100% { transform: scale(1.18); opacity: 0; }
 }
 .office-tap {
   position: absolute; left: 50%; top: 68%; transform: translate(-50%, 0);
-  background: #0f172a; color: #e2e8f0; border-radius: 999px; padding: 6px 10px;
-  font-size: .78rem; display: inline-flex; align-items: center; gap: 6px; z-index: 2;
+  background: rgb(15 23 42 / .88); color: #e2e8f0; border-radius: 999px; padding: 6px 10px;
+  font-size: .78rem; display: inline-flex; align-items: center; gap: 6px; z-index: 3;
+  border: 1px solid rgb(255 255 255 / .08); backdrop-filter: blur(8px);
 }
 .office-map-tools {
-  position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; z-index: 2;
+  position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; z-index: 3;
 }
 .office-map-tools button {
   width: 34px; height: 34px; border-radius: 10px; background: rgb(15 23 42 / .82);
   color: #e2e8f0; display: grid; place-items: center; border: 1px solid rgb(255 255 255 / .08);
+  backdrop-filter: blur(8px);
 }
 .office-map-tools .is-round { border-radius: 999px; }
 .office-map-meta {
   position: absolute; left: 10px; right: 10px; bottom: 10px;
-  display: flex; justify-content: space-between; gap: 8px; pointer-events: none; z-index: 2;
+  display: flex; justify-content: space-between; gap: 8px; pointer-events: none; z-index: 3;
 }
 .office-map-meta b, .office-map-meta em {
-  background: #0f172a; border-radius: 999px; padding: 6px 10px; font-size: .75rem; font-style: normal;
+  background: rgb(15 23 42 / .88); border-radius: 999px; padding: 6px 10px; font-size: .75rem; font-style: normal;
   display: inline-flex; align-items: center; gap: 6px; color: #e2e8f0;
+  border: 1px solid rgb(255 255 255 / .08); backdrop-filter: blur(8px);
 }
 .office h2 { font-size: 1.12rem; margin: 8px 0 4px; }
 .office .lead { color: var(--o-muted); font-size: .88rem; margin-bottom: 10px; }
 .office-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
 .office-method {
-  position: relative; text-align: left; border-radius: 16px; padding: 14px; min-height: 96px;
+  position: relative; text-align: left; border-radius: 18px; padding: 14px; min-height: 98px;
   background: #101c31; border: 1px solid var(--o-line); color: inherit;
 }
-.office-method.is-on { border-color: rgb(96 165 250 / .45); background: #15233d; }
-.office-method svg { color: #93c5fd; }
+.office-method.is-on { border-color: rgb(96 165 250 / .4); background: #15233d; }
+.office-method-ico {
+  width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+  background: rgb(59 130 246 / .12); color: #93c5fd;
+}
 .office-check {
   position: absolute; top: 10px; right: 10px; width: 22px; height: 22px;
   border-radius: 999px; background: #2563eb; color: #fff; font-size: .72rem;
@@ -135,9 +185,9 @@
 .office-method b { display: block; margin-top: 10px; }
 .office-method small { color: var(--o-muted); }
 .office-here {
-  position: absolute; left: 50%; top: 18%; transform: translate(-50%, 0);
+  position: absolute; left: 50%; top: 14%; transform: translate(-50%, 0);
   background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 12px;
-  font-size: .82rem; font-weight: 700; z-index: 2; pointer-events: none;
+  font-size: .82rem; font-weight: 700; z-index: 3; pointer-events: none;
   box-shadow: 0 8px 20px rgb(4 120 87 / .25);
 }
 .office-stage {
@@ -182,10 +232,22 @@
 .office-toast p { margin: 0; font-size: .86rem; opacity: .95; }
 .office-toast-x { position: absolute; top: 8px; right: 8px; color: #fff; }
 .office-cam {
-  width: 100%; border: 0; border-radius: 16px; padding: 14px; margin-bottom: 12px;
-  color: #fff; background: linear-gradient(90deg, #2563eb, #7c3aed 60%, #a855f7);
+  position: relative; overflow: hidden;
+  width: 100%; border: 0; border-radius: 18px; padding: 15px; margin-bottom: 12px;
+  color: #fff; background: linear-gradient(90deg, #2563eb, #7c3aed 55%, #a855f7);
+  box-shadow: 0 12px 28px rgb(124 58 237 / .28);
 }
-.office-cam small { display: block; opacity: .88; font-weight: 500; margin-top: 2px; }
+.office-cam::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 20%, rgb(255 255 255 / .18) 48%, transparent 72%);
+  transform: translateX(-120%); animation: office-shine 3.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes office-shine {
+  0%, 55% { transform: translateX(-120%); }
+  80%, 100% { transform: translateX(120%); }
+}
+.office-cam small { display: block; opacity: .9; font-weight: 500; margin-top: 2px; }
 .office video, .office-preview {
   display: none; width: 100%; border-radius: 16px; background: #000; aspect-ratio: 3/4; object-fit: cover; margin-bottom: 10px;
 }
@@ -231,5 +293,13 @@
 .office-warn { color: #fecaca; background: #4c1d1d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
 .office-ok { color: #bbf7d0; background: #14532d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
 @media (min-width: 880px) {
-  .office { max-width: 430px; }
+  .office {
+    margin: 22px auto;
+    min-height: calc(100vh - 44px);
+    border-radius: 32px;
+    box-shadow: 0 40px 90px rgb(0 0 0 / .5), 0 0 0 1px rgb(255 255 255 / .06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .office-cam::after, .office-pin i:last-of-type { animation: none; }
 }

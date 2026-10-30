@@ -130,10 +130,11 @@ function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge
   return <div className="office-map">
     <div className="office-map-tiles" style={{ left, top }}>
       {tiles.map(tile => (
-        <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://tile.openstreetmap.org/${z}/${tile.x}/${tile.y}.png`}/>
+        <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://basemaps.cartocdn.com/dark_all/${z}/${tile.x}/${tile.y}.png`}/>
       ))}
     </div>
-    <div className="office-pin"><span><MapPin size={18}/></span></div>
+    <div className="office-map-shade"/>
+    <div className={`office-pin ${here ? 'is-here' : ''}`}><i/><i/><span><MapPin size={18}/></span></div>
     {here && <div className="office-here">{t('office.here')}</div>}
     <button type="button" className="office-tap" onDoubleClick={onNudge}><Hand size={14}/> {t('office.dbl')}</button>
     <div className="office-map-tools">
@@ -380,12 +381,12 @@ export function OfficePage() {
   const ctaNeedCam = !camReady;
   const ownTasks = tasks;
 
-  return <div className="office">
+  return <div className="office-shell">
+    <div className="office-ambient" aria-hidden="true"/>
+    <div className="office">
     <section className="office-hero">
-      <svg className="office-mountains" viewBox="0 0 430 110" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M0 70 70 28 130 62 190 18 270 58 330 30 430 64v46H0Z" fill="#0b1c33"/>
-        <path d="M0 86 55 54 120 82 175 48 250 78 340 52 430 76v34H0Z" fill="#071422"/>
-      </svg>
+      <img className="office-hero-img" src={`${import.meta.env.BASE_URL}office-hero.jpg`} alt="" />
+      <div className="office-hero-fade"/>
       <div className="office-hero-bar">
         {me?.director
           ? <Link href="/office/report" className="office-back"><ChevronLeft size={16}/> {t('common.back')}</Link>
@@ -442,11 +443,11 @@ export function OfficePage() {
       <p className="lead">{t('office.methodBody')}</p>
       <div className="office-methods">
         <button type="button" className={`office-method ${method === 'face' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('face'); }}>
-          <ScanFace size={26}/>{method === 'face' && <em className="office-check">✓</em>}
+          <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
           <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
         </button>
         <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
-          <QrCode size={26}/>{method === 'qr' && <em className="office-check">✓</em>}
+          <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
           <b>QR Scanner</b><small>{t('office.qrHint')}</small>
         </button>
       </div>
@@ -524,5 +525,6 @@ export function OfficePage() {
       <b>{t('office.deniedTitle')}</b>
       <p>{t('office.deniedBody')}</p>
     </div>}
+  </div>
   </div>;
 }
