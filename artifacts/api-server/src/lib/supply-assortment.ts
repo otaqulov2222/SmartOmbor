@@ -259,8 +259,21 @@ function namesEquivalent(left: string, right: string) {
   return foldProductName(left) === foldProductName(right);
 }
 
+function sameListedName(left: string, right: string) {
+  const a = left.trim().replace(/\s+/g, " ");
+  const b = right.trim().replace(/\s+/g, " ");
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.localeCompare(b, "ru", { sensitivity: "accent" }) === 0) return true;
+  return namesEquivalent(a, b);
+}
+
+function quoteFilterValue(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function rowMatchesName(rowName: string, wanted: string) {
-  if (namesEquivalent(rowName, wanted)) return true;
+  if (sameListedName(rowName, wanted)) return true;
   const parsed = parseBordoName(wanted);
   if (!parsed) return false;
   const parts = parseBordoName(rowName);
@@ -271,25 +284,31 @@ function rowMatchesName(rowName: string, wanted: string) {
     && compactCode(parts.size) === compactCode(parsed.size);
 }
 
+function pickNamedRow(rows: Array<{ id?: string; name?: string }>, wanted: string) {
+  const exact = rows.find((row) => row.id && sameListedName(row.name || "", wanted));
+  if (exact?.id) return exact;
+  return rows.find((row) => row.id && rowMatchesName(row.name || "", wanted)) ?? null;
+}
+
 async function productByName(name: string) {
-  const trimmed = name.trim();
+  const trimmed = name.trim().replace(/\s+/g, " ");
   if (!trimmed) return null;
-  const folded = foldProductName(trimmed);
-  const candidates = [...new Set([trimmed, trimmed.replace(/\s+/g, " ")].filter(Boolean))];
-  for (const candidate of candidates) {
+  const clause = `name=${quoteFilterValue(trimmed)}`;
+  const filters = [clause, `${clause};archived=true`];
+  for (const filter of filters) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=25&filter=name=${encodeURIComponent(candidate)}`);
-      const hit = page.rows.find((row) => row.id && rowMatchesName(row.name || "", trimmed));
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=${encodeURIComponent(filter)}`);
+      const hit = pickNamedRow(page.rows, trimmed);
       if (hit?.id) return productById(hit.id);
     } catch (error) {
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
     }
   }
-  const searches = [...new Set([trimmed.replace(/\s+/g, " "), folded].filter(Boolean))];
+  const searches = [...new Set([trimmed, foldProductName(trimmed)].filter(Boolean))];
   for (const query of searches) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
-      const hit = page.rows.find((row) => row.id && rowMatchesName(row.name || "", trimmed));
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=100&search=${encodeURIComponent(query)}`);
+      const hit = pickNamedRow(page.rows, trimmed);
       if (hit?.id) return productById(hit.id);
     } catch (error) {
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
@@ -301,7 +320,15 @@ async function productByName(name: string) {
 
 function uniqueNameConflict(error: unknown) {
   if (!(error instanceof MoySkladError)) return false;
+  if (error.parameter === "name" || error.parameter === "article" || error.parameter === "code") return true;
   return error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message);
+}
+
+function uniqueNameParameter(error: unknown) {
+  if (!(error instanceof MoySkladError)) return "";
+  if (error.parameter) return error.parameter;
+  const match = error.message.match(/параметра '([^']+)'|parameter '([^']+)'/i);
+  return match?.[1] || match?.[2] || "";
 }
 
 async function optionalWrite<T>(task: () => Promise<T>, label: string, extra?: Record<string, unknown>): Promise<T | null> {
@@ -316,21 +343,39 @@ async function optionalWrite<T>(task: () => Promise<T>, label: string, extra?: R
 
 const STRIP_PRODUCT_FIELDS = ["packs", "barcodes", "productFolder", "supplier", "salePrices", "buyPrice", "code"] as const;
 
+async function recoverExistingProduct(name: string) {
+  const wanted = name.trim().replace(/\s+/g, " ");
+  if (!wanted) return null;
+  const first = await productByName(wanted);
+  if (first) return first;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  return productByName(wanted);
+}
+
 async function createProduct(body: Record<string, unknown>): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
   const payload: Record<string, unknown> = { ...body };
+  const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
+  const listed = wanted ? await productByName(wanted) : null;
+  if (listed) return listed;
   for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 1; attempt += 1) {
     try {
       return await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
     } catch (error) {
-      const existing = await productByName(String(payload.name ?? ""));
-      if (existing && rowMatchesName(existing.name, String(payload.name ?? ""))) return existing;
-      if (uniqueNameConflict(error) && ("article" in payload || "code" in payload)) {
-        logger.warn({ name: payload.name }, "MoySklad product create retry without shared article");
-        delete payload.article;
-        delete payload.code;
-        continue;
+      const existing = wanted ? await recoverExistingProduct(wanted) : null;
+      if (existing) return existing;
+      if (uniqueNameConflict(error)) {
+        const parameter = uniqueNameParameter(error);
+        if (parameter !== "name" && ("article" in payload || "code" in payload || parameter === "article" || parameter === "code")) {
+          logger.warn({ name: payload.name, parameter }, "MoySklad product create retry without shared article");
+          delete payload.article;
+          delete payload.code;
+          continue;
+        }
+        if (parameter === "name" || !parameter) {
+          logger.warn({ name: wanted, parameter }, "MoySklad unique name without a listed card");
+          throw new MoySkladError("Bu mahsulot kartasi MoySkladda bor. Qayta bosing.", 409, undefined, "name");
+        }
       }
-      if (uniqueNameConflict(error)) throw error;
       if (!permissionDenied(error)) throw error;
       const drop = error instanceof MoySkladError && error.parameter && error.parameter in payload
         ? error.parameter
@@ -763,6 +808,14 @@ export async function findExistingBordoProduct(
     const row = await productById(catalogMatch.id);
     if (row) return row;
   }
+  const names = [...new Set(productCodeForms(line.productCode).flatMap((code) => [
+    ["Bordo", factory, groupCode, code, size].filter(Boolean).join(" ").trim(),
+    ["Bordo", factory, code, size].filter(Boolean).join(" ").trim(),
+  ]))].filter((item) => item.length >= 2);
+  for (const candidate of names) {
+    const hit = await productByName(candidate);
+    if (hit) return hit;
+  }
   for (const query of searchQueries(factory, groupCode, line.productCode, size)) {
     try {
       const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
@@ -798,14 +851,6 @@ export async function findExistingBordoProduct(
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
       logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
     }
-  }
-  const names = [...new Set(productCodeForms(line.productCode).flatMap((code) => [
-    ["Bordo", factory, groupCode, code, size].filter(Boolean).join(" ").trim(),
-    ["Bordo", factory, code, size].filter(Boolean).join(" ").trim(),
-  ]))].filter((item) => item.length >= 2);
-  for (const candidate of names) {
-    const hit = await productByName(candidate);
-    if (hit) return hit;
   }
   return null;
 }
@@ -845,14 +890,16 @@ export async function buildSupplyPositions(
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
   const byIdentity = new Map<string, ProductRow>();
+  const byName = new Map<string, ProductRow>();
   for (const item of resolved) {
-    const known = item.parent || byIdentity.get(item.key) || null;
+    const known = item.parent || byIdentity.get(item.key) || byName.get(item.name) || null;
     if (known) {
       item.parent = known;
       if (item.folder) await placeInFolder(known.id, item.folder);
       known.barcodes = await ensureBarcodes("product", known.id, scope.catalog, usedBarcodes);
       parents.set(known.id, known);
       byIdentity.set(item.key, known);
+      byName.set(item.name, known);
       continue;
     }
     const packSize = packSizeOf(item.line);
@@ -881,7 +928,8 @@ export async function buildSupplyPositions(
     item.parent = product;
     parents.set(product.id, product);
     byIdentity.set(item.key, product);
-    created.push(product);
+    byName.set(item.name, product);
+    if (!created.some((row) => row.id === product.id)) created.push(product);
   }
 
   const positions: SupplyPosition[] = [];
