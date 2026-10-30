@@ -804,44 +804,42 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         });
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
-      let lastBody: { error?: string; detail?: string } = {};
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          const response = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
-          lastBody = await response.json().catch(() => ({})) as { error?: string; detail?: string };
-          if (response.ok) {
-            setPosting(null);
-            await refreshShipments();
-            return;
-          }
-          if (await postedNow()) {
-            setPosting(null);
-            return;
-          }
-          const detail = String(lastBody.detail || '');
-          const retryable = response.status >= 500 || /уникал|unique|already exists|уже существ|MoySkladda bor|карточка уже есть|javob bermadi|so‘rov limiti/i.test(detail);
-          if (!retryable || attempt === 1) {
-            setPostError(supplyError(lastBody, t));
-            return;
-          }
-        } catch {
-          if (await postedNow()) {
-            setPosting(null);
-            return;
-          }
-          if (attempt === 1) {
-            const hit = await waitPosted(6);
-            if (hit) {
-              setPosting(null);
-              return;
-            }
-            setPostError(t('partners.supplyFailed'));
-            return;
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+      const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+      const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
+      if (started.ok && !startedBody.pending && (startedBody.id || startedBody.already)) {
+        setPosting(null);
+        await refreshShipments();
+        return;
       }
-      setPostError(supplyError(lastBody, t));
+      if (!started.ok && started.status !== 202) {
+        if (await postedNow()) {
+          setPosting(null);
+          return;
+        }
+        setPostError(supplyError(startedBody, t));
+        return;
+      }
+      for (let i = 0; i < 45; i += 1) {
+        const status = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`);
+        const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
+        if (body.pending || status.status === 202 || status.status === 404) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+        if ((status.ok || body.already) && (body.id || body.already)) {
+          setPosting(null);
+          await refreshShipments();
+          return;
+        }
+        setPostError(supplyError(body, t));
+        return;
+      }
+      const hit = await waitPosted(5);
+      if (hit) {
+        setPosting(null);
+        return;
+      }
+      setPostError(t('partners.supplyFailed'));
     } catch {
       const hit = await postedNow();
       if (hit) setPosting(null);

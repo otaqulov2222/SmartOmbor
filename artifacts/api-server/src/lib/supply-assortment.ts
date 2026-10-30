@@ -851,13 +851,13 @@ export async function findExistingBordoProduct(
   const name = ["Bordo", factory, groupCode, line.productCode, size].filter(Boolean).join(" ").trim();
   const remembered = cachedByName(name);
   if (remembered) return remembered;
-  if (line.productId) {
-    const byId = await productById(line.productId);
-    const parts = byId?.name ? parseBordoName(byId.name) : null;
-    const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
-    const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(size);
-    const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
-    if (byId && codeOk && sizeOk && factoryOk && !parts?.color) return rememberProduct(byId, [name]);
+  const localId = String(line.productId || "").trim();
+  if (localId) {
+    return rememberProduct({
+      id: localId,
+      name,
+      meta: entityMeta(`${BASE}/entity/product/${localId}`, "product"),
+    }, [name]);
   }
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
@@ -867,8 +867,11 @@ export async function findExistingBordoProduct(
     size,
   });
   if (catalogMatch?.id) {
-    const row = await productById(catalogMatch.id);
-    if (row) return rememberProduct(row, [name]);
+    return rememberProduct({
+      id: catalogMatch.id,
+      name: catalogMatch.name || name,
+      meta: entityMeta(`${BASE}/entity/product/${catalogMatch.id}`, "product"),
+    }, [name]);
   }
   const named = name.length >= 2 ? await productByName(name) : null;
   if (named) return named;
@@ -922,7 +925,6 @@ export async function buildSupplyPositions(
   const usedBarcodes = new Set<string>();
   const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string; key: string; folder: FolderRow | null }> = [];
   const created: ProductRow[] = [];
-  const folders = await productFolders();
   const wanted = lines.filter((line) => receiptParts(line).length);
   for (const line of wanted) requireWaybillLine(line);
   resolved.push(...await Promise.all(wanted.map(async (line) => {
@@ -934,13 +936,12 @@ export async function buildSupplyPositions(
       if (parsed?.groupCode) line.sectionCode = parsed.groupCode;
     }
     const key = parent?.id || (line.sectionCode.trim() ? productIdentity(line, scope.factoryCode) : parentIdentity(line, scope.factoryCode));
-    const folder = matchProductFolder(folders, line.sectionCode) ?? null;
     const priceType = saleTypeOf(line);
     if (line.price > 0) line.priceType = priceType;
     if (!parent && (!line.productCode.trim() || name.length < 2)) {
       throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
     }
-    return { line, parent, name, key, folder };
+    return { line, parent, name, key, folder: null as FolderRow | null };
   })));
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
@@ -956,6 +957,7 @@ export async function buildSupplyPositions(
       continue;
     }
     const packSize = packSizeOf(item.line);
+    const folders = await productFolders();
     const folder = item.folder ?? await ensureFolder(folders, item.line.sectionCode);
     item.folder = folder;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
@@ -978,6 +980,11 @@ export async function buildSupplyPositions(
     byName.set(item.name, product);
     if (!created.some((row) => row.id === product.id)) created.push(product);
   }
+
+  const colorIds = [...new Set(resolved.flatMap((item) => (item.parent && receiptParts(item.line).some((part) => part.color) ? [item.parent.id] : [])))];
+  await Promise.all(colorIds.map(async (id) => {
+    if (!variantCache.has(id)) variantCache.set(id, await variantsOf(id));
+  }));
 
   const positions: SupplyPosition[] = [];
   const links: Planned["links"] = [];

@@ -254,32 +254,15 @@ function acquireSupplyLock(id: string): Promise<() => void> {
 
 type SupplyHit = { id: string; name?: string; deleted?: string; applicable?: boolean; externalCode?: string; incomingNumber?: string };
 
-function nextCalendarDay(day: string) {
-  const [year, month, date] = day.split("-").map(Number);
-  const next = new Date(Date.UTC(year, (month || 1) - 1, (date || 1) + 1));
-  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
-}
-
 async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
-  const day = typeof shipment.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(shipment.date)
-    ? shipment.date.slice(0, 10)
-    : moyskladDateTime().slice(0, 10);
-  const until = nextCalendarDay(day);
-  const filters = [
-    `externalCode=${shipment.id}`,
-    `name=${shipment.number};moment>=${day} 00:00:00;moment<${until} 00:00:00`,
-    `incomingNumber=${shipment.number};moment>=${day} 00:00:00;moment<${until} 00:00:00`,
-  ];
-  for (const filter of filters) {
-    try {
-      const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(filter)}`);
-      const ranked = page.rows.filter((row) => row.id && !row.deleted);
-      ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
-      const hit = ranked[0];
-      if (hit?.id) return { id: hit.id, name: hit.name || shipment.number };
-    } catch {
-      /* try the next unique key */
-    }
+  try {
+    const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=5&filter=${encodeURIComponent(`externalCode=${shipment.id}`)}`);
+    const ranked = page.rows.filter((row) => row.id && !row.deleted);
+    ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
+    const hit = ranked[0];
+    if (hit?.id) return { id: hit.id, name: hit.name || shipment.number };
+  } catch {
+    /* keep looking below */
   }
   return null;
 }
@@ -446,55 +429,18 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
   }
 });
 
-router.post("/partner-factories/shipments/:id/supply", async (req, res, next) => {
-  req.setTimeout(0);
-  res.setTimeout(0);
-  req.socket.setTimeout(0);
-  const unlock = await acquireSupplyLock(String(req.params.id));
+type SupplyResult = { id: string; number: string; shipment: unknown; already?: boolean };
+type SupplyJob = { status: "pending" | "done" | "error"; error?: string; detail?: string; result?: SupplyResult };
+const supplyJobs = new Map<string, SupplyJob>();
+
+async function writeShipmentSupply(shipmentId: string, storeId: string): Promise<SupplyResult> {
+  const unlock = await acquireSupplyLock(shipmentId);
   try {
-    const shipment = listShipments().find((item) => item.id === String(req.params.id));
-    if (!shipment) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    if (shipment.status === "declined") {
-      res.status(409).json({ error: "declined" });
-      return;
-    }
+    const shipment = listShipments().find((item) => item.id === shipmentId);
+    if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+    if (shipment.status === "declined") throw Object.assign(new Error("declined"), { status: 409 });
     if (shipment.moyskladId) {
-      let gone = false;
-      try {
-        const filled = await fillZeroSupplyPrices(shipment.moyskladId, shipment.lines);
-        try {
-          const catalog = await loadCatalog();
-          const owner = getAccount(shipment.factoryId);
-          const currencies = await moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100");
-          const currency = currencies.rows.find((row) => row.isoCode === "UZS") || currencies.rows[0];
-          if (currency?.meta) {
-            await stampWaybillCardPrices(shipment.lines, currency.meta, {
-              factoryCode: owner?.code || "",
-              factoryName: owner?.catalogName || owner?.name || "",
-              catalog,
-            });
-          }
-        } catch (error) {
-          logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Waybill product prices were not stamped");
-        }
-        if (filled) {
-          res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true });
-          return;
-        }
-      } catch (error) {
-        if (!supplyGone(error)) throw error;
-        gone = true;
-        logger.warn({ supply: shipment.moyskladId, err: error instanceof Error ? error.message : error }, "Posted MoySklad supply is gone, creating a new one");
-      }
-      if (!gone) {
-        res.json({ id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true });
-        return;
-      }
-      await replaceZeroSupply(shipment.moyskladId);
-      clearShipmentPosted(shipment.id);
+      return { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true };
     }
     const reused = await findExistingSupply(shipment);
     if (reused) {
@@ -505,24 +451,16 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       });
       const saved = markShipmentPosted(shipment.id, { id: reused.id, number: reused.name || shipment.number });
       void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: reused.name || shipment.number });
-      res.json({ id: reused.id, number: reused.name || shipment.number, shipment: saved, already: true });
-      return;
+      return { id: reused.id, number: reused.name || shipment.number, shipment: saved, already: true };
     }
     const account = getAccount(shipment.factoryId);
     const catalog = peekCatalog() ?? await loadCatalog();
     if (account) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
     let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
-    if (!positions.length) {
-      res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
-      return;
-    }
-    const storeId = String(req.body?.storeId ?? "").trim();
+    if (!positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
     const store = catalog.warehouses.find((item) => item.id === storeId) || (catalog.warehouses.length === 1 ? catalog.warehouses[0] : null);
-    if (!store) {
-      res.status(400).json({ error: "store" });
-      return;
-    }
+    if (!store) throw Object.assign(new Error("store"), { status: 400 });
     const queries = [...new Set([
       account?.counterpartyName,
       account?.catalogName,
@@ -556,8 +494,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       else if (rows.length === 1) agentMeta = rows[0].meta;
     }
     if (!agentMeta || !currency || !company) {
-      res.status(400).json({ error: agentMeta ? "currency" : "agent" });
-      return;
+      throw Object.assign(new Error(agentMeta ? "currency" : "agent"), { status: 400 });
     }
     const planned = await buildSupplyPositions(positions.map((item) => item.line), currency.meta, {
       factoryCode: account?.code || "",
@@ -565,10 +502,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       catalog,
       supplierMeta: agentMeta,
     });
-    if (!planned.positions.length) {
-      res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
-      return;
-    }
+    if (!planned.positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
     for (const product of planned.created) {
       const linked = planned.links.find((item) => item.product.id === product.id);
@@ -633,24 +567,83 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
-    res.status(created.reused ? 200 : 201).json({ id: created.id, number: created.name || shipment.number, shipment: saved, already: created.reused });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
-    logger.warn({
-      shipment: String(req.params.id),
-      detail,
-      path: error instanceof MoySkladError ? error.path : undefined,
-      moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
-      parameter: error instanceof MoySkladError ? error.parameter : undefined,
-    }, "MoySklad supply failed");
-    if (error instanceof MoySkladError) {
-      res.status(error.status >= 400 && error.status < 500 ? 400 : 502).json({ error: "rejected", detail });
-      return;
-    }
-    res.status(502).json({ error: "rejected", detail });
+    return { id: created.id, number: created.name || shipment.number, shipment: saved, already: created.reused };
   } finally {
     unlock();
   }
+}
+
+function supplyJobPayload(shipmentId: string) {
+  const shipment = listShipments().find((item) => item.id === shipmentId);
+  if (shipment?.moyskladId) {
+    return { pending: false, already: true, id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment };
+  }
+  const job = supplyJobs.get(shipmentId);
+  if (job?.status === "done" && job.result) return { pending: false, ...job.result };
+  if (job?.status === "error") return { pending: false, error: job.error || "rejected", detail: job.detail || "Kirim yozilmadi" };
+  if (job?.status === "pending") return { pending: true };
+  return { pending: false, error: "idle" };
+}
+
+router.get("/partner-factories/shipments/:id/supply", (req, res) => {
+  const payload = supplyJobPayload(String(req.params.id));
+  if (payload.pending) {
+    res.status(202).json(payload);
+    return;
+  }
+  if ("error" in payload && payload.error === "idle") {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if ("error" in payload && payload.error) {
+    res.status(payload.error === "store" || payload.error === "agent" || payload.error === "currency" ? 400 : 502).json(payload);
+    return;
+  }
+  res.json(payload);
+});
+
+router.post("/partner-factories/shipments/:id/supply", (req, res) => {
+  const shipmentId = String(req.params.id);
+  const shipment = listShipments().find((item) => item.id === shipmentId);
+  if (!shipment) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (shipment.status === "declined") {
+    res.status(409).json({ error: "declined" });
+    return;
+  }
+  if (shipment.moyskladId) {
+    res.json({ pending: false, already: true, id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment });
+    return;
+  }
+  const job = supplyJobs.get(shipmentId);
+  if (job?.status === "pending") {
+    res.status(202).json({ pending: true });
+    return;
+  }
+  if (job?.status === "done" && job.result) {
+    res.json({ pending: false, ...job.result });
+    return;
+  }
+  const storeId = String(req.body?.storeId ?? "").trim();
+  supplyJobs.set(shipmentId, { status: "pending" });
+  void writeShipmentSupply(shipmentId, storeId).then(
+    (result) => supplyJobs.set(shipmentId, { status: "done", result }),
+    (error) => {
+      const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
+      logger.warn({
+        shipment: shipmentId,
+        detail,
+        path: error instanceof MoySkladError ? error.path : undefined,
+        moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
+        parameter: error instanceof MoySkladError ? error.parameter : undefined,
+      }, "MoySklad supply failed");
+      const code = detail === "store" || detail === "agent" || detail === "currency" || detail === "declined" ? detail : "rejected";
+      supplyJobs.set(shipmentId, { status: "error", error: code, detail });
+    },
+  );
+  res.status(202).json({ pending: true });
 });
 
 router.post("/partner-factories/shipments/:id/accept", (req, res) => {
