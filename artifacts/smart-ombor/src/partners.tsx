@@ -265,24 +265,37 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
   const [price, setPrice] = useState(line.price ? String(line.price) : '');
   const [pctMap, setPctMap] = useState<PctMap>(() => pctMapOf(line, markup));
   const [kept, setKept] = useState<Partial<Record<SaleType, boolean>>>({});
+  const passportOnce = useRef(false);
   useEffect(() => {
     setFactoryCode(line.factoryCode || '');
     setSectionCode(line.sectionCode || '');
     setProductCode(line.productCode || '');
     setSize(line.size || '');
     setPairs(line.pairs ? String(line.pairs) : '');
-    setPachka(line.pachka && line.pachka > 1 ? String(line.pachka) : '');
+    setPachka(current => (line.pachka && line.pachka > 1 ? String(line.pachka) : current));
     setBoxes(line.boxes ? String(line.boxes) : '');
     setPrice(line.price ? String(line.price) : '');
     setPctMap(pctMapOf(line, markup));
   }, [line, markup]);
+  useEffect(() => {
+    if (locked || passportOnce.current) return;
+    if ((line.pachka && line.pachka > 1) || !line.productCode.trim()) return;
+    passportOnce.current = true;
+    void loadPassport({ factory: line.factoryCode, code: line.productCode, size: line.size, group: line.sectionCode }).then(data => {
+      const pack = data?.packSize && data.packSize > 1 ? data.packSize : 0;
+      if (!(pack > 1)) return;
+      setPachka(String(pack));
+      void onSave({ pachka: pack });
+    }).catch(() => undefined);
+  }, [locked, line.factoryCode, line.pachka, line.productCode, line.sectionCode, line.size, onSave]);
   const preview = lineUnits({ ...line, pairs: asNumber(pairs), boxes: asNumber(boxes), price: asNumber(price) });
   const commit = (next?: Partial<Line>) => {
     const markupValues = next?.markup ?? parsePctMap(pctMap);
+    const typedPachka = asNumber(pachka);
     const patch: Partial<Line> = {
       size,
       pairs: asNumber(pairs),
-      pachka: asNumber(pachka),
+      pachka: typedPachka > 1 ? typedPachka : (line.pachka && line.pachka > 1 ? line.pachka : typedPachka),
       boxes: asNumber(boxes),
       price: asNumber(price),
       markup: markupValues,
@@ -618,6 +631,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const supplyBusy = useRef(false);
+  const saveQueue = useRef(Promise.resolve(true));
   const [settings, setSettings] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [day, setDay] = useState(todayKey);
@@ -815,22 +829,33 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const saveLine = async (shipment: Shipment, line: Line, patch: Partial<Line>) => {
-    const next = lineBody(line, patch);
-    const lines = line.id
-      ? shipment.lines.map(item => item.id === line.id ? next : lineBody(item))
-      : [...shipment.lines.map(item => lineBody(item)), next];
-    const response = await fetch(`/api/partner-factories/shipments/${shipment.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        date: shipment.date,
-        note: shipment.note,
-        lines,
-      }),
-    });
-    if (!response.ok) return false;
-    await refreshShipments();
-    return true;
+    const run = async () => {
+      const latest = cache.getQueryData<{ account: Account; shipments: Shipment[] }>(['partner-detail', row.account?.id])?.shipments.find(item => item.id === shipment.id) ?? shipment;
+      const source = latest.lines.find(item => item.id === line.id) ?? line;
+      const next = lineBody(source, patch);
+      const lines = source.id
+        ? latest.lines.map(item => item.id === source.id ? next : lineBody(item))
+        : [...latest.lines.map(item => lineBody(item)), next];
+      const response = await fetch(`/api/partner-factories/shipments/${shipment.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: latest.date,
+          note: latest.note,
+          lines,
+        }),
+      });
+      if (!response.ok) return false;
+      const saved = await response.json() as Shipment;
+      cache.setQueryData<{ account: Account; shipments: Shipment[] }>(['partner-detail', row.account?.id], (prev) => {
+        if (!prev) return prev;
+        return { ...prev, shipments: prev.shipments.map(item => item.id === saved.id ? saved : item) };
+      });
+      return true;
+    };
+    const queued = saveQueue.current.then(run, run);
+    saveQueue.current = queued.then(() => true, () => true);
+    return queued;
   };
 
   const removeLine = async (shipment: Shipment, line: Line) => {
@@ -1043,7 +1068,8 @@ function LineEditor({ line, creating, markup, onClose, onSave }: { shipment: Shi
   const save = async () => {
     if (!productCode.trim() || !sectionCode.trim() || !size.trim()) { setError(t('zavod.needProduct')); return; }
     setBusy(true);
-    const ok = await onSave({ factoryCode: codeValue(factoryCode), sectionCode: codeValue(sectionCode), productCode: codeValue(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), pachka: asNumber(pachka), price: asNumber(price), markup: parsePctMap(pctMap) });
+    const typedPachka = asNumber(pachka);
+    const ok = await onSave({ factoryCode: codeValue(factoryCode), sectionCode: codeValue(sectionCode), productCode: codeValue(productCode), size: size.trim(), pairs: asNumber(pairs), boxes: asNumber(boxes), pachka: typedPachka > 1 ? typedPachka : (line.pachka && line.pachka > 1 ? line.pachka : typedPachka), price: asNumber(price), markup: parsePctMap(pctMap) });
     setBusy(false);
     if (!ok) setError(t('partners.shipmentInvalid'));
   };

@@ -427,6 +427,7 @@ export function updateShipment(id: string, input: { date?: string; note?: string
     const previous = shipment.lines.find((item) => item.id === line.id);
     if (previous) next.id = previous.id;
     if (previous && (line as { pachka?: unknown }).pachka == null) next.pachka = previous.pachka;
+    if (previous && previous.pachka > 1 && !(next.pachka > 1)) next.pachka = previous.pachka;
     if (!previous?.productId) return next;
     const same = previous.factoryCode === next.factoryCode && previous.sectionCode === next.sectionCode && previous.productCode === next.productCode && previous.model === next.model && previous.size === next.size;
     if (!same) return next;
@@ -457,7 +458,7 @@ export function deleteShipment(id: string) {
   return { ok: true };
 }
 
-export function linkExactShipmentLines(factoryId: string, match: (line: ShipmentLine) => { id: string; name: string; groupCode?: string } | null) {
+export function linkExactShipmentLines(factoryId: string, match: (line: ShipmentLine) => { id: string; name: string; groupCode?: string; packSize?: number } | null) {
   const store = load();
   let changed = false;
   for (const shipment of store.shipments) {
@@ -475,9 +476,25 @@ export function linkExactShipmentLines(factoryId: string, match: (line: Shipment
         line.sectionCode = product.groupCode;
         changed = true;
       }
+      if (!(line.pachka > 1) && product.packSize && product.packSize > 1) {
+        line.pachka = Math.round(product.packSize);
+        changed = true;
+      }
     }
   }
   if (changed) save(store);
+}
+
+export function fillMissingLinePachka(shipmentId: string, lineId: string, packSize: number) {
+  const size = Math.round(Number(packSize) || 0);
+  if (!(size > 1)) return;
+  const store = load();
+  const shipment = store.shipments.find((item) => item.id === shipmentId);
+  if (!shipment || shipment.moyskladId) return;
+  const line = shipment.lines.find((item) => item.id === lineId);
+  if (!line || line.pachka > 1) return;
+  line.pachka = size;
+  save(store);
 }
 
 export function linkShipmentLine(shipmentId: string, lineId: string, product: { id: string; name: string } | null) {

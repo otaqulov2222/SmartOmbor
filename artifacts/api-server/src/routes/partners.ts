@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
-import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
+import { buildSupplyPositions, pieceCount, productPackSize, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
@@ -8,6 +8,7 @@ import {
   accountFromToken,
   createAccount,
   createShipment,
+  fillMissingLinePachka,
   getAccount,
   linkExactShipmentLines,
   linkShipmentLine,
@@ -187,7 +188,8 @@ function exactCatalogProduct(
   });
   if (!matched) return null;
   const groupCode = parseBordoName(matched.name)?.groupCode || "";
-  return { ...matched, groupCode };
+  const packSize = catalog.products.find((product) => product.id === matched.id)?.packSize ?? 0;
+  return { ...matched, groupCode, packSize: packSize > 1 ? packSize : 0 };
 }
 
 function lineMatchesCatalogProduct(
@@ -210,7 +212,7 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const catalog = peekCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog().catch(() => null);
     if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
@@ -507,12 +509,22 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
       return;
     }
     const account = getAccount(shipment.factoryId);
-    let positions = shipment.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
+    const catalog = await loadCatalog();
+    if (account) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
+    let current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
+    for (const line of current.lines) {
+      if (line.pachka > 1) continue;
+      const listed = exactCatalogProduct(catalog, line, account || { code: "", name: "", catalogName: "" });
+      let pack = listed?.packSize ?? 0;
+      if (!(pack > 1) && line.productId) pack = await productPackSize(line.productId);
+      if (pack > 1) fillMissingLinePachka(current.id, line.id, pack);
+    }
+    current = listShipments().find((item) => item.id === shipment.id) ?? current;
+    let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) {
       res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
       return;
     }
-    const catalog = await loadCatalog();
     const storeId = String(req.body?.storeId ?? "").trim();
     const store = catalog.warehouses.find((item) => item.id === storeId) || (catalog.warehouses.length === 1 ? catalog.warehouses[0] : null);
     if (!store) {
@@ -568,7 +580,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
     for (const product of planned.created) {
       const linked = planned.links.find((item) => item.product.id === product.id);
-      const source = shipment.lines.find((line) => line.id === linked?.lineId);
+      const source = current.lines.find((line) => line.id === linked?.lineId);
       addCatalogProduct({
         id: product.id,
         name: product.name || "",

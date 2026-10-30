@@ -68,6 +68,20 @@ export function isPachkaPack(pack: { uom?: { meta?: { href?: string }; name?: st
   return name === "pachka" || name === "пачка" || name === "pack";
 }
 
+export async function productPackSize(productId: string): Promise<number> {
+  const id = String(productId || "").trim();
+  if (!id) return 0;
+  try {
+    const current = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${encodeURIComponent(id)}?expand=packs.uom`);
+    const pachka = (current.packs ?? []).find((pack) => isPachkaPack(pack));
+    const quantity = Math.round(Number(pachka?.quantity) || 0);
+    return quantity > 1 ? quantity : 0;
+  } catch (error) {
+    logger.warn({ productId: id, err: error instanceof Error ? error.message : error }, "MoySklad pack size skipped");
+    return 0;
+  }
+}
+
 export async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
   try {
     const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
