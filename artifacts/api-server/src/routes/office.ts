@@ -133,7 +133,7 @@ router.get("/office/board", (req, res) => {
 
 router.get("/office/tabel", (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
-  const people = listLocalPeople().filter((row) => row.role === "office" || row.role === "worker" || row.role === "accountant" || row.role === "manager" || row.role === "super_admin");
+  const people = listLocalPeople();
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
   if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
@@ -153,7 +153,7 @@ router.get("/office/tabel", (req, res) => {
 router.get("/office/people", (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   res.json({
-    items: listLocalPeople().filter((row) => row.role === "office" || row.role === "worker" || row.role === "accountant" || row.role === "manager" || row.role === "super_admin"),
+    items: listLocalPeople(),
   });
 });
 

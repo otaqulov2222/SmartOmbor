@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import { Fingerprint, MapPin, QrCode, SwitchCamera, X } from 'lucide-react';
-import { Link, useLocation } from 'wouter';
+import { useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
 import './office.css';
 
@@ -292,10 +292,10 @@ export function OfficePage() {
 
   return <div className="office">
     <div className="office-top">
-      {me?.director ? <Link href="/office/report" className="office-back">← {t('office.back')}</Link> : <span/>}
+      <span/>
       <div className="office-top-right">
-        <button type="button" className="office-out" onClick={() => setLang(lang === 'uz' ? 'ru' : 'uz')}>{lang === 'uz' ? 'RU' : 'UZ'}</button>
-        <button type="button" className="office-out" onClick={() => { sessionStorage.removeItem(SESSION); setLocation('/'); }}>{t('common.signOut')}</button>
+        {!me?.director && <button type="button" className="office-out" onClick={() => setLang(lang === 'uz' ? 'ru' : 'uz')}>{lang === 'uz' ? 'RU' : 'UZ'}</button>}
+        {!me?.director && <button type="button" className="office-out" onClick={() => { sessionStorage.removeItem(SESSION); setLocation('/'); }}>{t('common.signOut')}</button>}
         <div className="office-day"><b>{day.weekday}</b>{day.line}</div>
       </div>
     </div>

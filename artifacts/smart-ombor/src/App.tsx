@@ -29,7 +29,7 @@ import { AutoRefresh, AUTO_REFRESH_MS, useCatalogRefresh } from '@/auto-refresh'
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { OfficePage } from '@/office';
-import { OfficeReportPage } from '@/office-report';
+import { OfficeReportPage, OfficeTasksPage } from '@/office-report';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
@@ -59,7 +59,9 @@ const clerkAppearance = {
 type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
-  { key: 'nav.office', href: '/office/report', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
+  { key: 'nav.officeTasks', href: '/office/tasks', icon: ClipboardList, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
   { key: 'nav.scanner', href: '/scanner', icon: ScanBarcode, group: 'nav.group.workspace' },
@@ -77,7 +79,8 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/office/report', '/recommendations', '/products', '/scanner', '/partners'];
+const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
+const officeHrefs = ['/office', '/office/report', '/office/tasks'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
@@ -257,9 +260,13 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const [path] = useLocation(); const [open, setOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
   const inMore = moreHrefs.includes(path);
+  const inOfficeNav = officeHrefs.includes(path);
+  const director = ['super_admin', 'manager'].includes(readLocalSession()?.role || '');
   const [moreOpen, setMoreOpen] = useState(inMore);
+  const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
   useEffect(() => { setMoreOpen(inMore); }, [inMore]);
+  useEffect(() => { if (inOfficeNav) setOfficeOpen(true); }, [inOfficeNav]);
   const current = navigation.find(x => x.href === path);
   const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
@@ -288,7 +295,18 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
-          {primaryHrefs.map(href => navItem(href))}
+          {navItem('/dashboard')}
+          <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setMoreOpen(false); }} data-testid="button-navigation-office">
+            <Fingerprint size={18} strokeWidth={1.9}/>
+            <span>{t('nav.office')}</span>
+            <ChevronDown size={16} className="nav-more-chevron"/>
+          </button>
+          {officeOpen && <div className="nav-office-sub">
+            {navItem('/office')}
+            {director && navItem('/office/report')}
+            {director && navItem('/office/tasks')}
+          </div>}
+          {primaryHrefs.filter(href => href !== '/dashboard').map(href => navItem(href))}
           <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
         </div>
         {moreOpen && <div className="nav-more-panel">{moreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
@@ -1474,7 +1492,9 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
       return <EntryScreen><LocalLoginForm/></EntryScreen>;
     }
     if (localRole === 'office' && location !== '/office') return <Redirect to="/office"/>;
-    if (location === '/office') return body;
+    const director = localRole === 'super_admin' || localRole === 'manager';
+    if (!director && (location === '/office/report' || location === '/office/tasks')) return <Redirect to="/office"/>;
+    if (location === '/office' && localRole === 'office') return body;
     return <LocalShell title={title}>{body}</LocalShell>;
   }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
@@ -1508,8 +1528,9 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
-  { path: '/office/report', titleKey: 'nav.office', element: <OfficeReportPage/> },
-  { path: '/office/hisobot', titleKey: 'nav.office', element: <Redirect to="/office/report"/> },
+  { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
+  { path: '/office/tasks', titleKey: 'nav.officeTasks', element: <OfficeTasksPage/> },
+  { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
   { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { ChevronLeft, ChevronRight, Download, FileText, QrCode } from 'lucide-react';
-import { Link } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
 import { officeHeaders } from '@/office';
 import { downloadOfficeQrA4 } from '@/office-qr';
@@ -10,7 +9,7 @@ import './office-report.css';
 
 type TabelRow = {
   n: number; accountId: string; name: string; login: string; role: string; status: string; date?: string;
-  inHm: string; outHm: string; workedMs: number; lateIn: number; earlyIn: number; note: string;
+  inHm: string; outHm: string; workedMs: number; lateIn: number; note: string;
 };
 type Tabel = {
   date?: string; from?: string; to?: string; start: string; end: string;
@@ -42,46 +41,20 @@ function mins(n: number, label: (n: number) => string) {
 export function OfficeReportPage() {
   const { t, date, fmt } = useI18n();
   const roleLabel = (role: string) => t(`role.${role}` as TKey);
-  const [tab, setTab] = useState<'tabel' | 'hisobot' | 'tasks'>('tabel');
+  const [mode, setMode] = useState<'day' | 'week' | 'month'>('day');
   const [day, setDay] = useState(tashkentDay());
-  const [span, setSpan] = useState<'week' | 'month'>('week');
   const [data, setData] = useState<Tabel | null>(null);
-  const [report, setReport] = useState<Tabel | null>(null);
-  const [people, setPeople] = useState<Person[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [qr, setQr] = useState('');
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [dueDate, setDueDate] = useState(tashkentDay());
-  const [dueTime, setDueTime] = useState('18:00');
-  const [priority, setPriority] = useState('normal');
-  const [picked, setPicked] = useState<string[]>([]);
-  const [note, setNote] = useState('');
-  const [ok, setOk] = useState('');
-  const [busy, setBusy] = useState(false);
 
-  const loadDay = async (next = day) => {
-    const response = await fetch(`/api/office/tabel?date=${next}`, { headers: officeHeaders() });
-    if (response.ok) setData(await response.json());
-  };
-  const loadSpan = async (next = span) => {
-    const response = await fetch(`/api/office/tabel?range=${next}`, { headers: officeHeaders() });
-    if (response.ok) setReport(await response.json());
-  };
-  const loadTasks = async () => {
-    const response = await fetch('/api/office/tasks', { headers: officeHeaders() });
-    if (response.ok) setTasks((await response.json() as { items: Task[] }).items);
-  };
-
-  useEffect(() => { void loadDay(day); }, [day]);
-  useEffect(() => { if (tab === 'hisobot') void loadSpan(span); }, [tab, span]);
-  useEffect(() => { if (tab === 'tasks') void loadTasks(); }, [tab]);
+  useEffect(() => {
+    const url = mode === 'day' ? `/api/office/tabel?date=${day}` : `/api/office/tabel?range=${mode}`;
+    void fetch(url, { headers: officeHeaders() }).then(async response => {
+      if (response.ok) setData(await response.json());
+    });
+  }, [mode, day]);
   useEffect(() => {
     void fetch('/api/office/qr', { headers: officeHeaders() }).then(async response => {
       if (response.ok) setQr((await response.json() as { token: string }).token);
-    });
-    void fetch('/api/office/people', { headers: officeHeaders() }).then(async response => {
-      if (response.ok) setPeople((await response.json() as { items: Person[] }).items);
     });
   }, []);
 
@@ -91,6 +64,7 @@ export function OfficeReportPage() {
     return t('office.stOk');
   };
   const lateLabel = (n: number) => mins(n, value => t('office.minShort', { n: String(value) }));
+  const ranged = mode !== 'day';
 
   const downloadQr = async () => {
     if (!qr) return;
@@ -103,11 +77,11 @@ export function OfficeReportPage() {
     });
   };
 
-  const exportSheet = (source: Tabel | null, kind: 'excel' | 'pdf') => {
-    if (!source) return;
-    const stamp = source.date || `${source.from}_${source.to}`;
+  const exportSheet = (kind: 'excel' | 'pdf') => {
+    if (!data) return;
+    const stamp = data.date || `${data.from}_${data.to}`;
     const head = [t('common.date'), t('office.colN'), t('office.colName'), t('office.colRole'), t('office.colStatus'), t('office.colIn'), t('office.colOut'), t('office.colWork'), t('office.colLate')];
-    const rows = source.items.map(row => [date(row.date || source.date || ''), row.n, row.name, roleLabel(row.role), statusText(row.status), row.inHm || '—', row.outHm || '—', hhmm(row.workedMs), lateLabel(row.lateIn)]);
+    const rows = data.items.map(row => [date(row.date || data.date || ''), row.n, row.name, roleLabel(row.role), statusText(row.status), row.inHm || '—', row.outHm || '—', hhmm(row.workedMs), lateLabel(row.lateIn)]);
     if (kind === 'excel') {
       const csv = [head, ...rows].map(line => line.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(';')).join('\n');
       const a = document.createElement('a');
@@ -118,16 +92,101 @@ export function OfficeReportPage() {
     }
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     doc.setFontSize(14);
-    doc.text(`${t('nav.office')} · ${stamp}`, 14, 14);
-    autoTable(doc, {
-      startY: 20,
-      head: [head],
-      body: rows,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [47, 84, 235] },
-    });
+    doc.text(`${t('nav.officeReport')} · ${stamp}`, 14, 14);
+    autoTable(doc, { startY: 20, head: [head], body: rows, styles: { fontSize: 8 }, headStyles: { fillColor: [47, 84, 235] } });
     doc.save(`davomat-${stamp}.pdf`);
   };
+
+  const waitingNames = !ranged ? data?.items.filter(row => row.status === 'out_missing').map(row => row.name) ?? [] : [];
+  const rows = ranged ? (data?.items || []).filter(row => row.status !== 'absent' || row.inHm) : (data?.items || []);
+
+  return <div className="tabel">
+    <div className="page-head">
+      <div>
+        <h1>{t('nav.officeReport')}</h1>
+        <p>{t('office.reportSub')}</p>
+      </div>
+      <div className="page-actions">
+        <button type="button" className="btn btn-secondary" onClick={() => void downloadQr()}><QrCode size={16}/> {t('office.qrDownload')}</button>
+        <button type="button" className="btn btn-secondary" onClick={() => exportSheet('excel')}><Download size={16}/> {t('office.excel')}</button>
+        <button type="button" className="btn btn-primary" onClick={() => exportSheet('pdf')}><FileText size={16}/> {t('office.pdf')}</button>
+      </div>
+    </div>
+    {waitingNames.length > 0 && <div className="tabel-banner">{t('office.waitingBanner', { names: waitingNames.slice(0, 3).join(', ') })}</div>}
+    <div className="tabel-day">
+      {mode === 'day' && <>
+        <button type="button" className="icon-btn" onClick={() => setDay(shift(day, -1))} aria-label={t('common.prevPage')}><ChevronLeft size={18}/></button>
+        <b>{date(day)}</b>
+        <button type="button" className="icon-btn" onClick={() => setDay(shift(day, 1))} aria-label={t('common.nextPage')}><ChevronRight size={18}/></button>
+        <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDay(tashkentDay())}>{t('common.today')}</button>
+      </>}
+      <button type="button" className={`btn btn-sm ${mode === 'day' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('day')}>{t('office.day')}</button>
+      <button type="button" className={`btn btn-sm ${mode === 'week' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('week')}>{t('office.week')}</button>
+      <button type="button" className={`btn btn-sm ${mode === 'month' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('month')}>{t('office.month')}</button>
+    </div>
+    {data?.stats && <div className="tabel-stats">
+      <article><span>{t('office.statTotal')}</span><b>{fmt(data.stats.total)}</b></article>
+      <article className="is-ok"><span>{t('office.statCame')}</span><b>{fmt(data.stats.came)}</b></article>
+      <article className="is-bad"><span>{t('office.statAbsent')}</span><b>{fmt(data.stats.absent)}</b></article>
+      <article className="is-warn"><span>{t('office.statLate')}</span><b>{fmt(data.stats.late)}</b></article>
+      <article><span>{t('office.statWait')}</span><b>{fmt(data.stats.waiting)}</b></article>
+      <article><span>{t('office.statOff')}</span><b>{fmt(data.stats.off)}</b></article>
+    </div>}
+    <section className="card table-card">
+      <div className="card-head">
+        <h2>{t('office.tabelTitle')}</h2>
+        <span className="card-meta">{ranged ? `${date(data?.from)} – ${date(data?.to)}` : `${date(day)} · ${data?.start}–${data?.end}`}</span>
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr>
+            {ranged && <th>{t('common.date')}</th>}
+            <th>{t('office.colN')}</th><th>{t('office.colName')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
+            <th>{t('office.colIn')}</th><th>{t('office.colOut')}</th><th>{t('office.colWork')}</th><th>{t('office.colLate')}</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(row => <tr key={`${row.date || day}-${row.accountId}`}>
+              {ranged && <td>{date(row.date || '')}</td>}
+              <td>{row.n}</td>
+              <td><b>{row.name}</b></td>
+              <td>{roleLabel(row.role)}</td>
+              <td><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
+              <td>{row.inHm || '—'}</td>
+              <td>{row.outHm || '—'}</td>
+              <td>{hhmm(row.workedMs)}</td>
+              <td>{lateLabel(row.lateIn)}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>;
+}
+
+export function OfficeTasksPage() {
+  const { t, date } = useI18n();
+  const [people, setPeople] = useState<Person[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [dueDate, setDueDate] = useState(tashkentDay());
+  const [dueTime, setDueTime] = useState('18:00');
+  const [priority, setPriority] = useState('normal');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [note, setNote] = useState('');
+  const [ok, setOk] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const loadTasks = async () => {
+    const response = await fetch('/api/office/tasks', { headers: officeHeaders() });
+    if (response.ok) setTasks((await response.json() as { items: Task[] }).items);
+  };
+  useEffect(() => {
+    void loadTasks();
+    void fetch('/api/office/people', { headers: officeHeaders() }).then(async response => {
+      if (response.ok) setPeople((await response.json() as { items: Person[] }).items);
+    });
+  }, []);
 
   const createTask = async () => {
     setBusy(true); setNote('');
@@ -142,114 +201,50 @@ export function OfficeReportPage() {
     await loadTasks();
   };
 
-  const stats = (tab === 'hisobot' ? report : data)?.stats;
-  const waitingNames = data?.items.filter(row => row.status === 'out_missing').map(row => row.name) ?? [];
-  const table = tab === 'hisobot' ? report : data;
+  const statusOf = (status: Task['status']) => {
+    if (status === 'assigned') return t('office.accept');
+    if (status === 'accepted') return t('office.working');
+    return t('office.finished');
+  };
 
   return <div className="tabel">
     <div className="page-head">
       <div>
-        <h1>{t('nav.office')} · {t('office.officeName')}</h1>
-        <p>{t('office.reportSub')}</p>
-      </div>
-      <div className="page-actions">
-        <Link href="/office" className="btn btn-secondary">{t('office.openPunch')}</Link>
-        <button type="button" className="btn btn-secondary" onClick={() => void downloadQr()}><QrCode size={16}/> {t('office.qrDownload')}</button>
+        <h1>{t('nav.officeTasks')}</h1>
+        <p>{t('office.tasksLead')}</p>
       </div>
     </div>
-    <div className="tabel-tabs">
-      <button type="button" className={tab === 'tabel' ? 'is-on' : ''} onClick={() => setTab('tabel')}>{t('nav.office')}</button>
-      <button type="button" className={tab === 'hisobot' ? 'is-on' : ''} onClick={() => setTab('hisobot')}>{t('nav.officeReport')}</button>
-      <button type="button" className={tab === 'tasks' ? 'is-on' : ''} onClick={() => setTab('tasks')}>{t('office.tasks')}</button>
-    </div>
-    {tab !== 'tasks' && <>
-      {tab === 'tabel' && waitingNames.length > 0 && <div className="tabel-banner">{t('office.waitingBanner', { names: waitingNames.slice(0, 3).join(', ') })}</div>}
-      {tab === 'tabel' && <div className="tabel-day">
-        <button type="button" className="icon-btn" onClick={() => setDay(shift(day, -1))} aria-label={t('common.prevPage')}><ChevronLeft size={18}/></button>
-        <b>{date(day)}</b>
-        <button type="button" className="icon-btn" onClick={() => setDay(shift(day, 1))} aria-label={t('common.nextPage')}><ChevronRight size={18}/></button>
-        <button type="button" className={`btn btn-sm ${day === tashkentDay() ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setDay(tashkentDay())}>{t('common.today')}</button>
-      </div>}
-      {tab === 'hisobot' && <div className="tabel-day">
-        <button type="button" className={`btn btn-sm ${span === 'week' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSpan('week')}>{t('office.week')}</button>
-        <button type="button" className={`btn btn-sm ${span === 'month' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSpan('month')}>{t('office.month')}</button>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => exportSheet(report, 'excel')}><Download size={14}/> {t('office.excel')}</button>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => exportSheet(report, 'pdf')}><FileText size={14}/> {t('office.pdf')}</button>
-      </div>}
-      {stats && <div className="tabel-stats">
-        <article><span>{t('office.statTotal')}</span><b>{fmt(stats.total)}</b></article>
-        <article className="is-ok"><span>{t('office.statCame')}</span><b>{fmt(stats.came)}</b></article>
-        <article className="is-bad"><span>{t('office.statAbsent')}</span><b>{fmt(stats.absent)}</b></article>
-        <article className="is-warn"><span>{t('office.statLate')}</span><b>{fmt(stats.late)}</b></article>
-        <article><span>{t('office.statWait')}</span><b>{fmt(stats.waiting)}</b></article>
-        <article><span>{t('office.statOff')}</span><b>{fmt(stats.off)}</b></article>
-      </div>}
-      <section className="card table-card">
-        <div className="card-head">
-          <h2>{tab === 'hisobot' ? t('nav.officeReport') : t('office.tabelTitle')}</h2>
-          <span className="card-meta">{tab === 'hisobot' ? `${date(report?.from)} – ${date(report?.to)}` : `${date(day)} · ${data?.start}–${data?.end}`}</span>
-        </div>
-        <div className="table-wrap">
-          <table className="table">
-            <thead><tr>
-              {tab === 'hisobot' && <th>{t('common.date')}</th>}
-              <th>{t('office.colN')}</th><th>{t('office.colName')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
-              <th>{t('office.colIn')}</th><th>{t('office.colOut')}</th><th>{t('office.colWork')}</th><th>{t('office.colLate')}</th>
-            </tr></thead>
-            <tbody>
-              {(table?.items || []).filter(row => tab === 'hisobot' ? row.status !== 'absent' || row.inHm : true).map(row => <tr key={`${row.date || day}-${row.accountId}`}>
-                {tab === 'hisobot' && <td>{date(row.date || '')}</td>}
-                <td>{row.n}</td>
-                <td><b>{row.name}</b></td>
-                <td>{roleLabel(row.role)}</td>
-                <td><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
-                <td>{row.inHm || '—'}</td>
-                <td>{row.outHm || '—'}</td>
-                <td>{hhmm(row.workedMs)}</td>
-                <td>{lateLabel(row.lateIn)}</td>
-              </tr>)}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      {tab === 'tabel' && <div className="form-actions">
-        <button type="button" className="btn btn-secondary" onClick={() => exportSheet(data, 'excel')}><Download size={16}/> {t('office.excel')}</button>
-        <button type="button" className="btn btn-primary" onClick={() => exportSheet(data, 'pdf')}><FileText size={16}/> {t('office.pdf')}</button>
-      </div>}
-    </>}
-    {tab === 'tasks' && <>
-      <section className="card">
-        <div className="card-head"><h2>{t('office.newTask')}</h2></div>
-        <div className="form-grid">
-          <label className="field"><span>{t('office.taskName')}</span><input className="input" value={title} onChange={e => setTitle(e.target.value)} maxLength={200}/></label>
-          <label className="field"><span>{t('office.taskText')}</span><textarea className="input" value={body} onChange={e => setBody(e.target.value)} rows={3} maxLength={2000}/></label>
-        </div>
-        <div className="tabel-people">
-          {people.filter(item => item.role === 'office' || item.role === 'worker' || item.role === 'accountant').map(item => (
-            <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
-          ))}
-        </div>
-        <div className="form-grid">
-          <label className="field"><span>{t('common.date')}</span><input className="input" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}/></label>
-          <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={e => setDueTime(e.target.value)}/></label>
-        </div>
-        <div className="tabel-prio">
-          {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
-            <button type="button" key={id} className={priority === id ? 'is-on' : ''} onClick={() => setPriority(id)}>{t(key)}</button>
-          ))}
-        </div>
-        {note && <p className="muted">{note}</p>}
-        {ok && <p>{ok}</p>}
-        <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length} onClick={() => void createTask()}>{t('office.createTask')}</button></div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h2>{t('office.tasks')}</h2></div>
-        {tasks.length ? tasks.map(task => <article className="tabel-task" key={task.id}>
-          <b>{task.title}</b>
-          <p>{task.description || t('office.noDesc')}</p>
-          <small>{date(task.dueDate)} {task.dueTime} · {task.assignees.map(item => item.name).join(', ')} · {task.status}{task.late ? ` · ${t('office.late')}` : ''}</small>
-        </article>) : <p className="muted">{t('office.noTasks')}</p>}
-      </section>
-    </>}
+    <section className="card">
+      <div className="card-head"><h2>{t('office.newTask')}</h2></div>
+      <div className="form-grid">
+        <label className="field"><span>{t('office.taskName')}</span><input className="input" value={title} onChange={e => setTitle(e.target.value)} maxLength={200}/></label>
+        <label className="field"><span>{t('office.taskText')}</span><textarea className="input" value={body} onChange={e => setBody(e.target.value)} rows={4} maxLength={2000}/></label>
+      </div>
+      <div className="tabel-people">
+        {people.map(item => (
+          <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
+        ))}
+      </div>
+      <div className="form-grid">
+        <label className="field"><span>{t('common.date')}</span><input className="input" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}/></label>
+        <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={e => setDueTime(e.target.value)}/></label>
+      </div>
+      <div className="tabel-prio">
+        {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
+          <button type="button" key={id} className={priority === id ? 'is-on' : ''} onClick={() => setPriority(id)}>{t(key)}</button>
+        ))}
+      </div>
+      {note && <p className="muted">{note}</p>}
+      {ok && <p>{ok}</p>}
+      <div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length} onClick={() => void createTask()}>{t('office.createTask')}</button></div>
+    </section>
+    <section className="card">
+      <div className="card-head"><h2>{t('office.tasks')}</h2><span className="card-meta">{tasks.length}</span></div>
+      {tasks.length ? tasks.map(task => <article className="tabel-task" key={task.id}>
+        <b>{task.title}</b>
+        <p>{task.description || t('office.noDesc')}</p>
+        <small>{date(task.dueDate)} {task.dueTime} · {task.assignees.map(item => item.name).join(', ')} · {statusOf(task.status)}{task.late ? ` · ${t('office.late')}` : ''}</small>
+      </article>) : <p className="muted">{t('office.noTasks')}</p>}
+    </section>
   </div>;
 }

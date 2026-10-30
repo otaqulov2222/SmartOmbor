@@ -203,6 +203,7 @@
 .office-nav.is-three { grid-template-columns: 1fr 1fr 1fr; }
 .office-nav button { color: #94a3b8; border-radius: 12px; padding: 10px; }
 .office-nav button.is-on { background: #1d4ed8; color: #fff; }
+.app .office { min-height: 100%; }
 @media (min-width: 880px) {
   .office { max-width: 760px; margin: 0 auto; }
 }

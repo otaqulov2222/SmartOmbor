@@ -84,6 +84,7 @@ const uz = {
   'nav.tasks': 'Vazifalar',
   'nav.office': 'Davomat',
   'nav.officeReport': 'Davomat hisobot',
+  'nav.officeTasks': 'Topshiriqlar',
   'nav.analytics': 'Savdo tahlili',
   'nav.nonMoving': 'Harakatsiz zaxira',
   'nav.factories': 'Ishlab chiqaruvchilar',
@@ -1133,6 +1134,7 @@ const uz = {
   'office.waitingBanner': 'Ketish kutilmoqda: {names}',
   'office.dueTime': 'Soat',
   'office.minShort': '{n} daq',
+  'office.tasksLead': 'Xodimlarga topshiriq qo‘ying. Holat, muddat va bajarilish shu yerda turadi.',
 
   // dates
   'date.weekdays': 'Yak,Dush,Sesh,Chor,Pay,Jum,Shan',
@@ -1221,6 +1223,7 @@ const ru: Record<TKey, string> = {
   'nav.tasks': 'Задачи',
   'nav.office': 'Посещаемость',
   'nav.officeReport': 'Отчёт посещаемости',
+  'nav.officeTasks': 'Поручения',
   'nav.analytics': 'Анализ продаж',
   'nav.nonMoving': 'Неликвиды',
   'nav.factories': 'Производители',
@@ -2247,6 +2250,7 @@ const ru: Record<TKey, string> = {
   'office.waitingBanner': 'Ожидается уход: {names}',
   'office.dueTime': 'Время',
   'office.minShort': '{n} мин',
+  'office.tasksLead': 'Назначайте поручения сотрудникам. Статус, срок и выполнение хранятся здесь.',
 
   'date.weekdays': 'Вс,Пн,Вт,Ср,Чт,Пт,Сб',
   'date.weekdaysLong': 'Воскресенье,Понедельник,Вторник,Среда,Четверг,Пятница,Суббота',
