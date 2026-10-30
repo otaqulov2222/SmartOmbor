@@ -448,6 +448,9 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
 });
 
 router.post("/partner-factories/shipments/:id/supply", async (req, res, next) => {
+  req.setTimeout(0);
+  res.setTimeout(0);
+  req.socket.setTimeout(0);
   const unlock = await acquireSupplyLock(String(req.params.id));
   try {
     const shipment = listShipments().find((item) => item.id === String(req.params.id));

@@ -259,10 +259,41 @@ async function colorCharacteristic() {
   }
 }
 
+const productCache = new Map<string, ProductRow>();
+
+function rememberProduct(row: ProductRow, aliases: string[] = []) {
+  if (!row?.id) return row;
+  productCache.set(`id:${row.id}`, row);
+  for (const name of [row.name, ...aliases]) {
+    const key = foldProductName(String(name || "").trim().replace(/\s+/g, " "));
+    if (key) productCache.set(`name:${key}`, row);
+  }
+  return row;
+}
+
+function cachedByName(name: string) {
+  const key = foldProductName(name.trim().replace(/\s+/g, " "));
+  return key ? productCache.get(`name:${key}`) ?? null : null;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function idFromHref(href?: string) {
+  const path = String(href || "").split("?")[0];
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] || "";
+}
+
 async function productById(id: string) {
+  const wanted = String(id || "").trim();
+  if (!wanted) return null;
+  const cached = productCache.get(`id:${wanted}`);
+  if (cached) return cached;
   try {
-    const row = await moysklad<ProductRow>(`/entity/product/${encodeURIComponent(id)}?expand=salePrices.priceType`);
-    if (row.id === id && row.meta?.type !== "variant") return row;
+    const row = await moysklad<ProductRow>(`/entity/product/${encodeURIComponent(wanted)}?expand=salePrices.priceType`);
+    if (row.id === wanted && row.meta?.type !== "variant") return rememberProduct(row);
   } catch (error) {
     if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
   }
@@ -304,32 +335,82 @@ function pickNamedRow(rows: Array<{ id?: string; name?: string }>, wanted: strin
   return rows.find((row) => row.id && rowMatchesName(row.name || "", wanted)) ?? null;
 }
 
-async function productByName(name: string) {
+async function rowFromSearchHit(row: { id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }, wanted: string) {
+  const type = row.meta?.type || "";
+  if (type === "variant") {
+    const parentId = idFromHref(row.product?.meta?.href);
+    if (parentId) return productById(parentId);
+    return null;
+  }
+  if (row.id) {
+    const loaded = await productById(row.id);
+    if (loaded) return rememberProduct(loaded, [wanted, row.name || ""]);
+  }
+  return null;
+}
+
+async function searchListedName(name: string) {
   const trimmed = name.trim().replace(/\s+/g, " ");
   if (!trimmed) return null;
-  const clause = `name=${quoteFilterValue(trimmed)}`;
-  const filters = [clause, `${clause};archived=true`];
-  for (const filter of filters) {
+  const parsed = parseBordoName(trimmed);
+  const searches = [...new Set([
+    trimmed,
+    foldProductName(trimmed),
+    parsed ? ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ") : "",
+    parsed?.productCode || "",
+  ].map((item) => item.trim()).filter((item) => item.length >= 2))];
+  const paths = searches.flatMap((query) => [
+    `/entity/product?limit=100&search=${encodeURIComponent(query)}`,
+    `/entity/assortment?limit=100&search=${encodeURIComponent(query)}`,
+  ]);
+  for (const path of paths) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=${encodeURIComponent(filter)}`);
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }> }>(path);
       const hit = pickNamedRow(page.rows, trimmed);
-      if (hit?.id) return productById(hit.id);
-    } catch (error) {
-      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
-    }
-  }
-  const searches = [...new Set([trimmed, foldProductName(trimmed)].filter(Boolean))];
-  for (const query of searches) {
-    try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=100&search=${encodeURIComponent(query)}`);
-      const hit = pickNamedRow(page.rows, trimmed);
-      if (hit?.id) return productById(hit.id);
+      if (hit) {
+        const loaded = await rowFromSearchHit(hit, trimmed);
+        if (loaded) return loaded;
+      }
+      if (parsed) {
+        const identity = page.rows.find((row) => row.id && sameBordoCard(row.name || "", {
+          factoryCode: parsed.factoryCode,
+          productCode: parsed.productCode,
+          size: parsed.size,
+          groupCode: parsed.groupCode,
+        }));
+        if (identity) {
+          const loaded = await rowFromSearchHit(identity, trimmed);
+          if (loaded) return loaded;
+        }
+      }
     } catch (error) {
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
       logger.warn({ name: trimmed, err: error instanceof Error ? error.message : error }, "MoySklad product-by-name search skipped");
     }
   }
   return null;
+}
+
+async function productByName(name: string) {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  const remembered = cachedByName(trimmed);
+  if (remembered) return remembered;
+  const clause = `name=${quoteFilterValue(trimmed)}`;
+  const filters = [clause, `${clause};archived=true`, `name==${quoteFilterValue(trimmed)}`];
+  for (const filter of filters) {
+    try {
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=25&filter=${encodeURIComponent(filter)}`);
+      const hit = pickNamedRow(page.rows, trimmed);
+      if (hit?.id) {
+        const row = await productById(hit.id);
+        if (row) return rememberProduct(row, [trimmed]);
+      }
+    } catch (error) {
+      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+    }
+  }
+  return searchListedName(trimmed);
 }
 
 function uniqueNameConflict(error: unknown) {
@@ -362,8 +443,14 @@ async function recoverExistingProduct(name: string) {
   if (!wanted) return null;
   const first = await productByName(wanted);
   if (first) return first;
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  return productByName(wanted);
+  for (const wait of [500, 1200, 2500]) {
+    await sleep(wait);
+    const again = await productByName(wanted);
+    if (again) return again;
+    const listed = await searchListedName(wanted);
+    if (listed) return listed;
+  }
+  return null;
 }
 
 async function createProduct(body: Record<string, unknown>): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
@@ -371,24 +458,29 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
   const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
   const listed = wanted ? await productByName(wanted) : null;
   if (listed) return listed;
-  for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 1; attempt += 1) {
+  for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 3; attempt += 1) {
     try {
-      return await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
+      const created = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
+      return rememberProduct(created, [wanted]);
     } catch (error) {
-      const existing = wanted ? await recoverExistingProduct(wanted) : null;
+      const existing = wanted ? await productByName(wanted) : null;
       if (existing) return existing;
       if (uniqueNameConflict(error)) {
         const parameter = uniqueNameParameter(error);
+        if (parameter === "barcodes") {
+          delete payload.barcodes;
+          continue;
+        }
         if (parameter !== "name" && ("article" in payload || "code" in payload || parameter === "article" || parameter === "code")) {
           logger.warn({ name: payload.name, parameter }, "MoySklad product create retry without shared article");
           delete payload.article;
           delete payload.code;
           continue;
         }
-        if (parameter === "name" || !parameter) {
-          logger.warn({ name: wanted, parameter }, "MoySklad unique name without a listed card");
-          throw new MoySkladError("Bu mahsulot kartasi MoySkladda bor. Qayta bosing.", 409, undefined, "name");
-        }
+        const recovered = wanted ? await recoverExistingProduct(wanted) : null;
+        if (recovered) return recovered;
+        logger.warn({ name: wanted, parameter }, "MoySklad unique name, looking up existing card");
+        break;
       }
       if (!permissionDenied(error)) throw error;
       const drop = error instanceof MoySkladError && error.parameter && error.parameter in payload
@@ -399,6 +491,8 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
       delete payload[drop];
     }
   }
+  const fallback = wanted ? await recoverExistingProduct(wanted) : null;
+  if (fallback) return fallback;
   throw new MoySkladError("MoySklad mahsulot yaratilmadi", 403);
 }
 
@@ -462,8 +556,20 @@ async function ensureVariant(
         await ensureBarcodes("variant", hit.id, catalog, used);
         return hit;
       }
-      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
-      if (!permissionDenied(error) && body === attempts[attempts.length - 1]) throw error;
+      const parameter = uniqueNameParameter(error);
+      if (parameter === "barcodes" && body.barcodes) {
+        const next = nextInternalEan13(catalog, used);
+        body.barcodes = [{ ean13: next }];
+        logger.warn({ color, product: product.name, parameter }, "MoySklad variant barcode retry");
+        continue;
+      }
+      if (uniqueNameConflict(error) || permissionDenied(error)) {
+        logger.warn({ color, product: product.name, err: error instanceof Error ? error.message : error }, "MoySklad variant create skipped");
+        if (body !== attempts[attempts.length - 1]) continue;
+        return null;
+      }
+      if (!(error instanceof MoySkladError)) throw error;
+      if (body === attempts[attempts.length - 1]) throw error;
       logger.warn({ color, product: product.name, err: error instanceof Error ? error.message : error }, "MoySklad variant create retry");
     }
   }
@@ -491,15 +597,19 @@ async function colorNamedProduct(
   const sale = extras.price > 0 && extras.priceType ? (markedSale(extras.price, extras.priceType, loadMarkup()) ?? extras.price) : extras.price;
   const existing = await productByName(name);
   if (existing) {
-    await writeProductCard(existing.id, sale, extras.priceType, extras.currencyMeta, {
-      article: extras.article,
-      supplierMeta: extras.supplierMeta,
-      description: extras.description,
-      folderMeta: extras.folder?.meta ?? null,
-      packSize: extras.packSize,
-      buySom: extras.price,
-      sales: extras.sales ?? undefined,
-    });
+    try {
+      await writeProductCard(existing.id, sale, extras.priceType, extras.currencyMeta, {
+        article: extras.article,
+        supplierMeta: extras.supplierMeta,
+        description: extras.description,
+        folderMeta: extras.folder?.meta ?? null,
+        packSize: extras.packSize,
+        buySom: extras.price,
+        sales: extras.sales ?? undefined,
+      });
+    } catch (error) {
+      logger.warn({ name, err: error instanceof Error ? error.message : error }, "Color product card skipped");
+    }
     return existing;
   }
   const listed = extras.sales
@@ -521,15 +631,19 @@ async function colorNamedProduct(
   });
   if (listed) created.salePrices = listed;
   created.barcodes = barcodeValues(created.barcodes);
-  await writeProductCard(created.id, sale, extras.priceType, extras.currencyMeta, {
-    article: extras.article,
-    supplierMeta: extras.supplierMeta,
-    description: extras.description,
-    folderMeta: extras.folder?.meta ?? null,
-    packSize,
-    buySom: extras.price,
-    sales: extras.sales ?? undefined,
-  });
+  try {
+    await writeProductCard(created.id, sale, extras.priceType, extras.currencyMeta, {
+      article: extras.article,
+      supplierMeta: extras.supplierMeta,
+      description: extras.description,
+      folderMeta: extras.folder?.meta ?? null,
+      packSize,
+      buySom: extras.price,
+      sales: extras.sales ?? undefined,
+    });
+  } catch (error) {
+    logger.warn({ name, err: error instanceof Error ? error.message : error }, "Color product card skipped");
+  }
   return created;
 }
 
@@ -888,6 +1002,7 @@ export async function buildSupplyPositions(
     requireWaybillLine(line);
     const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
     const parent = await findExistingBordoProduct(line, scope);
+    if (parent) rememberProduct(parent, [name]);
     if (parent?.name) {
       const parts = parseBordoName(parent.name);
       if (parts?.groupCode) line.sectionCode = parts.groupCode;
@@ -959,21 +1074,32 @@ export async function buildSupplyPositions(
     const product = parents.get(parent.id) ?? full;
     if (item.line.price > 0) {
       const priced = saleForLine(item.line);
-      await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
-        supplierMeta: scope.supplierMeta,
-        description: cardDescription(item.line),
-        folderMeta: item.folder?.meta ?? null,
-        packSize: packSizeOf(item.line),
-        buySom: item.line.price,
-        sales: salesForLine(item.line) ?? undefined,
-      });
+      try {
+        await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
+          supplierMeta: scope.supplierMeta,
+          description: cardDescription(item.line),
+          folderMeta: item.folder?.meta ?? null,
+          packSize: packSizeOf(item.line),
+          buySom: item.line.price,
+          sales: salesForLine(item.line) ?? undefined,
+        });
+      } catch (error) {
+        logger.warn({ productId: product.id, err: error instanceof Error ? error.message : error }, "Waybill product card skipped");
+      }
     }
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
     const packSize = packSizeOf(item.line);
     const packKey = `${product.id}:${packSize}`;
-    if (!packCache.has(packKey)) packCache.set(packKey, await ensurePachka(product.id, packSize));
+    if (!packCache.has(packKey)) {
+      try {
+        packCache.set(packKey, await ensurePachka(product.id, packSize));
+      } catch (error) {
+        logger.warn({ productId: product.id, err: error instanceof Error ? error.message : error }, "Waybill pack skipped");
+        packCache.set(packKey, null);
+      }
+    }
     let known = variantCache.get(product.id);
     if (!known && parts.some((part) => part.color)) {
       known = await variantsOf(product.id);

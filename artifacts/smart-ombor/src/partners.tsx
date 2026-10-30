@@ -779,6 +779,20 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     }
     supplyBusy.current = true;
     setBusy(true); setPostError('');
+    const shipmentId = posting.id;
+    const postedNow = async () => {
+      await refreshShipments();
+      const latest = cache.getQueryData<{ account: Account; shipments: Shipment[] }>(['partner-detail', row.account?.id]);
+      return latest?.shipments.find(item => item.id === shipmentId && item.moyskladId) ?? null;
+    };
+    const waitPosted = async (tries: number) => {
+      for (let i = 0; i < tries; i += 1) {
+        const hit = await postedNow();
+        if (hit) return hit;
+        await new Promise(resolve => setTimeout(resolve, 2500));
+      }
+      return postedNow();
+    };
     try {
       if (row.account && (agent ? agent.id !== row.account.counterpartyId : Boolean(row.account.counterpartyId))) {
         const saved = await fetch(`/api/partner-factories/${row.account.id}`, {
@@ -788,16 +802,48 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         });
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
-      const response = await fetch(`/api/partner-factories/shipments/${posting.id}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
-      const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };
-      if (!response.ok) {
-        setPostError(supplyError(body, t));
-        return;
+      let lastBody: { error?: string; detail?: string } = {};
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+          lastBody = await response.json().catch(() => ({})) as { error?: string; detail?: string };
+          if (response.ok) {
+            setPosting(null);
+            await refreshShipments();
+            return;
+          }
+          if (await postedNow()) {
+            setPosting(null);
+            return;
+          }
+          const detail = String(lastBody.detail || '');
+          const retryable = response.status >= 500 || /уникал|unique|already exists|уже существ|MoySkladda bor|карточка уже есть|javob bermadi|so‘rov limiti/i.test(detail);
+          if (!retryable || attempt === 2) {
+            setPostError(supplyError(lastBody, t));
+            return;
+          }
+        } catch {
+          if (await postedNow()) {
+            setPosting(null);
+            return;
+          }
+          if (attempt === 2) {
+            const hit = await waitPosted(20);
+            if (hit) {
+              setPosting(null);
+              return;
+            }
+            setPostError(t('partners.supplyFailed'));
+            return;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
       }
-      setPosting(null);
-      await refreshShipments();
+      setPostError(supplyError(lastBody, t));
     } catch {
-      setPostError(t('partners.supplyFailed'));
+      const hit = await postedNow();
+      if (hit) setPosting(null);
+      else setPostError(t('partners.supplyFailed'));
     } finally {
       supplyBusy.current = false;
       setBusy(false);
