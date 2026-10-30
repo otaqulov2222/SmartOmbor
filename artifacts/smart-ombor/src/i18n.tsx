@@ -1135,6 +1135,10 @@ const uz = {
   'office.dueTime': 'Soat',
   'office.minShort': '{n} daq',
   'office.tasksLead': 'Xodimlarga topshiriq qo‘ying. Holat, muddat va bajarilish shu yerda turadi.',
+  'office.detail': 'Batafsil',
+  'office.payWeek': 'Hafta · {from} – {to}',
+  'office.payHint': 'Haftalik fiksa. Jarima davomatga qarab hisoblanadi.',
+  'office.myTasks': 'Mening topshiriqlarim',
 
   // dates
   'date.weekdays': 'Yak,Dush,Sesh,Chor,Pay,Jum,Shan',
@@ -2251,6 +2255,10 @@ const ru: Record<TKey, string> = {
   'office.dueTime': 'Время',
   'office.minShort': '{n} мин',
   'office.tasksLead': 'Назначайте поручения сотрудникам. Статус, срок и выполнение хранятся здесь.',
+  'office.detail': 'Подробнее',
+  'office.payWeek': 'Неделя · {from} – {to}',
+  'office.payHint': 'Недельный фикс. Штраф считается по посещаемости.',
+  'office.myTasks': 'Мои поручения',
 
   'date.weekdays': 'Вс,Пн,Вт,Ср,Чт,Пт,Сб',
   'date.weekdaysLong': 'Воскресенье,Понедельник,Вторник,Среда,Четверг,Пятница,Суббота',

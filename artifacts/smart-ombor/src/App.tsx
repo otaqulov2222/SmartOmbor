@@ -1494,7 +1494,7 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
     if (localRole === 'office' && location !== '/office') return <Redirect to="/office"/>;
     const director = localRole === 'super_admin' || localRole === 'manager';
     if (!director && (location === '/office/report' || location === '/office/tasks')) return <Redirect to="/office"/>;
-    if (location === '/office' && localRole === 'office') return body;
+    if (location === '/office') return body;
     return <LocalShell title={title}>{body}</LocalShell>;
   }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
