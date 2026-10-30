@@ -401,3 +401,25 @@ export function tabelDay(day: string, people: TabelPerson[], start = "09:00", en
     items,
   };
 }
+
+export function tabelRange(from: string, to: string, people: TabelPerson[], start = "09:00", end = "18:00") {
+  const days = [];
+  let cursor = from;
+  while (cursor <= to && days.length < 40) {
+    days.push(tabelDay(cursor, people, start, end));
+    cursor = shiftDay(cursor, 1);
+  }
+  const items = days.flatMap((day) => day.items.map((row) => ({ ...row, date: day.date })));
+  const stats = days.reduce(
+    (acc, day) => ({
+      total: people.length,
+      came: acc.came + day.stats.came,
+      absent: acc.absent + day.stats.absent,
+      late: acc.late + day.stats.late,
+      off: acc.off + day.stats.off,
+      waiting: acc.waiting + day.stats.waiting,
+    }),
+    { total: people.length, came: 0, absent: 0, late: 0, off: 0, waiting: 0 },
+  );
+  return { from, to, start, end, stats, items };
+}

@@ -17,6 +17,7 @@ import {
   rangeDays,
   tashkentParts,
   tabelDay,
+  tabelRange,
   todayBoard,
   todayPunch,
   updateOfficeTask,
@@ -132,8 +133,20 @@ router.get("/office/board", (req, res) => {
 
 router.get("/office/tabel", (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : tashkentParts().date;
   const people = listLocalPeople().filter((row) => row.role === "office" || row.role === "worker" || row.role === "accountant" || row.role === "manager" || row.role === "super_admin");
+  const from = String(req.query.from ?? "");
+  const to = String(req.query.to ?? "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    res.json(tabelRange(from, to, people));
+    return;
+  }
+  const kind = String(req.query.range ?? "");
+  if (kind === "week" || kind === "month") {
+    const span = rangeDays(kind);
+    res.json(tabelRange(span.from, span.to, people));
+    return;
+  }
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : tashkentParts().date;
   res.json(tabelDay(day, people));
 });
 

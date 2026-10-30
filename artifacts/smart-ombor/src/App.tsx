@@ -60,7 +60,6 @@ type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
   { key: 'nav.office', href: '/office/report', icon: Fingerprint, group: 'nav.group.workspace' },
-  { key: 'nav.officeReport', href: '/office/hisobot', icon: FileBarChart, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
   { key: 'nav.scanner', href: '/scanner', icon: ScanBarcode, group: 'nav.group.workspace' },
@@ -78,7 +77,7 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/office/report', '/office/hisobot', '/recommendations', '/products', '/scanner', '/partners'];
+const primaryHrefs = ['/dashboard', '/office/report', '/recommendations', '/products', '/scanner', '/partners'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
@@ -1510,7 +1509,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
   { path: '/office/report', titleKey: 'nav.office', element: <OfficeReportPage/> },
-  { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
+  { path: '/office/hisobot', titleKey: 'nav.office', element: <Redirect to="/office/report"/> },
   { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
