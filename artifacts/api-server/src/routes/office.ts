@@ -148,8 +148,8 @@ router.get("/office/tabel", (req, res) => {
     res.json(tabelRange(span.from, span.to, people));
     return;
   }
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : tashkentParts().date;
-  res.json(tabelDay(day, people));
+  const requested = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : today;
+  res.json(tabelDay(requested > today ? today : requested, people));
 });
 
 router.patch("/office/tabel", (req, res) => {

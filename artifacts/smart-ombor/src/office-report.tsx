@@ -153,21 +153,23 @@ export function OfficeReportPage() {
   };
 
   const tabelUrl = mode === 'day' ? `/api/office/tabel?date=${day}` : `/api/office/tabel?from=${span.from}&to=${span.to}`;
-  const loadTabel = async (silent = false) => {
-    if (!silent) { setLoad(true); setError(''); }
-    try {
-      const response = await fetch(tabelUrl, { headers: officeHeaders() });
-      if (!response.ok) { if (!silent) setError(t('common.loadFailed')); return; }
+
+  useEffect(() => {
+    let live = true;
+    setLoad(true);
+    setError('');
+    void fetch(tabelUrl, { headers: officeHeaders() }).then(async response => {
+      if (!live) return;
+      if (!response.ok) { setError(t('common.loadFailed')); return; }
       setData(await response.json() as Tabel);
       setError('');
-    } catch {
-      if (!silent) setError(t('common.serverLost'));
-    } finally {
-      setLoad(false);
-    }
-  };
-
-  useEffect(() => { void loadTabel(false); }, [tabelUrl, reload]);
+    }).catch(() => {
+      if (live) setError(t('common.serverLost'));
+    }).finally(() => {
+      if (live) setLoad(false);
+    });
+    return () => { live = false; };
+  }, [tabelUrl, reload, t]);
   useEffect(() => {
     void fetch('/api/office/qr', { headers: officeHeaders() }).then(async response => {
       if (response.ok) setQr((await response.json() as { token: string }).token);
@@ -175,7 +177,11 @@ export function OfficeReportPage() {
   }, []);
   useEffect(() => {
     if (mode !== 'day' || day !== today) return;
-    const timer = window.setInterval(() => { void loadTabel(true); }, 30000);
+    const timer = window.setInterval(() => {
+      void fetch(tabelUrl, { headers: officeHeaders() }).then(async response => {
+        if (response.ok) setData(await response.json() as Tabel);
+      }).catch(() => undefined);
+    }, 30000);
     return () => window.clearInterval(timer);
   }, [mode, day, today, tabelUrl]);
   useEffect(() => {
@@ -270,6 +276,7 @@ export function OfficeReportPage() {
       a.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
       a.download = `davomat-${stamp}.csv`;
       a.click();
+      window.setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       return;
     }
     const fonts = await loadPdfFonts();
