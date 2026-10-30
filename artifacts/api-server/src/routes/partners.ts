@@ -17,6 +17,7 @@ import {
   markShipmentPosted,
   clearShipmentPosted,
   moyskladDateTime,
+  tashkentDay,
   deleteAccount,
   deleteShipment,
   resetPassword,
@@ -213,8 +214,10 @@ router.get("/partner-factories/:id", async (req, res, next) => {
     }
     const catalog = peekCatalog();
     if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
+    const shipments = listShipments(account.id);
+    for (const shipment of shipments) scheduleSupplyName(shipment);
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
-    res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
+    res.json({ account: { ...safe, password: passwordPlain || null }, shipments });
   } catch (error) {
     next(error);
   }
@@ -346,13 +349,55 @@ function uniqueSupplyConflict(error: unknown) {
   return error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message);
 }
 
+function printedDay(date?: string) {
+  const day = tashkentDay(date);
+  const [year, month, dayPart] = day.split("-");
+  return year && month && dayPart ? `${dayPart}.${month}.${year}` : "";
+}
+
+function supplyNames(shipment: { number: string; date?: string }) {
+  const number = shipment.number.trim();
+  const day = printedDay(shipment.date);
+  return [...new Set([number, day ? `${number} ${day}` : ""].filter(Boolean))];
+}
+
+const supplyNameTried = new Set<string>();
+
+async function alignSupplyName(id: string, shipment: { number: string; date?: string }) {
+  for (const name of supplyNames(shipment)) {
+    try {
+      await moyskladSend(`/entity/supply/${encodeURIComponent(id)}`, { name }, "PUT");
+      return name;
+    } catch (error) {
+      if (!uniqueSupplyConflict(error) && !permissionDenied(error)) {
+        logger.warn({ supply: id, name, err: error instanceof Error ? error.message : error }, "MoySklad supply rename skipped");
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function scheduleSupplyName(shipment: { id: string; number: string; date?: string; moyskladId?: string | null; moyskladNumber?: string | null }) {
+  const current = (shipment.moyskladNumber || "").trim();
+  const number = shipment.number.trim();
+  if (!shipment.moyskladId || !number || current === number || current.startsWith(`${number} `) || supplyNameTried.has(shipment.id)) return;
+  supplyNameTried.add(shipment.id);
+  void alignSupplyName(shipment.moyskladId, shipment).then((name) => {
+    if (name) markShipmentPosted(shipment.id, { id: shipment.moyskladId!, number: name });
+  }).catch((error) => {
+    logger.warn({ shipment: shipment.id, err: error instanceof Error ? error.message : error }, "MoySklad supply rename failed");
+  });
+}
+
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
   const existing = await findExistingSupply(shipment);
   if (existing) return { ...existing, reused: true };
+  const dated = supplyNames(shipment)[1];
   const payloads: Array<Record<string, unknown>> = [
     { ...core, applicable: true, positions },
     { ...core, applicable: false, positions },
-    { ...core, name: undefined, applicable: true, positions },
+    ...(dated ? [{ ...core, name: dated, applicable: true, positions }] : []),
   ];
   let last: unknown;
   for (const body of payloads) {
@@ -568,15 +613,20 @@ async function writeShipmentSupply(shipmentId: string, storeId: string): Promise
       assortment: item.assortment,
     }));
     const created = await postSupplyDocument(supplyCore, supplyPositions, shipment);
-    const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
+    const wanted = shipment.number.trim();
+    const currentName = (created.name || "").trim();
+    const aligned = currentName === wanted || currentName.startsWith(`${wanted} `)
+      ? currentName
+      : (await alignSupplyName(created.id, shipment) || currentName || wanted);
+    const saved = markShipmentPosted(shipment.id, { id: created.id, number: aligned || wanted });
     void fillZeroSupplyPrices(created.id, shipment.lines).catch((error) => {
       logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
     });
     if (!created.reused) {
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }
-    void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: created.name || shipment.number });
-    return { id: created.id, number: created.name || shipment.number, shipment: saved, already: created.reused };
+    void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: aligned || wanted });
+    return { id: created.id, number: aligned || wanted, shipment: saved, already: created.reused };
   } finally {
     unlock();
   }

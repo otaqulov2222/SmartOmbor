@@ -644,6 +644,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [removingLine, setRemovingLine] = useState<{ shipment: Shipment; line: Line } | null>(null);
   const [lineEdit, setLineEdit] = useState<{ shipment: Shipment; line: Line } | null>(null);
   const [posting, setPosting] = useState<Shipment | null>(null);
+  const [supplyingId, setSupplyingId] = useState<string | null>(null);
   const [storeId, setStoreId] = useState('');
   const [postError, setPostError] = useState('');
   const [agentQuery, setAgentQuery] = useState('');
@@ -808,18 +809,28 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
       if (started.ok && !startedBody.pending && (startedBody.id || startedBody.already)) {
         setPosting(null);
+        setSupplyingId(null);
         await refreshShipments();
         return;
       }
       if (!started.ok && started.status !== 202) {
         if (await postedNow()) {
           setPosting(null);
+          setSupplyingId(null);
           return;
         }
         setPostError(supplyError(startedBody, t));
         return;
       }
-      for (let i = 0; i < 45; i += 1) {
+      setSupplyingId(shipmentId);
+      setPosting(null);
+      setBusy(false);
+      for (let i = 0; i < 120; i += 1) {
+        const hit = await postedNow();
+        if (hit) {
+          setSupplyingId(null);
+          return;
+        }
         const status = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`);
         const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
         if (body.pending || status.status === 202 || status.status === 404) {
@@ -827,23 +838,32 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
           continue;
         }
         if ((status.ok || body.already) && (body.id || body.already)) {
-          setPosting(null);
+          setSupplyingId(null);
           await refreshShipments();
           return;
         }
+        setSupplyingId(null);
         setPostError(supplyError(body, t));
+        setPosting(posting);
         return;
       }
-      const hit = await waitPosted(5);
+      const hit = await waitPosted(8);
       if (hit) {
-        setPosting(null);
+        setSupplyingId(null);
         return;
       }
+      setSupplyingId(null);
       setPostError(t('partners.supplyFailed'));
+      setPosting(posting);
     } catch {
       const hit = await postedNow();
-      if (hit) setPosting(null);
-      else setPostError(t('partners.supplyFailed'));
+      if (hit) {
+        setPosting(null);
+        setSupplyingId(null);
+      } else {
+        setSupplyingId(null);
+        setPostError(t('partners.supplyFailed'));
+      }
     } finally {
       supplyBusy.current = false;
       setBusy(false);
@@ -1008,6 +1028,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             )}
             {openShipment === shipment.id && shipment.note && <p className="waybill-note">{shipment.note}</p>}
             {openShipment === shipment.id && shipment.moyskladNumber && <p className="waybill-note">{t('partners.posted', { number: shipment.moyskladNumber })}</p>}
+            {openShipment === shipment.id && supplyingId === shipment.id && !shipment.moyskladNumber && <p className="waybill-note">{t('partners.supplyPending')}</p>}
             {openShipment === shipment.id && (
               <div className="waybill-actions">
                 <div className="waybill-tools">
@@ -1020,7 +1041,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
                   {!shipment.moyskladId && shipment.status === 'sent' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
                   {!shipment.moyskladId && shipment.status === 'declined' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void setStatus(shipment.id, 'sent')} data-testid="button-reopen-shipment"><Check size={15}/>{t('partners.reopen')}</button>}
-                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-primary btn-sm" onClick={() => { setPostError(''); setPosting(shipment); }}>{t('partners.supply')}</button>}
+                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-primary btn-sm" disabled={supplyingId === shipment.id} onClick={() => { setPostError(''); setPosting(shipment); }}>{supplyingId === shipment.id ? t('partners.supplyPending') : t('partners.supply')}</button>}
                 </div>
               </div>
             )}
@@ -1039,7 +1060,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         <Link href="/factories" className="link">{t('nav.factories')}</Link>
       </>}
     </section>}
-    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => { if (!busy) setPosting(null); }} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = false; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('common.saving') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
+    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => { if (!busy) setPosting(null); }} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = false; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('partners.supplyPending') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">
       <div className="modal-top"><div><p className="eyebrow">{row.name}</p><h2 id="partner-settings-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={() => setSettings(false)} aria-label={t('common.close')}><X size={18}/></button></div>
       <div className="form-grid">
