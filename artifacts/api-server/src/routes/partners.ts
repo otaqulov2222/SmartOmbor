@@ -20,6 +20,7 @@ import {
   markShipmentPosted,
   clearShipmentPosted,
   moyskladDateTime,
+  partnerRevision,
   tashkentDay,
   deleteAccount,
   deleteShipment,
@@ -56,7 +57,7 @@ function requireFactory(req: Request, res: Response, next: NextFunction) {
 
 router.get("/partner-alerts", (_req, res) => {
   const pending = listShipments().filter((item) => item.status === "sent").length;
-  res.json({ pending });
+  res.json({ pending, revision: partnerRevision() });
 });
 
 router.get("/partner-factories", async (_req, res, next) => {
@@ -217,10 +218,8 @@ router.get("/partner-factories/:id", async (req, res, next) => {
     }
     const catalog = peekCatalog();
     if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
-    const shipments = listShipments(account.id);
-    for (const shipment of shipments) scheduleSupplyName(shipment);
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
-    res.json({ account: { ...safe, password: passwordPlain || null }, shipments });
+    res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {
     next(error);
   }
@@ -270,11 +269,13 @@ function quoteSupplyFilter(value: string) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+const supplyLookup = new Map<string, { at: number; hit: { id: string; name: string } | null }>();
+
 async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
-  const names = supplyNames(shipment);
+  const cached = supplyLookup.get(shipment.id);
+  if (cached && Date.now() - cached.at < 15_000) return cached.hit;
   const filters = [
     `externalCode=${shipment.id}`,
-    ...names.map((name) => `name=${quoteSupplyFilter(name)}`),
     `incomingNumber=${quoteSupplyFilter(shipment.number)}`,
   ];
   const pages = await Promise.all(filters.map((filter) =>
@@ -282,21 +283,14 @@ async function findExistingSupply(shipment: { id: string; number: string; date?:
   ));
   const ranked = pages.flatMap((page) => page.rows).filter((row) => row.id && !row.deleted && sameSupply(row, shipment));
   ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
-  const hit = ranked[0];
-  return hit?.id ? { id: hit.id, name: hit.name || shipment.number } : null;
+  const hit = ranked[0]?.id ? { id: ranked[0].id, name: ranked[0].name || shipment.number } : null;
+  supplyLookup.set(shipment.id, { at: Date.now(), hit });
+  return hit;
 }
 
-async function nameTakenByOther(name: string, shipment: { id: string; number: string }) {
-  const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(`name=${quoteSupplyFilter(name)}`)}`).catch(() => ({ rows: [] as SupplyHit[] }));
-  return page.rows.some((row) => row.id && !row.deleted && (row.name || "").trim() === name && !sameSupply(row, shipment));
-}
-
-async function chooseSupplyName(shipment: { id: string; number: string; date?: string }) {
-  const extras = [`${shipment.number.trim()} ${shipment.id.slice(0, 6)}`];
-  for (const name of [...supplyNames(shipment), ...extras]) {
-    if (!(await nameTakenByOther(name, shipment))) return name;
-  }
-  return `${shipment.number.trim()} ${shipment.id.slice(0, 8)}`;
+function chooseSupplyName(shipment: { id: string; number: string; date?: string }) {
+  const names = supplyNames(shipment);
+  return names[0] || shipment.number.trim();
 }
 
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
@@ -414,21 +408,20 @@ function scheduleSupplyName(shipment: { id: string; number: string; date?: strin
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
   const existing = await findExistingSupply(shipment);
   if (existing) return { ...existing, reused: true };
-  const name = await chooseSupplyName(shipment);
+  const names = [...new Set([chooseSupplyName(shipment), ...supplyNames(shipment).slice(1), `${shipment.number.trim()} ${shipment.id.slice(0, 6)}`])].filter(Boolean);
   const payloads: Array<Record<string, unknown>> = [
-    { ...core, name, applicable: true, positions },
-    { ...core, name, applicable: false, positions },
-    { ...core, name: `${name} ${shipment.id.slice(0, 4)}`, applicable: true, positions },
+    ...names.map((name) => ({ ...core, name, applicable: true, positions })),
+    { ...core, name: names[0], applicable: false, positions },
   ];
   let last: unknown;
   for (const body of payloads) {
-    const found = await findExistingSupply(shipment);
-    if (found) return { ...found, reused: true };
     try {
       const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", body);
+      supplyLookup.set(shipment.id, { at: Date.now(), hit: { id: created.id, name: created.name || shipment.number } });
       return { id: created.id, name: created.name, reused: false };
     } catch (error) {
       last = error;
+      supplyLookup.delete(shipment.id);
       const foundAgain = await findExistingSupply(shipment);
       if (foundAgain) return { ...foundAgain, reused: true };
       const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
@@ -503,6 +496,22 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
     fail(res, error);
   }
 });
+
+let orgCache: {
+  at: number;
+  organization: { rows: Array<{ meta: { href: string; type: string; mediaType: string } }> };
+  currencies: { rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> };
+} | null = null;
+
+async function loadOrgCurrency() {
+  if (orgCache && Date.now() - orgCache.at < 10 * 60_000) return orgCache;
+  const [organization, currencies] = await Promise.all([
+    moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/organization?limit=1"),
+    moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
+  ]);
+  orgCache = { at: Date.now(), organization, currencies };
+  return orgCache;
+}
 
 type SupplyResult = { id: string; number: string; shipment: unknown; already?: boolean };
 type SupplyJob = { status: "pending" | "done" | "error"; error?: string; detail?: string; result?: SupplyResult; storeId?: string };
@@ -629,25 +638,21 @@ async function writeShipmentSupply(shipmentId: string, storeId: string): Promise
       account?.name,
       account?.code,
     ].map((value) => value?.trim()).filter((value): value is string => Boolean(value && value.length >= 2)))];
-    const [organization, currencies, ...agentPages] = await Promise.all([
-      moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/organization?limit=1"),
-      moysklad<{ rows: Array<{ isoCode?: string; meta: { href: string; type: string; mediaType: string } }> }>("/entity/currency?limit=100"),
-      ...queries.map((query) => moysklad<{ rows: Array<{ id?: string; name?: string; meta: { href: string; type: string; mediaType: string } }> }>(`/entity/counterparty?limit=25&search=${encodeURIComponent(query)}`).catch(() => ({ rows: [] }))),
+    const [{ organization, currencies }, agentById] = await Promise.all([
+      loadOrgCurrency(),
+      account?.counterpartyId
+        ? moysklad<{ meta: { href: string; type: string; mediaType: string }; name?: string }>(`/entity/counterparty/${encodeURIComponent(account.counterpartyId)}`).catch(() => null)
+        : Promise.resolve(null),
     ]);
     const currency = currencies.rows.find((row) => row.isoCode === "UZS");
     const company = organization.rows[0];
     const base = "https://api.moysklad.ru/api/remap/1.2";
     const meta = (href: string, type: string) => ({ href, type, mediaType: "application/json" });
-    let agentMeta: { href: string; type: string; mediaType: string } | null = null;
-    if (account?.counterpartyId) {
-      try {
-        const saved = await moysklad<{ meta: { href: string; type: string; mediaType: string }; name?: string }>(`/entity/counterparty/${encodeURIComponent(account.counterpartyId)}`);
-        agentMeta = saved.meta;
-      } catch {
-        agentMeta = null;
-      }
-    }
+    let agentMeta: { href: string; type: string; mediaType: string } | null = agentById?.meta ?? null;
     if (!agentMeta) {
+      const agentPages = await Promise.all(queries.map((query) =>
+        moysklad<{ rows: Array<{ id?: string; name?: string; meta: { href: string; type: string; mediaType: string } }> }>(`/entity/counterparty?limit=25&search=${encodeURIComponent(query)}`).catch(() => ({ rows: [] })),
+      ));
       const rows = agentPages.flatMap((page) => page.rows).filter((row) => row.id && row.name && row.meta);
       const lowered = queries.map((query) => query.toLowerCase());
       const exact = rows.filter((row) => lowered.includes((row.name || "").trim().toLowerCase()));

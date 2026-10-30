@@ -68,6 +68,8 @@ type Store = {
 
 const filePath = dataFile("partners.json");
 let memory: Store | null = null;
+let revision = 1;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 function emptyStore(): Store {
   return { accounts: [], shipments: [], sessions: [] };
@@ -126,12 +128,21 @@ function load(): Store {
   return memory;
 }
 
+export function partnerRevision() {
+  return revision;
+}
+
 function save(store: Store) {
   memory = store;
+  revision += 1;
   writeFileStore(store);
-  void persistStore(store).catch((error: unknown) => {
-    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner data was not saved to the database");
-  });
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistStore(store).catch((error: unknown) => {
+      logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner data was not saved to the database");
+    });
+  }, 250);
 }
 
 function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {

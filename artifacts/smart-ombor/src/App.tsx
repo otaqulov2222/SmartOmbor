@@ -256,15 +256,15 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
   useEffect(() => { setMoreOpen(inMore); }, [inMore]);
   const current = navigation.find(x => x.href === path);
-  const alerts = useQuery<{ pending: number }>({
+  const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
     queryFn: async () => {
       const response = await fetch('/api/partner-alerts');
       if (!response.ok) throw new Error('alerts');
       return response.json();
     },
-    staleTime: 15_000,
-    refetchInterval: 45_000,
+    staleTime: 800,
+    refetchInterval: 1_000,
   });
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   const navItem = (href: string) => {

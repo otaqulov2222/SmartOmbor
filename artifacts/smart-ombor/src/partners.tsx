@@ -472,10 +472,26 @@ export function PartnersPage() {
   const [creating, setCreating] = useState(false);
   const cache = useQueryClient();
   const held = useRef<Row | null>(null);
+  const alerts = useQuery<{ pending: number; revision?: number }>({
+    queryKey: ['partner-alerts'],
+    staleTime: 800,
+    refetchInterval: 1_000,
+    queryFn: async () => {
+      const response = await fetch('/api/partner-alerts');
+      if (!response.ok) throw new Error('alerts');
+      return response.json();
+    },
+  });
+  const revision = alerts.data?.revision;
+  useEffect(() => {
+    if (revision == null) return;
+    void cache.invalidateQueries({ queryKey: ['partner-factories'] });
+    void cache.invalidateQueries({ queryKey: ['partner-detail'] });
+  }, [revision, cache]);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
-    staleTime: 4_000,
-    refetchInterval: 8_000,
+    staleTime: 1_000,
+    refetchInterval: 3_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
@@ -688,8 +704,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
-    staleTime: 2_000,
-    refetchInterval: 4_000,
+    staleTime: 800,
+    refetchInterval: 2_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
@@ -832,22 +848,24 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
         return true;
       };
-      for (let i = 0; i < 120; i += 1) {
-        const hit = await postedNow();
-        if (hit) {
-          setSupplyingId(null);
-          return;
+      for (let i = 0; i < 180; i += 1) {
+        if (i > 0 && i % 6 === 0) {
+          const hit = await postedNow();
+          if (hit) {
+            setSupplyingId(null);
+            return;
+          }
         }
         const status = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`);
         const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
         const unique = /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(String(body.detail || body.error || ''));
         if (body.pending || status.status === 202) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 400));
           continue;
         }
         if (status.status === 404 || body.error === 'idle' || unique) {
           await resume();
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 400));
           continue;
         }
         if ((status.ok || body.already) && (body.id || body.already)) {
