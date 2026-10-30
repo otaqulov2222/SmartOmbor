@@ -466,7 +466,7 @@ export function OfficePage() {
     <nav className={`office-nav ${me?.director ? 'is-three' : ''}`}>
       <button type="button" className={tab === 'attend' ? 'is-on' : ''} onClick={() => setTab('attend')}>{t('office.attend')}</button>
       <button type="button" className={tab === 'tasks' ? 'is-on' : ''} onClick={() => setTab('tasks')}>{t('office.tasks')}</button>
-      {me?.director && <button type="button" className={tab === 'admin' ? 'is-on' : ''} onClick={() => setTab('admin')}>{t('office.admin')}</button>}
+      {me?.director && <button type="button" className={tab === 'admin' ? 'is-on' : ''} onClick={() => { setTab('admin'); void loadAdmin(); }}>{t('office.admin')}</button>}
     </nav>
   </div>;
 }

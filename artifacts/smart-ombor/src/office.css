@@ -9,7 +9,7 @@
     radial-gradient(1200px 400px at 50% -10%, #1d4ed8 0%, transparent 55%),
     linear-gradient(#0b1728, var(--o-bg));
   color: var(--o-ink);
-  padding: 12px 14px 28px;
+  padding: 12px 14px 96px;
 }
 .office * { box-sizing: border-box; }
 .office-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
