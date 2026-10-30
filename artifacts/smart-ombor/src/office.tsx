@@ -130,7 +130,7 @@ function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge
   return <div className="office-map">
     <div className="office-map-tiles" style={{ left, top }}>
       {tiles.map(tile => (
-        <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://basemaps.cartocdn.com/dark_all/${z}/${tile.x}/${tile.y}@2x.png`}/>
+        <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://tile.openstreetmap.org/${z}/${tile.x}/${tile.y}.png`}/>
       ))}
     </div>
     <div className="office-pin"><span><MapPin size={18}/></span></div>
@@ -382,7 +382,6 @@ export function OfficePage() {
 
   return <div className="office">
     <section className="office-hero">
-      <div className="office-sun"/>
       <svg className="office-mountains" viewBox="0 0 430 110" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 70 70 28 130 62 190 18 270 58 330 30 430 64v46H0Z" fill="#0b1c33"/>
         <path d="M0 86 55 54 120 82 175 48 250 78 340 52 430 76v34H0Z" fill="#071422"/>
