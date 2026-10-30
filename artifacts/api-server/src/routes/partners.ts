@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
-import { buildSupplyPositions, pieceCount, productPackSize, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
+import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
@@ -8,7 +8,6 @@ import {
   accountFromToken,
   createAccount,
   createShipment,
-  fillMissingLinePachka,
   getAccount,
   linkExactShipmentLines,
   linkShipmentLine,
@@ -212,7 +211,7 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const catalog = peekCatalog() ?? await loadCatalog().catch(() => null);
+    const catalog = peekCatalog();
     if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
@@ -499,30 +498,20 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     }
     const reused = await findExistingSupply(shipment);
     if (reused) {
-      try {
-        await fillZeroSupplyPrices(reused.id, shipment.lines);
-      } catch (error) {
+      void fillZeroSupplyPrices(reused.id, shipment.lines).catch((error) => {
         if (!supplyGone(error)) {
           logger.warn({ supply: reused.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill on reuse failed");
         }
-      }
+      });
       const saved = markShipmentPosted(shipment.id, { id: reused.id, number: reused.name || shipment.number });
       void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: reused.name || shipment.number });
       res.json({ id: reused.id, number: reused.name || shipment.number, shipment: saved, already: true });
       return;
     }
     const account = getAccount(shipment.factoryId);
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     if (account) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
-    let current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
-    for (const line of current.lines) {
-      if (line.pachka > 1) continue;
-      const listed = exactCatalogProduct(catalog, line, account || { code: "", name: "", catalogName: "" });
-      let pack = listed?.packSize ?? 0;
-      if (!(pack > 1) && line.productId) pack = await productPackSize(line.productId);
-      if (pack > 1) fillMissingLinePachka(current.id, line.id, pack);
-    }
-    current = listShipments().find((item) => item.id === shipment.id) ?? current;
+    const current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
     let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) {
       res.status(400).json({ error: "rejected", detail: "Kirim qatorlari bo‘sh" });
@@ -637,11 +626,9 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res, next) =>
     }));
     const created = await postSupplyDocument(supplyCore, supplyPositions, shipment);
     const saved = markShipmentPosted(shipment.id, { id: created.id, number: created.name || shipment.number });
-    try {
-      await fillZeroSupplyPrices(created.id, shipment.lines);
-    } catch (error) {
+    void fillZeroSupplyPrices(created.id, shipment.lines).catch((error) => {
       logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
-    }
+    });
     if (!created.reused) {
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }

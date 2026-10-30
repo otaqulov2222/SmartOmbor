@@ -292,7 +292,7 @@ async function productById(id: string) {
   const cached = productCache.get(`id:${wanted}`);
   if (cached) return cached;
   try {
-    const row = await moysklad<ProductRow>(`/entity/product/${encodeURIComponent(wanted)}?expand=salePrices.priceType`);
+    const row = await moysklad<ProductRow>(`/entity/product/${encodeURIComponent(wanted)}`);
     if (row.id === wanted && row.meta?.type !== "variant") return rememberProduct(row);
   } catch (error) {
     if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
@@ -353,19 +353,10 @@ async function searchListedName(name: string) {
   const trimmed = name.trim().replace(/\s+/g, " ");
   if (!trimmed) return null;
   const parsed = parseBordoName(trimmed);
-  const searches = [...new Set([
-    trimmed,
-    foldProductName(trimmed),
-    parsed ? ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ") : "",
-    parsed?.productCode || "",
-  ].map((item) => item.trim()).filter((item) => item.length >= 2))];
-  const paths = searches.flatMap((query) => [
-    `/entity/product?limit=100&search=${encodeURIComponent(query)}`,
-    `/entity/assortment?limit=100&search=${encodeURIComponent(query)}`,
-  ]);
-  for (const path of paths) {
+  const queries = [...new Set([trimmed, parsed?.productCode || ""].map((item) => item.trim()).filter((item) => item.length >= 2))];
+  for (const query of queries) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }> }>(path);
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
       const hit = pickNamedRow(page.rows, trimmed);
       if (hit) {
         const loaded = await rowFromSearchHit(hit, trimmed);
@@ -396,19 +387,15 @@ async function productByName(name: string) {
   if (!trimmed) return null;
   const remembered = cachedByName(trimmed);
   if (remembered) return remembered;
-  const clause = `name=${quoteFilterValue(trimmed)}`;
-  const filters = [clause, `${clause};archived=true`, `name==${quoteFilterValue(trimmed)}`];
-  for (const filter of filters) {
-    try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=25&filter=${encodeURIComponent(filter)}`);
-      const hit = pickNamedRow(page.rows, trimmed);
-      if (hit?.id) {
-        const row = await productById(hit.id);
-        if (row) return rememberProduct(row, [trimmed]);
-      }
-    } catch (error) {
-      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=${encodeURIComponent(`name=${quoteFilterValue(trimmed)}`)}`);
+    const hit = pickNamedRow(page.rows, trimmed);
+    if (hit?.id) {
+      const row = await productById(hit.id);
+      if (row) return rememberProduct(row, [trimmed]);
     }
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
   }
   return searchListedName(trimmed);
 }
@@ -443,14 +430,10 @@ async function recoverExistingProduct(name: string) {
   if (!wanted) return null;
   const first = await productByName(wanted);
   if (first) return first;
-  for (const wait of [500, 1200, 2500]) {
-    await sleep(wait);
-    const again = await productByName(wanted);
-    if (again) return again;
-    const listed = await searchListedName(wanted);
-    if (listed) return listed;
-  }
-  return null;
+  const listed = await searchListedName(wanted);
+  if (listed) return listed;
+  await sleep(300);
+  return productByName(wanted);
 }
 
 async function createProduct(body: Record<string, unknown>): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
@@ -516,10 +499,7 @@ async function ensureVariant(
   const wanted = normalizeBordoColor(color);
   if (!wanted) return null;
   const found = known.find((row) => sameBordoColor(variantColor(row), wanted));
-  if (found?.id) {
-    await ensureBarcodes("variant", found.id, catalog, used);
-    return found;
-  }
+  if (found?.id) return found;
   const rang = await colorCharacteristic();
   if (!rang || !product.meta) return null;
   const prices = (product.salePrices ?? []).filter((price) => price.priceType?.meta && price.value != null);
@@ -545,17 +525,13 @@ async function ensureVariant(
     try {
       const created = await moyskladSend<VariantRow>("/entity/variant", body);
       used.add(barcode);
-      if (created.id) await ensureBarcodes("variant", created.id, catalog, used);
       known.push({ ...created, characteristics: [{ name: "rang", value: wanted }] });
       return created;
     } catch (error) {
       const rows = await variantsOf(product.id).catch(() => known);
       known.splice(0, known.length, ...rows);
       const hit = rows.find((row) => sameBordoColor(variantColor(row), wanted));
-      if (hit?.id) {
-        await ensureBarcodes("variant", hit.id, catalog, used);
-        return hit;
-      }
+      if (hit?.id) return hit;
       const parameter = uniqueNameParameter(error);
       if (parameter === "barcodes" && body.barcodes) {
         const next = nextInternalEan13(catalog, used);
@@ -596,22 +572,7 @@ async function colorNamedProduct(
   const name = `${parent.name || ""} ${normalizeBordoColor(color)}`.trim();
   const sale = extras.price > 0 && extras.priceType ? (markedSale(extras.price, extras.priceType, loadMarkup()) ?? extras.price) : extras.price;
   const existing = await productByName(name);
-  if (existing) {
-    try {
-      await writeProductCard(existing.id, sale, extras.priceType, extras.currencyMeta, {
-        article: extras.article,
-        supplierMeta: extras.supplierMeta,
-        description: extras.description,
-        folderMeta: extras.folder?.meta ?? null,
-        packSize: extras.packSize,
-        buySom: extras.price,
-        sales: extras.sales ?? undefined,
-      });
-    } catch (error) {
-      logger.warn({ name, err: error instanceof Error ? error.message : error }, "Color product card skipped");
-    }
-    return existing;
-  }
+  if (existing) return existing;
   const listed = extras.sales
     ? await listedAllPrices(undefined, extras.sales, extras.currencyMeta)
     : (sale > 0 ? await listedPrices(undefined, extras.priceType, sale, extras.currencyMeta) : null);
@@ -631,25 +592,15 @@ async function colorNamedProduct(
   });
   if (listed) created.salePrices = listed;
   created.barcodes = barcodeValues(created.barcodes);
-  try {
-    await writeProductCard(created.id, sale, extras.priceType, extras.currencyMeta, {
-      article: extras.article,
-      supplierMeta: extras.supplierMeta,
-      description: extras.description,
-      folderMeta: extras.folder?.meta ?? null,
-      packSize,
-      buySom: extras.price,
-      sales: extras.sales ?? undefined,
-    });
-  } catch (error) {
-    logger.warn({ name, err: error instanceof Error ? error.message : error }, "Color product card skipped");
-  }
   return created;
 }
 
 type FolderRow = { id: string; name: string; pathName?: string; meta: Meta; parent?: Meta | null };
 
-async function productFolders(): Promise<FolderRow[]> {
+let folderCache: FolderRow[] | null = null;
+
+async function productFolders(force = false): Promise<FolderRow[]> {
+  if (!force && folderCache?.length) return folderCache;
   const folders: FolderRow[] = [];
   for (let offset = 0; offset < 500; offset += 100) {
     const page = await moysklad<{ meta?: { size?: number }; rows: Array<{ id?: string; name?: string; pathName?: string; meta?: Meta; productFolder?: { meta?: Meta } }> }>(`/entity/productfolder?limit=100&offset=${offset}`);
@@ -658,6 +609,7 @@ async function productFolders(): Promise<FolderRow[]> {
     }
     if (folders.length >= (page.meta?.size ?? folders.length)) break;
   }
+  folderCache = folders;
   return folders;
 }
 
@@ -678,7 +630,7 @@ async function ensureFolder(folders: FolderRow[], groupCode: string): Promise<Fo
     return folder;
   } catch (error) {
     try {
-      const fresh = await productFolders();
+      const fresh = await productFolders(true);
       folders.splice(0, folders.length, ...fresh);
       const hit = matchProductFolder(folders, code);
       if (hit) return hit;
@@ -889,42 +841,24 @@ function parentIdentity(line: ShipmentLine, factoryCode: string) {
   ].join("\0");
 }
 
-function productCodeForms(value: string) {
-  const spaced = value.trim().replace(/\s+/g, " ");
-  const tight = spaced.replace(/\s+/g, "");
-  const upper = spaced.toLocaleUpperCase("ru-RU");
-  const lower = spaced.toLocaleLowerCase("ru-RU");
-  return [...new Set([spaced, tight, upper, lower].filter(Boolean))];
-}
-
-function searchQueries(factory: string, groupCode: string, productCode: string, size: string) {
-  const codes = productCodeForms(productCode);
-  const primary = codes[0] || "";
-  const queries = [
-    ["Bordo", factory, groupCode, primary, size].filter(Boolean).join(" "),
-    ["Bordo", factory, primary, size].filter(Boolean).join(" "),
-    [factory, primary, size].filter(Boolean).join(" "),
-    ...codes.slice(1).map((code) => [factory, code, size].filter(Boolean).join(" ")),
-  ];
-  return [...new Set(queries.map((item) => item.trim().replace(/\s+/g, " ")).filter((item) => item.length >= 3))];
-}
-
 export async function findExistingBordoProduct(
   line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
 ): Promise<ProductRow | null> {
-  if (line.productId) {
-    const byId = await productById(line.productId);
-    const parts = byId?.name ? parseBordoName(byId.name) : null;
-    const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
-    const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
-    const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(normalizeBordoSize(line.size));
-    const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
-    if (byId && codeOk && sizeOk && factoryOk && !parts?.color) return byId;
-  }
   const factory = canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
   const size = normalizeBordoSize(line.size);
+  const name = ["Bordo", factory, groupCode, line.productCode, size].filter(Boolean).join(" ").trim();
+  const remembered = cachedByName(name);
+  if (remembered) return remembered;
+  if (line.productId) {
+    const byId = await productById(line.productId);
+    const parts = byId?.name ? parseBordoName(byId.name) : null;
+    const codeOk = !parts || productCodeMatches(parts.productCode, line.productCode);
+    const sizeOk = !line.size.trim() || !parts || compactCode(parts.size) === compactCode(size);
+    const factoryOk = !parts || !factory || sameFactoryCode(parts.factoryCode, factory);
+    if (byId && codeOk && sizeOk && factoryOk && !parts?.color) return rememberProduct(byId, [name]);
+  }
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
     factoryName: scope.factoryName,
@@ -934,51 +868,45 @@ export async function findExistingBordoProduct(
   });
   if (catalogMatch?.id) {
     const row = await productById(catalogMatch.id);
-    if (row) return row;
+    if (row) return rememberProduct(row, [name]);
   }
-  const names = [...new Set(productCodeForms(line.productCode).flatMap((code) => [
-    ["Bordo", factory, groupCode, code, size].filter(Boolean).join(" ").trim(),
-    ["Bordo", factory, code, size].filter(Boolean).join(" ").trim(),
-  ]))].filter((item) => item.length >= 2);
-  for (const candidate of names) {
-    const hit = await productByName(candidate);
-    if (hit) return hit;
-  }
-  for (const query of searchQueries(factory, groupCode, line.productCode, size)) {
-    try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
-      const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-      const matched = matchNamedProducts(rows, {
-        factoryCode: factory,
-        factoryName: scope.factoryName,
-        groupCode,
-        productCode: line.productCode,
-        size,
-      }) || matchNamedProducts(rows, {
-        factoryCode: factory,
-        factoryName: scope.factoryName,
-        groupCode: "",
-        productCode: line.productCode,
-        size,
-      });
-      if (matched?.id) {
-        const row = await productById(matched.id);
-        if (row) return row;
-      }
-      const identity = rows.find((row) => sameBordoCard(row.name, {
-        factoryCode: factory,
-        productCode: line.productCode,
-        size,
-        groupCode,
-      }));
-      if (identity?.id) {
-        const row = await productById(identity.id);
-        if (row) return row;
-      }
-    } catch (error) {
-      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
-      logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
+  const named = name.length >= 2 ? await productByName(name) : null;
+  if (named) return named;
+  const code = line.productCode.trim();
+  if (code.length < 2) return null;
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(code)}`);
+    const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
+    const matched = matchNamedProducts(rows, {
+      factoryCode: factory,
+      factoryName: scope.factoryName,
+      groupCode,
+      productCode: line.productCode,
+      size,
+    }) || matchNamedProducts(rows, {
+      factoryCode: factory,
+      factoryName: scope.factoryName,
+      groupCode: "",
+      productCode: line.productCode,
+      size,
+    });
+    if (matched?.id) {
+      const row = await productById(matched.id);
+      if (row) return rememberProduct(row, [name]);
     }
+    const identity = rows.find((row) => sameBordoCard(row.name, {
+      factoryCode: factory,
+      productCode: line.productCode,
+      size,
+      groupCode,
+    }));
+    if (identity?.id) {
+      const row = await productById(identity.id);
+      if (row) return rememberProduct(row, [name]);
+    }
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+    logger.warn({ code, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
   }
   return null;
 }
@@ -995,27 +923,25 @@ export async function buildSupplyPositions(
   const resolved: Array<{ line: ShipmentLine; parent: ProductRow | null; name: string; key: string; folder: FolderRow | null }> = [];
   const created: ProductRow[] = [];
   const folders = await productFolders();
-
-  for (const line of lines) {
-    const parts = receiptParts(line);
-    if (!parts.length) continue;
-    requireWaybillLine(line);
+  const wanted = lines.filter((line) => receiptParts(line).length);
+  for (const line of wanted) requireWaybillLine(line);
+  resolved.push(...await Promise.all(wanted.map(async (line) => {
     const name = ["Bordo", canonicalFactoryCode(line.factoryCode || scope.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
     const parent = await findExistingBordoProduct(line, scope);
     if (parent) rememberProduct(parent, [name]);
     if (parent?.name) {
-      const parts = parseBordoName(parent.name);
-      if (parts?.groupCode) line.sectionCode = parts.groupCode;
+      const parsed = parseBordoName(parent.name);
+      if (parsed?.groupCode) line.sectionCode = parsed.groupCode;
     }
     const key = parent?.id || (line.sectionCode.trim() ? productIdentity(line, scope.factoryCode) : parentIdentity(line, scope.factoryCode));
-    const folder = await ensureFolder(folders, line.sectionCode);
+    const folder = matchProductFolder(folders, line.sectionCode) ?? null;
     const priceType = saleTypeOf(line);
     if (line.price > 0) line.priceType = priceType;
     if (!parent && (!line.productCode.trim() || name.length < 2)) {
       throw new MoySkladError(`Mahsulot kodi kiritilmagan${line.size ? ` (${line.size})` : ""}`, 400);
     }
-    resolved.push({ line, parent, name, key, folder });
-  }
+    return { line, parent, name, key, folder };
+  })));
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
   const byIdentity = new Map<string, ProductRow>();
@@ -1024,36 +950,28 @@ export async function buildSupplyPositions(
     const known = item.parent || byIdentity.get(item.key) || byName.get(item.name) || null;
     if (known) {
       item.parent = known;
-      if (item.folder) await placeInFolder(known.id, item.folder);
-      known.barcodes = await ensureBarcodes("product", known.id, scope.catalog, usedBarcodes);
       parents.set(known.id, known);
       byIdentity.set(item.key, known);
       byName.set(item.name, known);
       continue;
     }
     const packSize = packSizeOf(item.line);
-    const priced = saleForLine(item.line);
-    const sales = salesForLine(item.line);
-    const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : (priced.sale > 0 ? await listedPrices(undefined, priced.type, priced.sale, currencyMeta) : null);
+    const folder = item.folder ?? await ensureFolder(folders, item.line.sectionCode);
+    item.folder = folder;
     const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
     usedBarcodes.add(barcode);
     const product = await createProduct({
       name: item.name,
       uom: { meta: uomMeta(PIECE_UOM) },
       barcodes: [{ ean13: barcode }],
-      ...(listed ? { salePrices: priceBody(listed) } : {}),
-      ...(item.folder ? { productFolder: { meta: item.folder.meta } } : {}),
-      ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
+      ...(folder ? { productFolder: { meta: folder.meta } } : {}),
       ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
       ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
     });
-    if (listed) product.salePrices = listed;
-    if (item.folder) product.folderName = item.folder.name;
+    if (folder) product.folderName = folder.name;
     product.barcodes = barcodeValues(product.barcodes);
-    if (!product.barcodes.length) product.barcodes = await ensureBarcodes("product", product.id, scope.catalog, usedBarcodes);
     const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
     if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
-    if (item.folder) await placeInFolder(product.id, item.folder);
     item.parent = product;
     parents.set(product.id, product);
     byIdentity.set(item.key, product);
@@ -1066,40 +984,10 @@ export async function buildSupplyPositions(
   for (const item of resolved) {
     const parent = item.parent;
     if (!parent) throw new MoySkladError("Mahsulot yaratilmadi", 400);
-    const full = parents.get(parent.id) ?? parent;
-    if (!full.salePrices) {
-      const loaded = await productById(full.id);
-      if (loaded) parents.set(full.id, loaded);
-    }
-    const product = parents.get(parent.id) ?? full;
-    if (item.line.price > 0) {
-      const priced = saleForLine(item.line);
-      try {
-        await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
-          supplierMeta: scope.supplierMeta,
-          description: cardDescription(item.line),
-          folderMeta: item.folder?.meta ?? null,
-          packSize: packSizeOf(item.line),
-          buySom: item.line.price,
-          sales: salesForLine(item.line) ?? undefined,
-        });
-      } catch (error) {
-        logger.warn({ productId: product.id, err: error instanceof Error ? error.message : error }, "Waybill product card skipped");
-      }
-    }
+    const product = parents.get(parent.id) ?? parent;
     if (!product.meta?.href) product.meta = entityMeta(`${BASE}/entity/product/${product.id}`, "product");
     links.push({ lineId: item.line.id, product: { id: product.id, name: product.name || item.name } });
     const parts = receiptParts(item.line);
-    const packSize = packSizeOf(item.line);
-    const packKey = `${product.id}:${packSize}`;
-    if (!packCache.has(packKey)) {
-      try {
-        packCache.set(packKey, await ensurePachka(product.id, packSize));
-      } catch (error) {
-        logger.warn({ productId: product.id, err: error instanceof Error ? error.message : error }, "Waybill pack skipped");
-        packCache.set(packKey, null);
-      }
-    }
     let known = variantCache.get(product.id);
     if (!known && parts.some((part) => part.color)) {
       known = await variantsOf(product.id);
@@ -1120,33 +1008,6 @@ export async function buildSupplyPositions(
       let assortment: { meta: Meta };
       let stockId: string;
       if (variant?.id) {
-        if (item.line.price > 0) {
-          let current = product.salePrices;
-          try {
-            const loaded = await moysklad<{ salePrices?: Price[] }>(`/entity/variant/${encodeURIComponent(variant.id)}?expand=salePrices.priceType`);
-            if (loaded.salePrices?.length) current = loaded.salePrices;
-          } catch (error) {
-            if (!(error instanceof MoySkladError) || error.status !== 404) throw error;
-          }
-          const priced = saleForLine(item.line);
-          const sales = salesForLine(item.line);
-          const listed = hasAllSaleMarkups(current) ? null : (sales ? await listedAllPrices(current, sales, currencyMeta) : await listedPrices(current, priced.type, priced.sale, currencyMeta));
-          const saleBody = listed ? { salePrices: priceBody(listed) } : {};
-          const buyBody = item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {};
-          if (listed || item.line.price > 0) {
-            try {
-              await moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, { ...buyBody, ...saleBody }, "PUT");
-            } catch (error) {
-              if (listed) {
-                await optionalWrite(
-                  () => moyskladSend(`/entity/variant/${encodeURIComponent(variant.id)}`, saleBody, "PUT"),
-                  "MoySklad variant price skipped",
-                  { color: part.color },
-                );
-              } else if (!permissionDenied(error)) throw error;
-            }
-          }
-        }
         assortment = { meta: variant.meta?.href ? variant.meta : entityMeta(`${BASE}/entity/variant/${variant.id}`, "variant") };
         stockId = variant.id;
       } else {
@@ -1168,15 +1029,6 @@ export async function buildSupplyPositions(
         const existingColor = await productByName(`${product.name} ${part.color}`)
           || await productByName(`${product.name} (${part.color})`);
         if (existingColor?.id) {
-          if (item.line.price > 0) {
-            const priced = saleForLine(item.line);
-            await writeProductCard(existingColor.id, priced.sale, priced.type, currencyMeta, {
-              supplierMeta: scope.supplierMeta,
-              packSize,
-              buySom: item.line.price,
-              sales: salesForLine(item.line) ?? undefined,
-            });
-          }
           if (!existingColor.meta?.href) existingColor.meta = entityMeta(`${BASE}/entity/product/${existingColor.id}`, "product");
           positions.push({
             quantity: part.quantity,
@@ -1195,7 +1047,7 @@ export async function buildSupplyPositions(
           sales: salesForLine(item.line),
           article: "",
           description: cardDescription(item.line),
-          packSize,
+          packSize: packSizeOf(item.line),
           catalog: scope.catalog,
           used: usedBarcodes,
         });

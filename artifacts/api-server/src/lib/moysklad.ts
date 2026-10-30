@@ -93,8 +93,8 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
   throw last;
 }
 
-const MAX_IN_FLIGHT = 1;
-const MIN_GAP_MS = 90;
+const MAX_IN_FLIGHT = 5;
+const MIN_GAP_MS = 25;
 let inFlight = 0;
 let lastStart = 0;
 const waiters: Array<() => void> = [];

@@ -474,7 +474,8 @@ export function PartnersPage() {
   const held = useRef<Row | null>(null);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
-    staleTime: 60_000,
+    staleTime: 4_000,
+    refetchInterval: 8_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
@@ -686,7 +687,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
-    staleTime: 60_000,
+    staleTime: 2_000,
+    refetchInterval: 4_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
@@ -803,7 +805,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
       let lastBody: { error?: string; detail?: string } = {};
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           const response = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
           lastBody = await response.json().catch(() => ({})) as { error?: string; detail?: string };
@@ -818,7 +820,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
           }
           const detail = String(lastBody.detail || '');
           const retryable = response.status >= 500 || /уникал|unique|already exists|уже существ|MoySkladda bor|карточка уже есть|javob bermadi|so‘rov limiti/i.test(detail);
-          if (!retryable || attempt === 2) {
+          if (!retryable || attempt === 1) {
             setPostError(supplyError(lastBody, t));
             return;
           }
@@ -827,8 +829,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             setPosting(null);
             return;
           }
-          if (attempt === 2) {
-            const hit = await waitPosted(20);
+          if (attempt === 1) {
+            const hit = await waitPosted(6);
             if (hit) {
               setPosting(null);
               return;
