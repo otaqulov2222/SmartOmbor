@@ -813,6 +813,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .pager { padding: .8rem 1rem; }
 }
 @media (max-width: 560px) {
+  .page-actions { grid-template-columns: minmax(0, 1fr); }
   .markup-row { grid-template-columns: 1fr 1fr; }
   .markup-row .form-actions { grid-column: 1 / -1; }
   .sale-triple.compact .sale-triple-row, .sale-triple-row { grid-template-columns: minmax(0, 1fr) 5.8rem; }
@@ -1095,7 +1096,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .page-actions, .partner-bar, .factory-actions, .waybill-tools, .waybill-head-tools, .card-head, .form-actions, .scan-session, .scan-row-actions, .yx-send, .yx-actions, .cabinet-tools { align-items: stretch; }
   .page-actions { width: 100%; flex: none; margin-left: 0; display: grid; grid-template-columns: 1fr 1fr; justify-content: stretch; gap: .5rem; }
   .page-actions > * { min-width: 0; max-width: 100%; }
-  .page-actions .dash-day, .page-actions > :only-child { grid-column: 1 / -1; width: 100%; }
+  .page-actions .dash-day, .page-actions > :only-child, .page-actions > :nth-child(odd):last-child { grid-column: 1 / -1; width: 100%; }
   .page-actions .btn, .toolbar > .btn, .partner-bar > .btn, .factory-actions .btn, .waybill-tools .btn, .waybill-head-tools .btn, .form-actions .btn, .yx-send .btn, .yx-actions .btn {
     width: 100%; height: auto; min-width: 0; max-width: 100%; min-height: 2.75rem; padding: .65rem .9rem; flex: none;
     font-size: .95rem; line-height: 1.2; gap: .4rem; border-radius: .8rem;
@@ -1280,4 +1281,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .sale-triple.compact .sale-triple-row, .sale-triple-row { grid-template-columns: minmax(0, 1fr) 5.8rem; }
   .product-add .sale-triple-row { grid-template-columns: auto 5.8rem minmax(0, 1fr); }
   .product-add .sale-triple-row .input, .product-add .sale-triple-row .input-locked { min-width: 0; width: 100%; }
+  .page-actions { grid-template-columns: minmax(0, 1fr); }
+  .page-actions .btn { white-space: normal; overflow: visible; }
+}
+@media (max-width: 720px) {
+  .page-actions { grid-template-columns: minmax(0, 1fr); }
+  .page-actions .btn { white-space: normal; overflow: visible; }
 }

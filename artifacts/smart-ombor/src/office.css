@@ -303,6 +303,32 @@
 }
 .office-warn { color: #fecaca; background: #4c1d1d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
 .office-ok { color: #bbf7d0; background: #14532d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
+@media (max-width: 879px) {
+  .office-shell { min-height: 100dvh; }
+  .office {
+    max-width: 100%; border-radius: 0; min-height: 100dvh;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom));
+  }
+  .office-hero-bar { flex-wrap: wrap; gap: 8px; }
+  .office-day { font-size: .72rem; padding: 7px 10px; }
+  .office-hero-copy h1 { font-size: 1.5rem; }
+  .office-clocks { grid-template-columns: 1.2fr .9fr; gap: 8px; margin-top: -48px; }
+  .office-clock b, .office-hours b { font-size: 1.28rem; }
+  .office-hero { min-height: 220px; padding: 12px 12px 78px; }
+  .office-body { padding: 0 12px; }
+  .office-methods, .office-pair { gap: 8px; }
+  .office-cam { min-height: 3.1rem; }
+  .office-map { height: 200px; }
+  .office-card-top { flex-wrap: wrap; }
+  .office-tabs { flex-wrap: wrap; }
+  .office-stage-top { top: calc(12px + env(safe-area-inset-top)); }
+  .office-stage-copy { bottom: calc(118px + env(safe-area-inset-bottom)); }
+  .office-stage-go { width: calc(100% - 28px); margin: 0 14px calc(12px + env(safe-area-inset-bottom)); }
+  .office-toast { left: 12px; right: 12px; bottom: calc(16px + env(safe-area-inset-bottom)); width: auto; }
+}
+@media (max-width: 380px) {
+  .office-clocks { grid-template-columns: 1fr; }
+}
 @media (min-width: 880px) {
   .office {
     margin: 22px auto;

@@ -114,15 +114,17 @@ export function OfficeReportPage() {
     </div>
     {waitingNames.length > 0 && <div className="tabel-banner">{t('office.waitingBanner', { names: waitingNames.slice(0, 3).join(', ') })}</div>}
     <div className="tabel-day">
-      {mode === 'day' && <>
+      {mode === 'day' && <div className="tabel-day-nav">
         <button type="button" className="icon-btn" onClick={() => setDay(shift(day, -1))} aria-label={t('common.prevPage')}><ChevronLeft size={18}/></button>
         <b>{date(day)}</b>
         <button type="button" className="icon-btn" onClick={() => setDay(shift(day, 1))} aria-label={t('common.nextPage')}><ChevronRight size={18}/></button>
         <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDay(tashkentDay())}>{t('common.today')}</button>
-      </>}
-      <button type="button" className={`btn btn-sm ${mode === 'day' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('day')}>{t('office.day')}</button>
-      <button type="button" className={`btn btn-sm ${mode === 'week' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('week')}>{t('office.week')}</button>
-      <button type="button" className={`btn btn-sm ${mode === 'month' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('month')}>{t('office.month')}</button>
+      </div>}
+      <div className="tabel-day-modes">
+        <button type="button" className={`btn btn-sm ${mode === 'day' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('day')}>{t('office.day')}</button>
+        <button type="button" className={`btn btn-sm ${mode === 'week' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('week')}>{t('office.week')}</button>
+        <button type="button" className={`btn btn-sm ${mode === 'month' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMode('month')}>{t('office.month')}</button>
+      </div>
     </div>
     {data?.stats && <div className="tabel-stats">
       <article><span>{t('office.statTotal')}</span><b>{fmt(data.stats.total)}</b></article>
@@ -135,26 +137,26 @@ export function OfficeReportPage() {
     <section className="card table-card">
       <div className="card-head">
         <h2>{t('office.tabelTitle')}</h2>
-        <span className="card-meta">{ranged ? `${date(data?.from)} – ${date(data?.to)}` : `${date(day)} · ${data?.start}–${data?.end}`}</span>
+        <span className="card-meta">{ranged && data?.from && data?.to ? `${date(data.from)} – ${date(data.to)}` : `${date(day)}${data?.start ? ` · ${data.start}–${data.end}` : ''}`}</span>
       </div>
       <div className="table-wrap">
         <table className="table">
           <thead><tr>
             {ranged && <th>{t('common.date')}</th>}
-            <th>{t('office.colN')}</th><th>{t('office.colName')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
+            <th>{t('office.colName')}</th><th>{t('office.colN')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
             <th>{t('office.colIn')}</th><th>{t('office.colOut')}</th><th>{t('office.colWork')}</th><th>{t('office.colLate')}</th>
           </tr></thead>
           <tbody>
             {rows.map(row => <tr key={`${row.date || day}-${row.accountId}`}>
-              {ranged && <td>{date(row.date || '')}</td>}
-              <td>{row.n}</td>
-              <td><b>{row.name}</b></td>
-              <td>{roleLabel(row.role)}</td>
-              <td><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
-              <td>{row.inHm || '—'}</td>
-              <td>{row.outHm || '—'}</td>
-              <td>{hhmm(row.workedMs)}</td>
-              <td>{lateLabel(row.lateIn)}</td>
+              {ranged && <td data-label="">{date(row.date || '')}</td>}
+              <td data-label={ranged ? t('office.colName') : ''}><b>{row.name}</b></td>
+              <td data-label={t('office.colN')}>{row.n}</td>
+              <td data-label={t('office.colRole')}>{roleLabel(row.role)}</td>
+              <td data-label={t('office.colStatus')}><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
+              <td data-label={t('office.colIn')}>{row.inHm || '—'}</td>
+              <td data-label={t('office.colOut')}>{row.outHm || '—'}</td>
+              <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
+              <td data-label={t('office.colLate')}>{lateLabel(row.lateIn)}</td>
             </tr>)}
           </tbody>
         </table>
@@ -218,7 +220,7 @@ export function OfficeTasksPage() {
       <div className="card-head"><h2>{t('office.newTask')}</h2></div>
       <div className="form-grid">
         <label className="field"><span>{t('office.taskName')}</span><input className="input" value={title} onChange={e => setTitle(e.target.value)} maxLength={200}/></label>
-        <label className="field"><span>{t('office.taskText')}</span><textarea className="input" value={body} onChange={e => setBody(e.target.value)} rows={4} maxLength={2000}/></label>
+        <label className="field span-2"><span>{t('office.taskText')}</span><textarea className="input" value={body} onChange={e => setBody(e.target.value)} rows={4} maxLength={2000}/></label>
       </div>
       <div className="tabel-people">
         {people.map(item => (

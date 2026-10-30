@@ -10,8 +10,10 @@
   background: #fff7ed; border: 1px solid #fdba74; color: #9a3412;
   border-radius: 12px; padding: 10px 14px; font-size: .92rem;
 }
-.tabel-day { display: flex; align-items: center; gap: 8px; }
-.tabel-day b { min-width: 110px; text-align: center; }
+.tabel-day { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.tabel-day-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tabel-day-nav b { min-width: 7.5rem; text-align: center; }
+.tabel-day-modes { display: flex; flex-wrap: wrap; gap: 6px; }
 .tabel-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .tabel-stats article {
   background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px;
@@ -33,8 +35,35 @@
 }
 .tabel-people button.is-on, .tabel-prio button.is-on { background: #2f54eb; color: #fff; }
 @media (max-width: 1100px) {
-  .tabel-stats { grid-template-columns: repeat(3, 1fr); }
+  .tabel-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .tabel-stats { grid-template-columns: 1fr 1fr; }
+  .tabel { gap: 12px; min-width: 0; }
+  .tabel-day { flex-direction: column; align-items: stretch; }
+  .tabel-day-nav { justify-content: space-between; }
+  .tabel-day-nav b { flex: 1; min-width: 0; }
+  .tabel-day-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tabel-day-modes .btn { width: 100%; }
+  .tabel-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tabel-stats article { padding: 10px 12px; min-width: 0; }
+  .tabel-stats span { overflow-wrap: anywhere; }
+  .tabel-stats b { font-size: 1.25rem; }
+  .tabel .table-card { overflow: visible; }
+  .tabel .table-wrap { overflow: visible; }
+  .tabel .table tbody { display: grid; gap: .7rem; padding: .75rem; }
+  .tabel .table tr {
+    display: grid; width: 100%; margin: 0; padding: .85rem .9rem;
+    border: 1px solid var(--line); border-radius: 14px; background: #fff;
+  }
+  .tabel .table td { padding: .35rem 0; }
+  .tabel .table td:first-child {
+    font-size: 1.02rem; padding-top: 0; padding-bottom: .55rem; margin-bottom: .15rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabel .page-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .tabel .page-actions .btn { width: 100%; white-space: normal; }
+  .tabel-prio { display: grid; grid-template-columns: 1fr 1fr; }
+  .tabel-prio button, .tabel-people button { min-height: 2.6rem; }
+  .tabel .form-actions .btn { width: 100%; }
+  .tabel .card-head { align-items: flex-start; }
 }
