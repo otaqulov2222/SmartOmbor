@@ -12,6 +12,9 @@ export type PunchMethod = "face" | "qr";
 export type PunchKind = "in" | "out";
 export type OfficeTaskStatus = "assigned" | "accepted" | "done";
 export type OfficePriority = "low" | "normal" | "high" | "urgent";
+export type OfficeExcuse = "" | "off" | "sick" | "vacation" | "trip" | "permit";
+export type TabelStatus = "present" | "late" | "out_missing" | "absent" | "off" | "sick" | "vacation" | "trip" | "permit";
+const EXCUSES: OfficeExcuse[] = ["", "off", "sick", "vacation", "trip", "permit"];
 
 export type OfficePunch = {
   id: string;
@@ -26,6 +29,7 @@ export type OfficePunch = {
   outLat: number | null;
   outLng: number | null;
   note: string;
+  excuse: OfficeExcuse;
 };
 
 export type OfficeTask = {
@@ -67,7 +71,13 @@ function load(): Store {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
     memory = {
       secret: parsed.secret || randomBytes(24).toString("hex"),
-      punches: Array.isArray(parsed.punches) ? parsed.punches : [],
+      punches: Array.isArray(parsed.punches)
+        ? parsed.punches.map((row) => ({
+            ...row,
+            note: typeof row.note === "string" ? row.note : "",
+            excuse: EXCUSES.includes(row.excuse as OfficeExcuse) ? (row.excuse as OfficeExcuse) : "",
+          }))
+        : [],
       faces: parsed.faces && typeof parsed.faces === "object" ? parsed.faces : {},
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
       fiksa: parsed.fiksa && typeof parsed.fiksa === "object" ? parsed.fiksa : {},
@@ -220,6 +230,7 @@ export function punch(input: {
       outLat: null,
       outLng: null,
       note: "",
+      excuse: "",
     };
     store.punches.push(row);
   }
@@ -352,21 +363,78 @@ function minutesBetween(left: string, right: string) {
 
 export type TabelPerson = { id: string; name: string; login: string; role: string };
 
+function weekendOf(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+  return weekday === 0 || weekday === 6;
+}
+
+function tabelStatus(row: OfficePunch | undefined, inHm: string, weekend: boolean, start: string): TabelStatus {
+  if (!row?.inAt) {
+    if (row?.excuse && row.excuse !== "") return row.excuse;
+    return weekend ? "off" : "absent";
+  }
+  if (!row.outAt) return "out_missing";
+  if (inHm && minutesBetween(inHm, start) > 0) return "late";
+  return "present";
+}
+
+function emptyPunch(accountId: string, day: string): OfficePunch {
+  return {
+    id: randomUUID(),
+    accountId,
+    date: day,
+    inAt: null,
+    outAt: null,
+    inMethod: null,
+    outMethod: null,
+    inLat: null,
+    inLng: null,
+    outLat: null,
+    outLng: null,
+    note: "",
+    excuse: "",
+  };
+}
+
+export function setTabelMark(input: { accountId: string; date: string; excuse?: string; note?: string }) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw Object.assign(new Error("date"), { status: 400 });
+  if (input.date > tashkentParts().date) throw Object.assign(new Error("future"), { status: 400 });
+  const store = load();
+  let row = store.punches.find((item) => item.accountId === input.accountId && item.date === input.date);
+  if (!row) {
+    row = emptyPunch(input.accountId, input.date);
+    store.punches.push(row);
+  }
+  if (input.excuse != null) {
+    const value = String(input.excuse) as OfficeExcuse;
+    if (!EXCUSES.includes(value)) throw Object.assign(new Error("excuse"), { status: 400 });
+    row.excuse = value;
+  }
+  if (input.note != null) row.note = String(input.note).trim().slice(0, 400);
+  save(store);
+  return row;
+}
+
 export function tabelDay(day: string, people: TabelPerson[], start = "09:00", end = "18:00") {
   const punches = load().punches.filter((row) => row.date === day);
   const byId = new Map(punches.map((row) => [row.accountId, row]));
+  const weekend = weekendOf(day);
   const items = people.map((person, index) => {
     const row = byId.get(person.id);
     const inHm = hmOf(row?.inAt ?? null);
     const outHm = hmOf(row?.outAt ?? null);
-    const status = !row?.inAt ? "absent" : row.outAt ? "present" : "out_missing";
+    const status = tabelStatus(row, inHm, weekend, start);
     return {
       n: index + 1,
       accountId: person.id,
+      date: day,
       name: person.name,
       login: person.login,
       role: person.role,
       status,
+      weekend,
+      excuse: row?.excuse || "",
       inAt: row?.inAt ?? null,
       outAt: row?.outAt ?? null,
       inHm,
@@ -375,37 +443,62 @@ export function tabelDay(day: string, people: TabelPerson[], start = "09:00", en
       lateIn: inHm ? Math.max(0, minutesBetween(inHm, start)) : 0,
       earlyIn: inHm ? Math.max(0, minutesBetween(start, inHm)) : 0,
       earlyOut: outHm ? Math.max(0, minutesBetween(end, outHm)) : 0,
-      lateOut: outHm ? Math.max(0, minutesBetween(outHm, end)) : 0,
+      overtime: outHm ? Math.max(0, minutesBetween(outHm, end)) : 0,
       note: row?.note || "",
       inMethod: row?.inMethod ?? null,
       outMethod: row?.outMethod ?? null,
+      inLat: row?.inLat ?? null,
+      inLng: row?.inLng ?? null,
+      outLat: row?.outLat ?? null,
+      outLng: row?.outLng ?? null,
     };
   });
-  const came = items.filter((row) => row.status !== "absent").length;
-  const [year, month, date] = day.split("-").map(Number);
-  const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
-  const weekend = weekday === 0 || weekday === 6;
-  const absent = items.length - came;
+  const came = items.filter((row) => row.status === "present" || row.status === "late" || row.status === "out_missing").length;
   return {
     date: day,
     start,
     end,
+    weekend,
     stats: {
       total: items.length,
       came,
-      absent,
+      absent: items.filter((row) => row.status === "absent").length,
       late: items.filter((row) => row.lateIn > 0).length,
-      off: weekend ? absent : 0,
+      off: items.filter((row) => row.status === "off" || row.status === "sick" || row.status === "vacation" || row.status === "trip" || row.status === "permit").length,
       waiting: items.filter((row) => row.status === "out_missing").length,
     },
     items,
   };
 }
 
+function peopleSummary(items: Array<ReturnType<typeof tabelDay>["items"][number] & { date?: string }>, people: TabelPerson[]) {
+  return people.map((person) => {
+    const rows = items.filter((row) => row.accountId === person.id);
+    return {
+      accountId: person.id,
+      name: person.name,
+      login: person.login,
+      role: person.role,
+      days: rows.length,
+      came: rows.filter((row) => row.status === "present" || row.status === "late" || row.status === "out_missing").length,
+      absent: rows.filter((row) => row.status === "absent").length,
+      late: rows.filter((row) => row.lateIn > 0).length,
+      off: rows.filter((row) => row.status === "off" || row.status === "sick" || row.status === "vacation" || row.status === "trip" || row.status === "permit").length,
+      waiting: rows.filter((row) => row.status === "out_missing").length,
+      workedMs: rows.reduce((sum, row) => sum + row.workedMs, 0),
+      lateMin: rows.reduce((sum, row) => sum + row.lateIn, 0),
+      earlyOut: rows.reduce((sum, row) => sum + row.earlyOut, 0),
+      overtime: rows.reduce((sum, row) => sum + row.overtime, 0),
+    };
+  });
+}
+
 export function tabelRange(from: string, to: string, people: TabelPerson[], start = "09:00", end = "18:00") {
+  const begin = from <= to ? from : to;
+  const endDay = from <= to ? to : from;
   const days = [];
-  let cursor = from;
-  while (cursor <= to && days.length < 40) {
+  let cursor = begin;
+  while (cursor <= endDay && days.length < 62) {
     days.push(tabelDay(cursor, people, start, end));
     cursor = shiftDay(cursor, 1);
   }
@@ -421,5 +514,5 @@ export function tabelRange(from: string, to: string, people: TabelPerson[], star
     }),
     { total: people.length, came: 0, absent: 0, late: 0, off: 0, waiting: 0 },
   );
-  return { from, to, start, end, stats, items };
+  return { from: begin, to: endDay, start, end, stats, items, people: peopleSummary(items, people) };
 }

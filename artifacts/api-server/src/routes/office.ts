@@ -15,6 +15,7 @@ import {
   punch,
   punchesFor,
   rangeDays,
+  setTabelMark,
   tashkentParts,
   tabelDay,
   tabelRange,
@@ -134,10 +135,11 @@ router.get("/office/board", (req, res) => {
 router.get("/office/tabel", (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   const people = listLocalPeople();
+  const today = tashkentParts().date;
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
   if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    res.json(tabelRange(from, to, people));
+    res.json(tabelRange(from > today ? today : from, to > today ? today : to, people));
     return;
   }
   const kind = String(req.query.range ?? "");
@@ -148,6 +150,29 @@ router.get("/office/tabel", (req, res) => {
   }
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? "")) ? String(req.query.date) : tashkentParts().date;
   res.json(tabelDay(day, people));
+});
+
+router.patch("/office/tabel", (req, res) => {
+  const user = requireOfficeDirector(req, res);
+  if (!user) return;
+  const accountId = String(req.body?.accountId ?? "");
+  const known = listLocalPeople().some((person) => person.id === accountId);
+  if (!accountId || !known) {
+    res.status(400).json({ error: "person" });
+    return;
+  }
+  try {
+    const row = setTabelMark({
+      accountId,
+      date: String(req.body?.date ?? ""),
+      excuse: req.body?.excuse != null ? String(req.body.excuse) : undefined,
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+    });
+    res.json({ ok: true, row });
+  } catch (error) {
+    const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "tabel" });
+  }
 });
 
 router.get("/office/people", (req, res) => {
