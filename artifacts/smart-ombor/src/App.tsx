@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -28,6 +28,7 @@ import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TK
 import { AutoRefresh, AUTO_REFRESH_MS, useCatalogRefresh } from '@/auto-refresh';
 import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
+import { OfficePage } from '@/office';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
@@ -64,6 +65,7 @@ const navigation: NavItem[] = [
   { key: 'nav.transfers', href: '/transfers', icon: ArrowLeftRight, group: 'nav.group.operations' },
   { key: 'nav.inventory', href: '/inventory', icon: ClipboardCheck, group: 'nav.group.operations' },
   { key: 'nav.tasks', href: '/tasks', icon: ClipboardList, group: 'nav.group.operations' },
+  { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.operations' },
   { key: 'nav.analytics', href: '/analytics', icon: BarChart3, group: 'nav.group.analytics' },
   { key: 'nav.nonMoving', href: '/non-moving', icon: Clock3, group: 'nav.group.analytics' },
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
@@ -76,7 +78,7 @@ const navigation: NavItem[] = [
 ];
 const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks', '/office'] },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
@@ -167,7 +169,7 @@ function LocalSignInNotice() {
 /* ---------- entry ---------- */
 const LOCAL_SESSION = 'smart-ombor-session';
 const RETURN_PATH = 'smart-ombor-return';
-const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst', 'accountant', 'worker'] as const;
+const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst', 'accountant', 'worker', 'office'] as const;
 type LocalSession = { token: string; name: string; login: string; role: string };
 
 function readLocalSession(): LocalSession | null {
@@ -218,7 +220,9 @@ function LocalLoginForm() {
       const here = `${window.location.pathname}${window.location.search}`;
       const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
-      const target = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '/dashboard';
+      const target = body.role === 'office'
+        ? '/office'
+        : here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '/dashboard';
       setLocation(target);
     } catch {
       setError(true);
@@ -1461,12 +1465,15 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
   }, []);
   const body = <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>{children}</ErrorBoundary>;
   const signedIn = Boolean(readLocalSession()) || sessionTick < 0;
+  const localRole = readLocalSession()?.role;
   if (!clerkPubKey) {
     if (!signedIn) {
       const next = `${window.location.pathname}${window.location.search}`;
       if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
       return <EntryScreen><LocalLoginForm/></EntryScreen>;
     }
+    if (localRole === 'office' && location !== '/office') return <Redirect to="/office"/>;
+    if (location === '/office') return body;
     return <LocalShell title={title}>{body}</LocalShell>;
   }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
@@ -1500,6 +1507,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
+  { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
   { path: '/audit', titleKey: 'nav.audit', element: <AuditPage/> },

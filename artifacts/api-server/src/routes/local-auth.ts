@@ -6,7 +6,7 @@ import { dataFile } from "../lib/data-dir";
 
 const router: IRouter = Router();
 const FILE = dataFile("accounts.json");
-const ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "branch_manager", "analyst", "accountant", "worker"] as const;
+const ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "branch_manager", "analyst", "accountant", "worker", "office"] as const;
 
 type Account = { id: string; name: string; login: string; password: string; role: (typeof ROLES)[number] };
 type Store = { secret: string; accounts: Account[]; sessions: Record<string, string> };
@@ -83,6 +83,19 @@ function actor(req: Request): Account | null {
   return read().accounts.find((account) => account.login === login) ?? null;
 }
 
+export function localActor(req: Request): Account | null {
+  return actor(req);
+}
+
+export function requireLocalUser(req: Request, res: Response): Account | null {
+  const current = actor(req);
+  if (!current) {
+    res.status(401).json({ error: "invalid" });
+    return null;
+  }
+  return current;
+}
+
 export function requireLocalAdmin(req: Request, res: Response): Account | null {
   const current = actor(req);
   if (!current) {
@@ -94,6 +107,23 @@ export function requireLocalAdmin(req: Request, res: Response): Account | null {
     return null;
   }
   return current;
+}
+
+export function requireOfficeDirector(req: Request, res: Response): Account | null {
+  const current = actor(req);
+  if (!current) {
+    res.status(401).json({ error: "invalid" });
+    return null;
+  }
+  if (current.role !== "super_admin" && current.role !== "manager") {
+    res.status(403).json({ error: "forbidden" });
+    return null;
+  }
+  return current;
+}
+
+export function listLocalPeople() {
+  return read().accounts.map(({ id, name, login, role }) => ({ id, name, login, role }));
 }
 
 function requireAdmin(req: Request, res: Response): Account | null {

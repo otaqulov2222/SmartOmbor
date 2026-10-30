@@ -1,0 +1,155 @@
+.office {
+  --o-bg: #07111f;
+  --o-card: #0e1a2e;
+  --o-line: rgb(255 255 255 / .08);
+  --o-ink: #e8eef8;
+  --o-muted: #8ea0b8;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 400px at 50% -10%, #1d4ed8 0%, transparent 55%),
+    linear-gradient(#0b1728, var(--o-bg));
+  color: var(--o-ink);
+  padding: 12px 14px 28px;
+}
+.office * { box-sizing: border-box; }
+.office-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.office-top-right { display: flex; align-items: center; gap: 8px; }
+.office-back, .office-out {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #dbe4f3; font-size: .9rem; padding: 8px 10px; border-radius: 999px;
+  background: rgb(255 255 255 / .06);
+}
+.office-day {
+  background: rgb(15 23 42 / .55); border: 1px solid var(--o-line);
+  border-radius: 16px; padding: 8px 12px; text-align: right; font-size: .78rem; color: #c7d2fe;
+}
+.office-day b { display: block; color: #fff; font-size: .92rem; }
+.office-hero {
+  border-radius: 22px; overflow: hidden; min-height: 168px; padding: 22px 20px 18px;
+  background:
+    radial-gradient(circle at 70% 20%, #f59e0b 0%, transparent 28%),
+    linear-gradient(160deg, #1e3a8a 0%, #0f172a 42%, #082f49 100%);
+  margin-bottom: 12px;
+}
+.office-hero small { color: #c7d2fe; }
+.office-hero h1 { font-size: 1.7rem; letter-spacing: -.03em; margin-top: 4px; }
+.office-hero p { color: #cbd5e1; font-size: .92rem; margin-top: 4px; }
+.office-clocks { display: grid; grid-template-columns: 1.4fr .9fr; gap: 10px; margin: 14px 0 12px; }
+.office-clock, .office-hours {
+  border-radius: 18px; padding: 14px 16px;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+  box-shadow: 0 12px 30px rgb(37 99 235 / .28);
+}
+.office-hours { background: linear-gradient(135deg, #0f766e, #0d9488); }
+.office-clock span, .office-hours span { display: block; font-size: .78rem; opacity: .85; }
+.office-clock b, .office-hours b { display: block; font-size: 1.7rem; letter-spacing: .04em; margin: 4px 0; }
+.office-clock small, .office-hours small { opacity: .8; font-size: .78rem; }
+.office-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.office-go {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border-radius: 16px; padding: 14px 14px 12px; text-align: left; min-height: 76px;
+  border: 1px solid var(--o-line); background: #102033;
+}
+.office-go.is-in { background: linear-gradient(135deg, #065f46, #047857); }
+.office-go.is-out { background: linear-gradient(135deg, #9f1239, #be123c); }
+.office-go:disabled { opacity: .55; }
+.office-go b { display: block; font-size: 1.02rem; }
+.office-go small { color: #d1fae5; }
+.office-go.is-out small { color: #ffe4e6; }
+.office-map {
+  position: relative; border-radius: 18px; overflow: hidden; height: 220px;
+  border: 1px solid var(--o-line); margin-bottom: 16px; background: #0b1524;
+}
+.office-map iframe { width: 100%; height: 100%; border: 0; filter: saturate(.7) brightness(.85); }
+.office-pin {
+  position: absolute; left: 50%; top: 48%; transform: translate(-50%, -50%);
+  width: 118px; height: 118px; border-radius: 999px;
+  border: 2px dashed #34d399; background: rgb(16 185 129 / .12);
+  display: grid; place-items: center; pointer-events: none;
+}
+.office-pin span {
+  width: 42px; height: 42px; border-radius: 999px; background: #2563eb;
+  display: grid; place-items: center; box-shadow: 0 8px 20px rgb(37 99 235 / .45);
+}
+.office-tap {
+  position: absolute; left: 50%; top: 72%; transform: translate(-50%, 0);
+  background: #0f172a; color: #e2e8f0; border-radius: 999px; padding: 6px 10px;
+  font-size: .78rem; display: inline-flex; align-items: center; gap: 6px;
+}
+.office-map-meta {
+  position: absolute; left: 10px; right: 10px; bottom: 10px;
+  display: flex; justify-content: space-between; gap: 8px; pointer-events: none;
+}
+.office-map-meta b, .office-map-meta em {
+  background: #0f172a; border-radius: 999px; padding: 6px 10px; font-size: .75rem; font-style: normal;
+}
+.office h2 { font-size: 1.15rem; margin: 8px 0 4px; }
+.office .lead { color: var(--o-muted); font-size: .9rem; margin-bottom: 10px; }
+.office-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.office-method {
+  text-align: left; border-radius: 16px; padding: 14px; min-height: 92px;
+  background: #101c31; border: 1px solid var(--o-line); color: inherit;
+}
+.office-method.is-on { outline: 2px solid #60a5fa; background: #15233d; }
+.office-method b { display: block; margin-top: 8px; }
+.office-method small { color: var(--o-muted); }
+.office-cam, .office-qrbox {
+  width: 100%; border: 0; border-radius: 16px; padding: 14px; margin-bottom: 12px;
+  color: #fff; background: linear-gradient(90deg, #2563eb, #7c3aed);
+}
+.office-cam small, .office-qrbox small { display: block; opacity: .85; }
+.office video, .office-preview {
+  display: none; width: 100%; border-radius: 16px; background: #000; aspect-ratio: 3/4; object-fit: cover; margin-bottom: 10px;
+}
+.office video.is-on { display: block; }
+.office-card {
+  background: #101c31; border: 1px solid var(--o-line); border-radius: 18px; padding: 14px; margin-bottom: 12px;
+}
+.office-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 10px; }
+.office-tabs { display: flex; gap: 6px; background: #0b1524; border-radius: 999px; padding: 3px; }
+.office-tabs button { color: #94a3b8; border-radius: 999px; padding: 6px 10px; font-size: .8rem; }
+.office-tabs button.is-on { background: #2563eb; color: #fff; }
+.office-empty { color: var(--o-muted); font-size: .9rem; padding: 18px 4px; }
+.office-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--o-line); font-size: .9rem; }
+.office-pay { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.office-pay div, .office-pay .full {
+  background: #0b1524; border-radius: 12px; padding: 10px; font-size: .85rem;
+}
+.office-pay .full { grid-column: 1 / -1; }
+.office-pay b { display: block; margin-top: 4px; }
+.office-report {
+  display: block; margin: 8px auto 0; background: #1e3a5f; color: #dbeafe;
+  border-radius: 999px; padding: 8px 16px; font-size: .85rem;
+}
+.office-task { background: #101c31; border: 1px solid var(--o-line); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
+.office-task p { color: var(--o-muted); font-size: .9rem; margin: 6px 0 10px; }
+.office-task-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.office-task-actions button, .office-save {
+  background: #2563eb; color: #fff; border-radius: 12px; padding: 10px 14px;
+}
+.office-task-actions .ghost { background: #1e293b; }
+.office-form input, .office-form textarea, .office-form select {
+  width: 100%; background: #0b1524; border: 1px solid var(--o-line); color: inherit;
+  border-radius: 12px; padding: 10px 12px; margin: 6px 0 10px;
+}
+.office-prio { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.office-prio button { background: #1e293b; color: #cbd5e1; border-radius: 999px; padding: 8px 12px; }
+.office-prio button.is-on { background: #2563eb; color: #fff; }
+.office-people { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.office-people button { background: #1e293b; color: #cbd5e1; border-radius: 999px; padding: 7px 10px; font-size: .82rem; }
+.office-people button.is-on { background: #0ea5e9; color: #082f49; }
+.office-warn { color: #fecaca; background: #4c1d1d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
+.office-ok { color: #bbf7d0; background: #14532d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
+.office-qr { background: #fff; border-radius: 18px; padding: 16px; width: min(280px, 100%); margin: 12px auto; }
+.office-station { text-align: center; }
+.office-nav {
+  position: sticky; bottom: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  background: rgb(8 17 30 / .9); border: 1px solid var(--o-line); border-radius: 16px; padding: 6px;
+  backdrop-filter: blur(10px);
+}
+.office-nav.is-three { grid-template-columns: 1fr 1fr 1fr; }
+.office-nav button { color: #94a3b8; border-radius: 12px; padding: 10px; }
+.office-nav button.is-on { background: #1d4ed8; color: #fff; }
+@media (min-width: 880px) {
+  .office { max-width: 760px; margin: 0 auto; }
+}
