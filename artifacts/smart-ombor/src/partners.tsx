@@ -825,6 +825,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       setSupplyingId(shipmentId);
       setPosting(null);
       setBusy(false);
+      let resumes = 0;
+      const resume = async () => {
+        if (resumes >= 2) return false;
+        resumes += 1;
+        await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+        return true;
+      };
       for (let i = 0; i < 120; i += 1) {
         const hit = await postedNow();
         if (hit) {
@@ -833,7 +840,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         }
         const status = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`);
         const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
-        if (body.pending || status.status === 202 || status.status === 404) {
+        const unique = /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(String(body.detail || body.error || ''));
+        if (body.pending || status.status === 202) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+        if (status.status === 404 || body.error === 'idle' || unique) {
+          await resume();
           await new Promise(resolve => setTimeout(resolve, 1000));
           continue;
         }

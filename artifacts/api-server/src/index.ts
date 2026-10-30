@@ -2,6 +2,7 @@ import app from "./app";
 import { loadCatalog } from "./lib/catalog";
 import { logger } from "./lib/logger";
 import { hydratePartners } from "./lib/partners";
+import { resumePendingSupplies } from "./routes/partners";
 import { sendIdlePreview, sendPreview, startTelegramDigest } from "./lib/telegram";
 
 const rawPort = process.env["PORT"];
@@ -39,6 +40,7 @@ void hydratePartners()
       }
 
       logger.info({ port }, "Server listening");
+      resumePendingSupplies();
       void loadCatalog().catch((error: unknown) => {
         logger.warn({ err: error }, "Catalog cache was not warmed");
       });

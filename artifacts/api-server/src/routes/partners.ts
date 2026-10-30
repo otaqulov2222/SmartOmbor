@@ -1,7 +1,10 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { dataFile } from "../lib/data-dir";
 import { addCatalogProduct, applyReceiptStock, compactCode, findProductsByLabel, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
-import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied } from "../lib/moysklad";
+import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -263,11 +266,16 @@ function sameSupply(row: SupplyHit, shipment: { id: string; number: string }) {
   return false;
 }
 
+function quoteSupplyFilter(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
+  const names = supplyNames(shipment);
   const filters = [
     `externalCode=${shipment.id}`,
-    `name=${shipment.number}`,
-    `incomingNumber=${shipment.number}`,
+    ...names.map((name) => `name=${quoteSupplyFilter(name)}`),
+    `incomingNumber=${quoteSupplyFilter(shipment.number)}`,
   ];
   const pages = await Promise.all(filters.map((filter) =>
     moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(filter)}`).catch(() => ({ rows: [] as SupplyHit[] })),
@@ -276,6 +284,19 @@ async function findExistingSupply(shipment: { id: string; number: string; date?:
   ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
   const hit = ranked[0];
   return hit?.id ? { id: hit.id, name: hit.name || shipment.number } : null;
+}
+
+async function nameTakenByOther(name: string, shipment: { id: string; number: string }) {
+  const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(`name=${quoteSupplyFilter(name)}`)}`).catch(() => ({ rows: [] as SupplyHit[] }));
+  return page.rows.some((row) => row.id && !row.deleted && (row.name || "").trim() === name && !sameSupply(row, shipment));
+}
+
+async function chooseSupplyName(shipment: { id: string; number: string; date?: string }) {
+  const extras = [`${shipment.number.trim()} ${shipment.id.slice(0, 6)}`];
+  for (const name of [...supplyNames(shipment), ...extras]) {
+    if (!(await nameTakenByOther(name, shipment))) return name;
+  }
+  return `${shipment.number.trim()} ${shipment.id.slice(0, 8)}`;
 }
 
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
@@ -393,11 +414,11 @@ function scheduleSupplyName(shipment: { id: string; number: string; date?: strin
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
   const existing = await findExistingSupply(shipment);
   if (existing) return { ...existing, reused: true };
-  const dated = supplyNames(shipment)[1];
+  const name = await chooseSupplyName(shipment);
   const payloads: Array<Record<string, unknown>> = [
-    { ...core, applicable: true, positions },
-    { ...core, applicable: false, positions },
-    ...(dated ? [{ ...core, name: dated, applicable: true, positions }] : []),
+    { ...core, name, applicable: true, positions },
+    { ...core, name, applicable: false, positions },
+    { ...core, name: `${name} ${shipment.id.slice(0, 4)}`, applicable: true, positions },
   ];
   let last: unknown;
   for (const body of payloads) {
@@ -411,7 +432,7 @@ async function postSupplyDocument(core: Record<string, unknown>, positions: Arra
       const foundAgain = await findExistingSupply(shipment);
       if (foundAgain) return { ...foundAgain, reused: true };
       const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
-      const retry = uniqueSupplyConflict(error) || permissionDenied(error) || /applicable|проведен/i.test(text);
+      const retry = uniqueSupplyConflict(error) || permissionDenied(error) || writeDropped(error) || /applicable|проведен/i.test(text);
       if (!retry) throw error;
       logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
     }
@@ -484,8 +505,95 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
 });
 
 type SupplyResult = { id: string; number: string; shipment: unknown; already?: boolean };
-type SupplyJob = { status: "pending" | "done" | "error"; error?: string; detail?: string; result?: SupplyResult };
+type SupplyJob = { status: "pending" | "done" | "error"; error?: string; detail?: string; result?: SupplyResult; storeId?: string };
 const supplyJobs = new Map<string, SupplyJob>();
+const JOB_FILE = dataFile("supply-jobs.json");
+
+function persistSupplyJobs() {
+  const pending: Record<string, SupplyJob> = {};
+  for (const [id, job] of supplyJobs) {
+    if (job.status === "pending") pending[id] = { status: "pending", storeId: job.storeId || "" };
+  }
+  mkdirSync(path.dirname(JOB_FILE), { recursive: true });
+  const tmp = `${JOB_FILE}.tmp`;
+  writeFileSync(tmp, JSON.stringify(pending));
+  renameSync(tmp, JOB_FILE);
+}
+
+function loadSupplyJobs() {
+  try {
+    const parsed = JSON.parse(readFileSync(JOB_FILE, "utf8")) as Record<string, SupplyJob>;
+    for (const [id, job] of Object.entries(parsed)) {
+      if (job?.status === "pending") supplyJobs.set(id, { status: "pending", storeId: job.storeId || "" });
+    }
+  } catch {
+    /* first run */
+  }
+}
+
+function setSupplyJob(id: string, job: SupplyJob) {
+  supplyJobs.set(id, job);
+  persistSupplyJobs();
+}
+
+function supplyRetryable(error: unknown) {
+  const detail = error instanceof Error ? error.message : "";
+  return uniqueSupplyConflict(error)
+    || writeDropped(error)
+    || /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi|yaratilmadi|javob bermadi|limiti|fetch failed/i.test(detail);
+}
+
+async function runSupplyJob(shipmentId: string, storeId: string) {
+  setSupplyJob(shipmentId, { status: "pending", storeId });
+  try {
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await writeShipmentSupply(shipmentId, storeId);
+        setSupplyJob(shipmentId, { status: "done", result, storeId });
+        return;
+      } catch (error) {
+        last = error;
+        if (!supplyRetryable(error) || attempt === 2) throw error;
+        logger.warn({ shipment: shipmentId, attempt, err: error instanceof Error ? error.message : error }, "MoySklad supply retry");
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
+    }
+    throw last;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
+    logger.warn({
+      shipment: shipmentId,
+      detail,
+      path: error instanceof MoySkladError ? error.path : undefined,
+      moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
+      parameter: error instanceof MoySkladError ? error.parameter : undefined,
+    }, "MoySklad supply failed");
+    const code = detail === "store" || detail === "agent" || detail === "currency" || detail === "declined" ? detail : "rejected";
+    setSupplyJob(shipmentId, { status: "error", error: code, detail, storeId });
+  }
+}
+
+export function resumePendingSupplies() {
+  loadSupplyJobs();
+  for (const [id, job] of supplyJobs) {
+    if (job.status !== "pending") continue;
+    const shipment = listShipments().find((item) => item.id === id);
+    if (!shipment || shipment.moyskladId) {
+      if (shipment?.moyskladId) {
+        setSupplyJob(id, { status: "done", result: { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true } });
+      } else {
+        supplyJobs.delete(id);
+        persistSupplyJobs();
+      }
+      continue;
+    }
+    logger.info({ shipment: id }, "Resume pending MoySklad kirim");
+    void runSupplyJob(id, job.storeId || "");
+  }
+}
+
+loadSupplyJobs();
 
 async function writeShipmentSupply(shipmentId: string, storeId: string): Promise<SupplyResult> {
   const unlock = await acquireSupplyLock(shipmentId);
@@ -686,29 +794,7 @@ router.post("/partner-factories/shipments/:id/supply", (req, res) => {
     return;
   }
   const storeId = String(req.body?.storeId ?? "").trim();
-  supplyJobs.set(shipmentId, { status: "pending" });
-  void writeShipmentSupply(shipmentId, storeId)
-    .catch((error) => {
-      const detail = error instanceof Error ? error.message : "";
-      if (!/уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(detail)) throw error;
-      logger.warn({ shipment: shipmentId, detail }, "MoySklad supply unique, retrying once");
-      return writeShipmentSupply(shipmentId, storeId);
-    })
-    .then(
-    (result) => supplyJobs.set(shipmentId, { status: "done", result }),
-    (error) => {
-      const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
-      logger.warn({
-        shipment: shipmentId,
-        detail,
-        path: error instanceof MoySkladError ? error.path : undefined,
-        moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
-        parameter: error instanceof MoySkladError ? error.parameter : undefined,
-      }, "MoySklad supply failed");
-      const code = detail === "store" || detail === "agent" || detail === "currency" || detail === "declined" ? detail : "rejected";
-      supplyJobs.set(shipmentId, { status: "error", error: code, detail });
-    },
-  );
+  void runSupplyJob(shipmentId, storeId);
   res.status(202).json({ pending: true });
 });
 

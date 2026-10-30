@@ -2,7 +2,7 @@ import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts,
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
-import { MoySkladError, moysklad, moyskladSend, permissionDenied } from "./moysklad";
+import { MoySkladError, moysklad, moyskladSend, permissionDenied, writeDropped } from "./moysklad";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
 const SALE_TYPES = ["Exclusive", "Premium", "Standard"];
@@ -353,9 +353,13 @@ function nameAliases(name: string) {
   const trimmed = name.trim().replace(/\s+/g, " ");
   const parsed = parseBordoName(trimmed);
   const aliases = [trimmed];
-  if (parsed?.color) {
-    const base = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
-    aliases.push(`${base} ${parsed.color}`, `${base} (${parsed.color})`);
+  if (parsed) {
+    const withGroup = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
+    const withoutGroup = ["Bordo", parsed.factoryCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
+    aliases.push(withGroup, withoutGroup);
+    if (parsed.color) {
+      aliases.push(`${withGroup} ${parsed.color}`, `${withGroup} (${parsed.color})`, `${withoutGroup} ${parsed.color}`, `${withoutGroup} (${parsed.color})`);
+    }
   }
   return [...new Set(aliases.map((item) => item.trim().replace(/\s+/g, " ")).filter(Boolean))];
 }
@@ -445,11 +449,15 @@ const STRIP_PRODUCT_FIELDS = ["packs", "barcodes", "productFolder", "supplier", 
 async function recoverExistingProduct(name: string) {
   const wanted = name.trim().replace(/\s+/g, " ");
   if (!wanted) return null;
-  const first = await productByName(wanted);
-  if (first) return first;
-  const listed = await searchListedName(wanted);
-  if (listed) return listed;
+  for (const alias of nameAliases(wanted)) {
+    const hit = await productByName(alias);
+    if (hit) return hit;
+  }
   await sleep(300);
+  for (const alias of nameAliases(wanted)) {
+    const hit = await searchListedName(alias);
+    if (hit) return hit;
+  }
   return productByName(wanted);
 }
 
@@ -463,9 +471,9 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
       const created = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
       return rememberProduct(created, [wanted]);
     } catch (error) {
-      const existing = wanted ? await productByName(wanted) : null;
+      const existing = wanted ? await recoverExistingProduct(wanted) : null;
       if (existing) return existing;
-      if (uniqueNameConflict(error)) {
+      if (uniqueNameConflict(error) || writeDropped(error)) {
         const parameter = uniqueNameParameter(error);
         if (parameter === "barcodes") {
           delete payload.barcodes;
@@ -477,9 +485,11 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
           delete payload.code;
           continue;
         }
-        const recovered = wanted ? await recoverExistingProduct(wanted) : null;
-        if (recovered) return recovered;
-        logger.warn({ name: wanted, parameter }, "MoySklad unique name, looking up existing card");
+        logger.warn({ name: wanted, parameter, err: error instanceof Error ? error.message : error }, "MoySklad product create recovered lookup");
+        if (writeDropped(error)) {
+          await sleep(400);
+          continue;
+        }
         break;
       }
       if (!permissionDenied(error)) throw error;

@@ -22,6 +22,13 @@ export function permissionDenied(error: unknown): boolean {
   return error.status === 403 || /нет прав|доступ запрещ|ruxsat yetarli emas|API ruxsati yo‘q/i.test(error.message);
 }
 
+export function writeDropped(error: unknown): boolean {
+  if (error instanceof MoySkladError) return error.status === 429 || error.status === 502 || error.status === 503 || error.status === 504;
+  if (!(error instanceof Error)) return false;
+  const cause = error.cause as { code?: string } | undefined;
+  return error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
+}
+
 export function moyskladConfigured(): boolean {
   return Boolean(moyskladToken());
 }
@@ -146,7 +153,7 @@ function retryDelay(error: unknown, attempt: number) {
 
 function parseMoySkladFailure(status: number, body: string, path?: string, log = false): MoySkladError {
   if (status === 429) {
-    return new MoySkladError("MoySklad so‘rov limiti. 20 soniyadan keyin bir marta qayta bosing.", 429, undefined, undefined, path);
+    return new MoySkladError("MoySklad so‘rov limiti", 429, undefined, undefined, path);
   }
   if (status === 502 || status === 503 || status === 504) {
     return new MoySkladError("MoySklad vaqtincha javob bermadi", status, undefined, undefined, path);
