@@ -349,18 +349,35 @@ async function rowFromSearchHit(row: { id?: string; name?: string; meta?: { type
   return null;
 }
 
+function nameAliases(name: string) {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  const parsed = parseBordoName(trimmed);
+  const aliases = [trimmed];
+  if (parsed?.color) {
+    const base = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
+    aliases.push(`${base} ${parsed.color}`, `${base} (${parsed.color})`);
+  }
+  return [...new Set(aliases.map((item) => item.trim().replace(/\s+/g, " ")).filter(Boolean))];
+}
+
 async function searchListedName(name: string) {
   const trimmed = name.trim().replace(/\s+/g, " ");
   if (!trimmed) return null;
   const parsed = parseBordoName(trimmed);
-  const queries = [...new Set([trimmed, parsed?.productCode || ""].map((item) => item.trim()).filter((item) => item.length >= 2))];
-  for (const query of queries) {
+  const queries = [...new Set([...nameAliases(trimmed), parsed?.productCode || ""].map((item) => item.trim()).filter((item) => item.length >= 2))];
+  const paths = queries.flatMap((query) => [
+    `/entity/product?limit=50&search=${encodeURIComponent(query)}`,
+    `/entity/assortment?limit=50&search=${encodeURIComponent(query)}`,
+  ]);
+  for (const path of paths) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }> }>(`/entity/product?limit=50&search=${encodeURIComponent(query)}`);
-      const hit = pickNamedRow(page.rows, trimmed);
-      if (hit) {
-        const loaded = await rowFromSearchHit(hit, trimmed);
-        if (loaded) return loaded;
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; meta?: { type?: string; href?: string }; product?: { meta?: { href?: string } } }> }>(path);
+      for (const alias of nameAliases(trimmed)) {
+        const hit = pickNamedRow(page.rows, alias);
+        if (hit) {
+          const loaded = await rowFromSearchHit(hit, trimmed);
+          if (loaded) return loaded;
+        }
       }
       if (parsed) {
         const identity = page.rows.find((row) => row.id && sameBordoCard(row.name || "", {
@@ -569,10 +586,14 @@ async function colorNamedProduct(
     used: Set<string>;
   },
 ): Promise<ProductRow> {
-  const name = `${parent.name || ""} ${normalizeBordoColor(color)}`.trim();
+  const colorName = normalizeBordoColor(color);
+  const names = [`${parent.name || ""} ${colorName}`.trim(), `${parent.name || ""} (${colorName})`.trim()];
+  for (const name of names) {
+    const existing = await productByName(name);
+    if (existing) return existing;
+  }
+  const name = names[0];
   const sale = extras.price > 0 && extras.priceType ? (markedSale(extras.price, extras.priceType, loadMarkup()) ?? extras.price) : extras.price;
-  const existing = await productByName(name);
-  if (existing) return existing;
   const listed = extras.sales
     ? await listedAllPrices(undefined, extras.sales, extras.currencyMeta)
     : (sale > 0 ? await listedPrices(undefined, extras.priceType, sale, extras.currencyMeta) : null);

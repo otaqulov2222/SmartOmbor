@@ -254,17 +254,25 @@ function acquireSupplyLock(id: string): Promise<() => void> {
 
 type SupplyHit = { id: string; name?: string; deleted?: string; applicable?: boolean; externalCode?: string; incomingNumber?: string };
 
+function sameSupply(row: SupplyHit, shipment: { id: string; number: string }) {
+  if (row.externalCode && row.externalCode === shipment.id) return true;
+  if (row.incomingNumber === shipment.number && (!row.externalCode || row.externalCode === shipment.id)) return true;
+  return false;
+}
+
 async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
-  try {
-    const page = await moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=5&filter=${encodeURIComponent(`externalCode=${shipment.id}`)}`);
-    const ranked = page.rows.filter((row) => row.id && !row.deleted);
-    ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
-    const hit = ranked[0];
-    if (hit?.id) return { id: hit.id, name: hit.name || shipment.number };
-  } catch {
-    /* keep looking below */
-  }
-  return null;
+  const filters = [
+    `externalCode=${shipment.id}`,
+    `name=${shipment.number}`,
+    `incomingNumber=${shipment.number}`,
+  ];
+  const pages = await Promise.all(filters.map((filter) =>
+    moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=20&filter=${encodeURIComponent(filter)}`).catch(() => ({ rows: [] as SupplyHit[] })),
+  ));
+  const ranked = pages.flatMap((page) => page.rows).filter((row) => row.id && !row.deleted && sameSupply(row, shipment));
+  ranked.sort((a, b) => Number(Boolean(b.applicable)) - Number(Boolean(a.applicable)));
+  const hit = ranked[0];
+  return hit?.id ? { id: hit.id, name: hit.name || shipment.number } : null;
 }
 
 function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sectionCode: string; productCode: string; size: string; price: number; colors: Array<{ name?: string }> }>) {
@@ -333,38 +341,39 @@ async function replaceZeroSupply(supplyId: string) {
   }
 }
 
+function uniqueSupplyConflict(error: unknown) {
+  if (!(error instanceof MoySkladError)) return false;
+  return error.status === 409 || error.status === 412 || /уникал|unique|already exists|уже существ/i.test(error.message);
+}
+
 async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
   const existing = await findExistingSupply(shipment);
   if (existing) return { ...existing, reused: true };
-  try {
-    const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
-      ...core,
-      applicable: true,
-      positions,
-    });
-    return { id: created.id, name: created.name, reused: false };
-  } catch (error) {
+  const payloads: Array<Record<string, unknown>> = [
+    { ...core, applicable: true, positions },
+    { ...core, applicable: false, positions },
+    { ...core, name: undefined, applicable: true, positions },
+  ];
+  let last: unknown;
+  for (const body of payloads) {
     const found = await findExistingSupply(shipment);
     if (found) return { ...found, reused: true };
-    const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
-    const draftOk = permissionDenied(error) || /applicable|проведен/i.test(text);
-    if (!draftOk) throw error;
-    logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create as draft");
-    const beforeDraft = await findExistingSupply(shipment);
-    if (beforeDraft) return { ...beforeDraft, reused: true };
     try {
-      const draft = await moyskladSend<{ id: string; name?: string }>("/entity/supply", {
-        ...core,
-        applicable: false,
-        positions,
-      });
-      return { id: draft.id, name: draft.name, reused: false };
-    } catch (draftError) {
-      const again = await findExistingSupply(shipment);
-      if (again) return { ...again, reused: true };
-      throw draftError;
+      const created = await moyskladSend<{ id: string; name?: string }>("/entity/supply", body);
+      return { id: created.id, name: created.name, reused: false };
+    } catch (error) {
+      last = error;
+      const foundAgain = await findExistingSupply(shipment);
+      if (foundAgain) return { ...foundAgain, reused: true };
+      const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
+      const retry = uniqueSupplyConflict(error) || permissionDenied(error) || /applicable|проведен/i.test(text);
+      if (!retry) throw error;
+      logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
     }
   }
+  const leftover = await findExistingSupply(shipment);
+  if (leftover) return { ...leftover, reused: true };
+  throw last;
 }
 
 router.get("/counterparties", async (req, res, next) => {
@@ -628,7 +637,14 @@ router.post("/partner-factories/shipments/:id/supply", (req, res) => {
   }
   const storeId = String(req.body?.storeId ?? "").trim();
   supplyJobs.set(shipmentId, { status: "pending" });
-  void writeShipmentSupply(shipmentId, storeId).then(
+  void writeShipmentSupply(shipmentId, storeId)
+    .catch((error) => {
+      const detail = error instanceof Error ? error.message : "";
+      if (!/уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(detail)) throw error;
+      logger.warn({ shipment: shipmentId, detail }, "MoySklad supply unique, retrying once");
+      return writeShipmentSupply(shipmentId, storeId);
+    })
+    .then(
     (result) => supplyJobs.set(shipmentId, { status: "done", result }),
     (error) => {
       const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
