@@ -10,6 +10,11 @@
   filter: blur(48px) saturate(1.15) brightness(.28);
   transform: scale(1.12);
   pointer-events: none;
+  transition: filter .8s ease;
+}
+.office-shell.is-night .office-ambient {
+  background-image: url('/office-hero-night.jpg');
+  filter: blur(48px) saturate(1.05) brightness(.2);
 }
 .office {
   --o-bg: #07111f;
@@ -40,7 +45,12 @@
   width: 100%; height: 100%;
   object-fit: cover; object-position: 70% 42%;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 1.1s ease;
 }
+.office-hero-img.is-off { opacity: 0; }
+.office-hero-night { opacity: 0; }
+.office-hero-night.is-on { opacity: 1; }
 .office-hero-fade {
   position: absolute; inset: 0;
   background:
@@ -63,7 +73,7 @@
   border-radius: 16px; padding: 8px 12px; text-align: right; font-size: .78rem; color: #c7d2fe;
   backdrop-filter: blur(12px);
 }
-.office-day b { display: block; color: #fff; font-size: .95rem; font-weight: 700; }
+.office-day b { display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: #fff; font-size: .95rem; font-weight: 700; }
 .office-hero-copy { position: relative; z-index: 2; margin-top: 22px; text-shadow: 0 8px 24px rgb(0 0 0 / .45); }
 .office-hero-copy small { color: #dbeafe; font-size: .9rem; }
 .office-hero-copy h1 { font-size: 1.78rem; letter-spacing: -.03em; margin-top: 2px; color: #fff; }

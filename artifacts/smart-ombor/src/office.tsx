@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import {
-  ChevronLeft, Clock, Crosshair, Hand, LogIn, LogOut, MapPin, Minus, Plus,
-  QrCode, ScanFace, SwitchCamera, Wallet, X,
+  ChevronLeft, Clock, Crosshair, Hand, LogIn, LogOut, MapPin, Minus, Moon, Plus,
+  QrCode, ScanFace, Sun, SwitchCamera, Wallet, X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
@@ -136,7 +136,7 @@ function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge
     <div className="office-map-shade"/>
     <div className={`office-pin ${here ? 'is-here' : ''}`}><i/><i/><span><MapPin size={18}/></span></div>
     {here && <div className="office-here">{t('office.here')}</div>}
-    <button type="button" className="office-tap" onDoubleClick={onNudge}><Hand size={14}/> {t('office.dbl')}</button>
+    <button type="button" className="office-tap" onClick={onNudge} onDoubleClick={onNudge}><Hand size={14}/> {t('office.dbl')}</button>
     <div className="office-map-tools">
       <button type="button" onClick={() => onZoom(z + 1)} aria-label="+"><Plus size={16}/></button>
       <button type="button" onClick={() => onZoom(z - 1)} aria-label="-"><Minus size={16}/></button>
@@ -380,12 +380,18 @@ export function OfficePage() {
 
   const ctaNeedCam = !camReady;
   const ownTasks = tasks;
+  const endHour = Number((me?.office.end || '18:00').slice(0, 2)) || 18;
+  const hourNow = Number(clock.slice(0, 2));
+  const night = hourNow >= endHour || hourNow < 6;
+  const heroSrc = `${import.meta.env.BASE_URL}office-hero.jpg`;
+  const nightSrc = `${import.meta.env.BASE_URL}office-hero-night.jpg`;
 
-  return <div className="office-shell">
+  return <div className={`office-shell ${night ? 'is-night' : ''}`}>
     <div className="office-ambient" aria-hidden="true"/>
     <div className="office">
     <section className="office-hero">
-      <img className="office-hero-img" src={`${import.meta.env.BASE_URL}office-hero.jpg`} alt="" />
+      <img className={`office-hero-img ${night ? 'is-off' : ''}`} src={heroSrc} alt="" />
+      <img className={`office-hero-img office-hero-night ${night ? 'is-on' : ''}`} src={nightSrc} alt="" />
       <div className="office-hero-fade"/>
       <div className="office-hero-bar">
         {me?.director
@@ -394,7 +400,10 @@ export function OfficePage() {
             <button type="button" className="office-out" onClick={() => setLang(lang === 'uz' ? 'ru' : 'uz')}>{lang === 'uz' ? 'RU' : 'UZ'}</button>
             <button type="button" className="office-out" onClick={() => { sessionStorage.removeItem(SESSION); setLocation('/'); }}>{t('common.signOut')}</button>
           </span>}
-        <div className="office-day"><b>{day.weekday}</b>{day.line}</div>
+        <div className="office-day">
+          <b>{night ? <Moon size={13}/> : <Sun size={13}/>} {day.weekday}</b>
+          {day.line}
+        </div>
       </div>
       <div className="office-hero-copy">
         <small>{t('office.hello')}</small>
@@ -407,7 +416,7 @@ export function OfficePage() {
         <div className="office-clock">
           <div className="office-clock-top"><span className="office-ico"><Clock size={15}/></span>{t('office.now')}</div>
           <b>{clock}</b>
-          <small>{t('office.nice')}</small>
+          <small>{night ? t('office.niceNight') : t('office.nice')}</small>
         </div>
         <div className="office-hours">
           <div className="office-hours-top">{t('office.worked')}</div>
