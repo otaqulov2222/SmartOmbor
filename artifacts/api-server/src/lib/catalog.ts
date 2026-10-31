@@ -859,14 +859,28 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   return { factoryCode, groupCode, productCode, size, color };
 }
 
+function sameFactoryLabel(left: string, right: string) {
+  const a = left.trim();
+  const b = right.trim();
+  if (!a || !b) return false;
+  if (a.localeCompare(b, "ru", { sensitivity: "accent" }) === 0) return true;
+  return compactCode(a) === compactCode(b);
+}
+
 export function productBelongsToFactory(product: { name: string; factory: string | null }, factoryCode: string, factoryName: string) {
-  const factory = (product.factory || "").trim().toLowerCase();
-  const label = factoryName.trim().toLowerCase();
-  if (label && factory && (factory === label || factory.includes(label) || label.includes(factory))) return true;
-  const code = factoryCode.trim().toLowerCase();
   const parts = parseBordoName(product.name);
-  if (code && parts && sameFactoryCode(parts.factoryCode, code)) return true;
-  return code.length >= 3 && wholeToken(`${product.factory || ""} ${product.name}`.toLowerCase(), code);
+  if (parts?.factoryCode) {
+    if (factoryCode.trim() && sameFactoryCode(parts.factoryCode, factoryCode)) return true;
+    if (factoryName.trim() && sameFactoryLabel(parts.factoryCode, factoryName)) return true;
+  }
+  const supplier = (product.factory || "").trim();
+  if (supplier) {
+    if (factoryName.trim() && sameFactoryLabel(supplier, factoryName)) return true;
+    if (factoryCode.trim() && (sameFactoryLabel(supplier, factoryCode) || sameFactoryCode(supplier, factoryCode))) return true;
+    const code = canonicalFactoryCode(factoryCode);
+    if (code && /^\d{3,6}$/.test(code) && lastNumericToken(supplier) === code) return true;
+  }
+  return false;
 }
 
 export function folderLabel(row: { name?: string; pathName?: string }) {
@@ -967,7 +981,7 @@ export function matchNamedProducts(
   input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },
 ): { id: string; name: string } | null {
   return matchWaybillProduct(
-    { products: rows.map((row) => emptyProduct({ id: row.id, name: row.name, factory: row.factory ?? input.factoryName })) } as Catalog,
+    { products: rows.map((row) => emptyProduct({ id: row.id, name: row.name, factory: row.factory ?? null })) } as Catalog,
     input,
   );
 }

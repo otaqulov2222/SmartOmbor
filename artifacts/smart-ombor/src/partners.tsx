@@ -223,6 +223,20 @@ function lineUnits(line: Line) {
   return pack;
 }
 
+function foldStoreName(value: string) {
+  return value.trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+}
+
+function isPreferredSupplyStore(name: string) {
+  const label = foldStoreName(name);
+  return label.includes('янги катта склад') || label.includes('yangi katta sklad');
+}
+
+function preferredSupplyStore<T extends { id: string; name: string }>(stores: T[] | undefined) {
+  if (!stores?.length) return null;
+  return stores.find(store => isPreferredSupplyStore(store.name)) ?? null;
+}
+
 function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed' | 'partners.supplyNameTaken') => string) {
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
@@ -728,8 +742,14 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   });
   const warehouses = useListWarehouses();
   useEffect(() => {
-    const firstStore = warehouses.data?.[0]?.id;
-    if (posting && firstStore) setStoreId(current => current || firstStore);
+    if (!posting) {
+      setStoreId('');
+      return;
+    }
+    const stores = warehouses.data ?? [];
+    if (!stores.length) return;
+    const preferred = preferredSupplyStore(stores) ?? stores[0];
+    setStoreId(current => (current && stores.some(store => store.id === current) ? current : preferred.id));
   }, [posting, warehouses.data]);
   const shipments = detail.data?.shipments ?? [];
 
@@ -779,7 +799,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
 
   const postSupply = async () => {
     if (supplyBusy.current || !posting || posting.moyskladId || posting.status === 'declined') return;
-    const chosen = storeId || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
+    const chosen = storeId || preferredSupplyStore(warehouses.data)?.id || (warehouses.data?.length === 1 ? warehouses.data[0].id : '');
     if (!chosen) { setPostError(t('partners.storeMissing')); return; }
     if (!agent && !row.account?.counterpartyId) { setPostError(t('partners.agentMissing')); return; }
     const mismatch = posting.lines.find(line => {
@@ -821,7 +841,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         });
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
-      const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+      const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '' }) });
       const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
       if (started.ok && !startedBody.pending && (startedBody.id || startedBody.already)) {
         setPosting(null);
@@ -845,7 +865,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const resume = async () => {
         if (resumes >= 2) return false;
         resumes += 1;
-        await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen }) });
+        await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '' }) });
         return true;
       };
       for (let i = 0; i < 180; i += 1) {
@@ -1072,7 +1092,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-sm waybill-decline" onClick={() => void setStatus(shipment.id, 'declined')}><X size={15}/>{t('partners.unaccept')}</button>}
                   {!shipment.moyskladId && shipment.status === 'sent' && <button type="button" className="btn btn-primary btn-sm" onClick={() => void setStatus(shipment.id, 'accepted')}><Check size={15}/>{t('partners.accept')}</button>}
                   {!shipment.moyskladId && shipment.status === 'declined' && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void setStatus(shipment.id, 'sent')} data-testid="button-reopen-shipment"><Check size={15}/>{t('partners.reopen')}</button>}
-                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-primary btn-sm" disabled={supplyingId === shipment.id} onClick={() => { setPostError(''); setPosting(shipment); }}>{supplyingId === shipment.id ? t('partners.supplyPending') : t('partners.supply')}</button>}
+                  {!shipment.moyskladId && shipment.status !== 'declined' && <button type="button" className="btn btn-primary btn-sm" disabled={supplyingId === shipment.id} onClick={() => { setPostError(''); setStoreId(preferredSupplyStore(warehouses.data)?.id || ''); setPosting(shipment); }}>{supplyingId === shipment.id ? t('partners.supplyPending') : t('partners.supply')}</button>}
                 </div>
               </div>
             )}

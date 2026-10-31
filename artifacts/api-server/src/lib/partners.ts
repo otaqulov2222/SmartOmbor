@@ -478,8 +478,11 @@ export function linkExactShipmentLines(factoryId: string, match: (line: Shipment
       if (!line.productCode.trim()) continue;
       const product = match(line);
       if (!product) continue;
-      if (!line.productId) {
+      if (line.productId !== product.id) {
         line.productId = product.id;
+        line.productName = product.name;
+        changed = true;
+      } else if (line.productName !== product.name) {
         line.productName = product.name;
         changed = true;
       }
