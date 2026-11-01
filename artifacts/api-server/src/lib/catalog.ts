@@ -721,26 +721,8 @@ export function sameProductCode(left: string, right: string) {
   return Boolean(a) && a === b;
 }
 
-function codeTokens(value: string) {
-  return normalizeBordoCode(value).split(" ").filter(Boolean).map(compactCode).filter(Boolean);
-}
-
-function tokensPrefixed(longer: string[], shorter: string[]) {
-  return shorter.length > 0 && shorter.every((token, i) => token === longer[i]);
-}
-
-function distinctiveCode(tokens: string[]) {
-  return tokens.some((token) => token.length >= 2 || /^\d/.test(token));
-}
-
 export function productCodeMatches(nameCode: string, typed: string) {
-  if (sameProductCode(nameCode, typed)) return true;
-  const named = codeTokens(nameCode);
-  const want = codeTokens(typed);
-  if (!named.length || !want.length) return false;
-  if (named.length >= want.length && tokensPrefixed(named, want)) return distinctiveCode(want);
-  if (want.length >= named.length && tokensPrefixed(want, named)) return distinctiveCode(named);
-  return false;
+  return sameProductCode(nameCode, typed);
 }
 
 export function foldProductName(value: string) {
