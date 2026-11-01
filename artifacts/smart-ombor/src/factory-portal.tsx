@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, FilePlus2, History, LogOut, Menu, Pencil, Send, Trash2, UserRound, X } from 'lucide-react';
 import { useI18n, type Lang } from '@/i18n';
 import { BORDO_SIZES, isBordoSize, tashkentDay } from '@/bordo-sizes';
@@ -10,12 +10,63 @@ type Shipment = { id: string; number: string; date: string; status: string; note
 type Draft = { key: string; factoryCode: string; groupCode: string; productCode: string; model: string; size: string; pairs: string; boxes: string; price: string; priceType: string; colors: ColorLine[] };
 
 const TOKEN_KEY = 'smart-ombor-factory-token';
+const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+type SavedDraft = { at: number; date: string; note: string; lines: Draft[]; editingId: string | null; editingStatus: string | null };
+
+function draftKey(accountId: string) {
+  return `smart-ombor-factory-draft:${accountId}`;
+}
+
+function readDraft(accountId: string): SavedDraft | null {
+  try {
+    const raw = localStorage.getItem(draftKey(accountId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SavedDraft;
+    if (!parsed || typeof parsed.at !== 'number' || Date.now() - parsed.at > DRAFT_TTL_MS) {
+      localStorage.removeItem(draftKey(accountId));
+      return null;
+    }
+    if (!Array.isArray(parsed.lines) || !parsed.lines.length) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(accountId: string, draft: Omit<SavedDraft, 'at'>) {
+  try {
+    localStorage.setItem(draftKey(accountId), JSON.stringify({ ...draft, at: Date.now() }));
+  } catch {
+    /* quota */
+  }
+}
+
+function clearDraft(accountId: string) {
+  try { localStorage.removeItem(draftKey(accountId)); } catch { /* ignore */ }
+}
+
 function blank(factoryCode: string): Draft {
   return { key: Math.random().toString(36).slice(2), factoryCode, groupCode: '', productCode: '', model: '', size: '', pairs: '', boxes: '', price: '', priceType: '', colors: [] };
 }
 
-function started(line: Draft) {
-  return Boolean(line.pairs || line.boxes || line.price);
+function hydrateLine(row: Partial<Draft>, factoryCode: string): Draft {
+  return {
+    key: String(row.key || Math.random().toString(36).slice(2)),
+    factoryCode: String(row.factoryCode || factoryCode),
+    groupCode: String(row.groupCode || ''),
+    productCode: String(row.productCode || ''),
+    model: String(row.model || ''),
+    size: String(row.size || ''),
+    pairs: String(row.pairs || ''),
+    boxes: String(row.boxes || ''),
+    price: String(row.price || ''),
+    priceType: String(row.priceType || ''),
+    colors: Array.isArray(row.colors) ? row.colors.filter(color => color && typeof color.name === 'string') : [],
+  };
+}
+
+function vacantLine(line: Draft) {
+  return !line.productCode.trim() && num(line.pairs) <= 0 && num(line.boxes) <= 0;
 }
 
 function withBlank(rows: Draft[]) {
@@ -142,21 +193,29 @@ function LangMini({ lang, setLang }: { lang: Lang; setLang: (lang: Lang) => void
 
 function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, lang, setLang, onSignOut }: { account: Account; shipments: Shipment[]; token: string; onSent: () => void; dateLabel: (value: string) => string; money: (value: number) => string; fmt: (value: number) => string; lang: Lang; setLang: (lang: Lang) => void; onSignOut: () => void }) {
   const { t } = useI18n();
-  const [date, setDate] = useState(() => tashkentDay());
-  const [note, setNote] = useState('');
-  const [lines, setLines] = useState<Draft[]>(() => [blank(factoryCodeOf(account))]);
+  const factoryCode = factoryCodeOf(account);
+  const saved = useMemo(() => readDraft(account.id), [account.id]);
+  const savedEdit = saved?.editingId ? shipments.find(item => item.id === saved.editingId && item.status !== 'accepted') : null;
+  const [date, setDate] = useState(() => readDraft(account.id)?.date || tashkentDay());
+  const [note, setNote] = useState(() => readDraft(account.id)?.note || '');
+  const [lines, setLines] = useState<Draft[]>(() => {
+    const restored = (readDraft(account.id)?.lines ?? []).map(row => hydrateLine(row, factoryCodeOf(account)));
+    return restored.some(line => !vacantLine(line)) ? withBlank(restored) : [blank(factoryCodeOf(account))];
+  });
   const [error, setError] = useState('');
   const [flash, setFlash] = useState('');
   const [busy, setBusy] = useState(false);
   const [section, setSection] = useState<'waybill' | 'history' | 'profile'>('waybill');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingStatus, setEditingStatus] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(() => savedEdit?.id ?? null);
+  const [editingStatus, setEditingStatus] = useState<string | null>(() => savedEdit ? savedEdit.status : null);
   const [navOpen, setNavOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-factory-nav') === 'icons');
   useEffect(() => { localStorage.setItem('smart-ombor-factory-nav', rail ? 'icons' : 'full'); }, [rail]);
   const [historyStatus, setHistoryStatus] = useState<'all' | 'sent' | 'accepted' | 'declined'>('all');
   const [query, setQuery] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
+  const passportSeq = useRef(new Map<string, number>());
+  const skipDraft = useRef(false);
 
   const totals = useMemo(() => lines.reduce((sum, line) => {
     sum.pairs += unitsOf(line);
@@ -165,32 +224,56 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     return sum;
   }, { pairs: 0, boxes: 0, amount: 0 }), [lines]);
 
+  useEffect(() => {
+    if (skipDraft.current) { skipDraft.current = false; return; }
+    const meaningful = Boolean(editingId) || Boolean(note.trim()) || lines.some(line => !vacantLine(line));
+    if (!meaningful) { clearDraft(account.id); return; }
+    writeDraft(account.id, { date, note, lines, editingId, editingStatus });
+  }, [account.id, date, note, lines, editingId, editingStatus]);
+
   const patch = (key: string, next: Partial<Draft>) => setLines(rows => withBlank(rows.map(row => row.key === key ? { ...row, ...next } : row)));
-  const fillPassport = (line: Draft, next?: Partial<Draft>) => {
-    const merged = { ...line, ...next };
-    const code = merged.productCode.trim();
-    if (!code) { if (next) patch(line.key, next); return; }
-    const qs = new URLSearchParams({ code, factory: factoryCodeOf(account) });
+  const fillPassport = (key: string, next?: Partial<Draft>) => {
+    const seq = (passportSeq.current.get(key) || 0) + 1;
+    passportSeq.current.set(key, seq);
+    let merged: Draft | null = null;
+    setLines(rows => {
+      const current = rows.find(row => row.key === key);
+      if (!current) return rows;
+      merged = { ...current, ...next };
+      return withBlank(rows.map(row => row.key === key ? merged! : row));
+    });
+    const code = merged?.productCode.trim() || '';
+    if (!code || !merged) return;
+    const qs = new URLSearchParams({ code, factory: factoryCode });
     if (merged.size.trim()) qs.set('size', merged.size.trim());
     if (merged.groupCode.trim()) qs.set('group', merged.groupCode.trim());
     void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; groupCode?: string; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
-      if (!data?.found) { if (next) patch(line.key, next); return; }
-      patch(line.key, {
-        ...next,
-        ...(!merged.groupCode.trim() && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
-        ...(!merged.size.trim() && data.size ? { size: data.size } : {}),
-        ...(!merged.price.trim() && (data.cost || data.salePrice) ? { price: String(data.cost || data.salePrice) } : {}),
-        ...(!merged.priceType && data.priceType ? { priceType: data.priceType } : {}),
-      });
-    }).catch(() => { if (next) patch(line.key, next); });
+      if (passportSeq.current.get(key) !== seq || !data?.found) return;
+      const pack = data.packSize && data.packSize > 1 ? String(Math.round(data.packSize)) : '';
+      const cost = Number(data.cost || data.salePrice || 0);
+      const price = cost > 0 ? String(Math.round(cost)) : '';
+      setLines(rows => withBlank(rows.map(row => {
+        if (row.key !== key) return row;
+        return {
+          ...row,
+          ...(!row.groupCode.trim() && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
+          ...(!row.size.trim() && data.size ? { size: data.size } : {}),
+          ...(!row.pairs.trim() && pack ? { pairs: pack } : {}),
+          ...(!row.price.trim() && price ? { price } : {}),
+          ...(!row.priceType && data.priceType ? { priceType: data.priceType } : {}),
+        };
+      })));
+    }).catch(() => undefined);
   };
 
   const resetForm = () => {
+    skipDraft.current = true;
+    clearDraft(account.id);
     setEditingId(null);
     setEditingStatus(null);
     setDate(tashkentDay());
     setNote('');
-    setLines([blank(factoryCodeOf(account))]);
+    setLines([blank(factoryCode)]);
   };
 
   const beginRevise = (item: Shipment) => {
@@ -217,15 +300,17 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
   };
 
   const submit = async () => {
-    const filled = lines.filter(started);
+    const filled = lines.filter(line => !vacantLine(line));
     if (!filled.length) { setError(t('zavod.emptyLine')); return; }
     if (filled.some(line => !line.productCode.trim())) { setError(t('zavod.needCode')); return; }
     if (filled.some(line => !line.size.trim())) { setError(t('zavod.needSize')); return; }
-    if (filled.some(line => num(line.pairs) <= 0 || num(line.boxes) <= 0 || num(line.price) <= 0)) { setError(t('zavod.needQty')); return; }
-    if (filled.some(line => unitsOf(line) <= 0)) { setError(t('zavod.needQty')); return; }
+    if (filled.some(line => num(line.pairs) <= 0 || num(line.boxes) <= 0 || num(line.price) <= 0 || unitsOf(line) <= 0)) {
+      setError(t('zavod.needQty'));
+      return;
+    }
     const payload = filled.map(line => ({
       id: editingId ? line.key : undefined,
-      factoryCode: factoryCodeOf(account),
+      factoryCode,
       sectionCode: codeValue(line.groupCode),
       productId: null,
       productName: null,
@@ -248,7 +333,10 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({ error: '' })) as { error?: string };
-        setError(body.error === 'need_size' ? t('zavod.needSize') : t('zavod.needQty'));
+        if (response.status === 401 || body.error === 'unauthorized') { setError(t('zavod.invalid')); return; }
+        if (body.error === 'need_size') { setError(t('zavod.needSize')); return; }
+        if (body.error === 'empty') { setError(t('zavod.emptyLine')); return; }
+        setError(t('zavod.sendFailed'));
         return;
       }
       const body = await response.json();
@@ -321,11 +409,11 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
-          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillPassport(line, { productCode: codeValue(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
-          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!isBordoSize(line.size) && line.size ? <option value={line.size}>{line.size}</option> : null}{BORDO_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
-          <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line, { pairs: digits(e.target.value) })}/></label>
+          <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillPassport(line.key, { productCode: codeValue(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
+          <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line.key, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!isBordoSize(line.size) && line.size ? <option value={line.size}>{line.size}</option> : null}{BORDO_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+          <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line.key, { pairs: digits(e.target.value) })}/></label>
           <label className="yx-cell"><span>{t('zavod.boxes')}</span><input className="input" aria-label={t('zavod.boxes')} inputMode="numeric" value={line.boxes} onChange={e => patch(line.key, { boxes: digits(e.target.value) })}/></label>
-          <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })} onBlur={e => fillPassport(line, { price: digits(e.target.value) })}/></label>
+          <label className="yx-cell"><span>{t('zavod.price')}</span><input className="input" aria-label={t('zavod.price')} inputMode="numeric" value={line.price} onChange={e => patch(line.key, { price: digits(e.target.value) })} onBlur={e => fillPassport(line.key, { price: digits(e.target.value) })}/></label>
           <label className="yx-cell yx-sum-cell"><span>{t('zavod.sum')}</span><input className="input yx-sum" aria-label={t('zavod.sum')} value={sum ? money(sum) : ''} readOnly/></label>
           <button type="button" className="icon-btn" disabled={lines.length < 2} onClick={() => setLines(rows => { const next = rows.filter(row => row.key !== line.key); return next.length ? next : [blank(factoryCodeOf(account))]; })} aria-label={t('zavod.remove')}><Trash2 size={15}/></button>
         </div>;
