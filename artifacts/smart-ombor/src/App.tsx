@@ -87,12 +87,16 @@ const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
-const roleOptions: AppUserRole[] = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst'];
+const roleOptions: AppUserRole[] = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'analyst'];
 
 /* ---------- small helpers ---------- */
 function useRole() {
   const { t } = useI18n();
-  return (role: AppUserRole | string) => t(`role.${role}` as TKey);
+  return (role: AppUserRole | string) => {
+    const key = `role.${role}` as TKey;
+    const label = t(key);
+    return label === key ? role : label;
+  };
 }
 function useStatusLabel() {
   const { t } = useI18n();
@@ -174,7 +178,7 @@ function LocalSignInNotice() {
 /* ---------- entry ---------- */
 const LOCAL_SESSION = 'smart-ombor-session';
 const RETURN_PATH = 'smart-ombor-return';
-const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'branch_manager', 'analyst', 'accountant', 'worker', 'office'] as const;
+const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'analyst', 'accountant', 'worker'] as const;
 type LocalSession = { token: string; name: string; login: string; role: string };
 
 function readLocalSession(): LocalSession | null {
@@ -1246,12 +1250,17 @@ function AccessPanel() {
   const [name, setName] = useState('');
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('worker');
+  const [role, setRole] = useState(() => roleLabel('worker'));
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [reveal, setReveal] = useState(false);
   const headers = { authorization: `Bearer ${session?.token || ''}`, 'content-type': 'application/json' };
+  const resolveRole = (value: string) => {
+    const trimmed = value.trim().replace(/\s+/g, ' ');
+    const matched = accessRoles.find(item => item === trimmed || roleLabel(item) === trimmed);
+    return matched || trimmed;
+  };
   const load = async () => {
     const response = await fetch('/api/local-accounts', { headers });
     if (response.ok) setRows(await response.json());
@@ -1259,9 +1268,10 @@ function AccessPanel() {
   useEffect(() => { void load(); }, []);
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!login.trim() || password.length < 4) { setNote(t('auth.accessShort')); return; }
+    const nextRole = resolveRole(role);
+    if (!login.trim() || password.length < 4 || nextRole.length < 2) { setNote(t('auth.accessShort')); return; }
     setBusy(true); setNote('');
-    const response = await fetch('/api/local-accounts', { method: 'POST', headers, body: JSON.stringify({ name, login, password, role }) });
+    const response = await fetch('/api/local-accounts', { method: 'POST', headers, body: JSON.stringify({ name, login, password, role: nextRole }) });
     setBusy(false);
     if (response.status === 401) {
       sessionStorage.removeItem(LOCAL_SESSION);
@@ -1273,7 +1283,7 @@ function AccessPanel() {
     if (response.status === 409) { setNote(t('auth.accessExists')); return; }
     if (!response.ok) { setNote(t('auth.accessShort')); return; }
     setRows(await response.json());
-    setName(''); setLogin(''); setPassword('');
+    setName(''); setLogin(''); setPassword(''); setRole(roleLabel('worker'));
   };
   const remove = async (id: string) => {
     const response = await fetch(`/api/local-accounts/${id}`, { method: 'DELETE', headers });
@@ -1285,7 +1295,11 @@ function AccessPanel() {
         <Field label={t('auth.accessName')} testId="field-access-name"><TextInput testId="input-access-name" value={name} onChange={event => setName(event.target.value)}/></Field>
         <Field label={t('auth.login')} testId="field-access-login"><TextInput testId="input-access-login" value={login} onChange={event => setLogin(event.target.value)} autoComplete="off"/></Field>
         <Field label={t('auth.password')} testId="field-access-password"><PasswordField value={password} onChange={setPassword} testId="input-access-password" autoComplete="new-password"/></Field>
-        <Field label={t('auth.accessRole')} testId="field-access-role"><SelectInput value={role} onChange={setRole} testId="select-access-role">{accessRoles.map(item => <option key={item} value={item}>{roleLabel(item)}</option>)}</SelectInput></Field>
+        <Field label={t('auth.accessRole')} testId="field-access-role">
+          <input className="input" list="access-role-suggestions" value={role} onChange={event => setRole(event.target.value)} placeholder={t('auth.accessRolePh')} autoComplete="off" data-testid="select-access-role"/>
+          <datalist id="access-role-suggestions">{accessRoles.map(item => <option key={item} value={roleLabel(item)}/>)}</datalist>
+          <small className="field-hint">{t('auth.accessRoleHint')}</small>
+        </Field>
         <div className="form-actions span-2 access-create"><Button testId="button-access-create" type="submit" disabled={busy}>{busy ? t('common.saving') : t('auth.accessCreate')}</Button></div>
       </div>
     </form>

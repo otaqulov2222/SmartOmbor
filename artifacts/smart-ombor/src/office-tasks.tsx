@@ -121,7 +121,11 @@ export function OfficeTasksPage() {
   };
   const pct = (n: number) => stats.total ? Math.round((n / stats.total) * 100) : 0;
 
-  const roleLabel = (role: string) => t(`role.${role}` as TKey);
+  const roleLabel = (role: string) => {
+    const key = `role.${role}` as TKey;
+    const label = t(key);
+    return label === key ? role : label;
+  };
   const peopleFiltered = useMemo(() => {
     const q = peopleQuery.trim().toLowerCase();
     return people.filter(item => {

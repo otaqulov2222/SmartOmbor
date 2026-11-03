@@ -6,9 +6,16 @@ import { dataFile } from "../lib/data-dir";
 
 const router: IRouter = Router();
 const FILE = dataFile("accounts.json");
-const ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "branch_manager", "analyst", "accountant", "worker", "office"] as const;
+const KNOWN_ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "analyst", "accountant", "worker"] as const;
 
-type Account = { id: string; name: string; login: string; password: string; role: (typeof ROLES)[number] };
+type Account = { id: string; name: string; login: string; password: string; role: string };
+
+function normalizeRole(value: string) {
+  const role = value.trim().replace(/\s+/g, " ").slice(0, 48);
+  if (role.length < 2) return "";
+  const known = KNOWN_ROLES.find((item) => item === role);
+  return known || role;
+}
 type Store = { secret: string; accounts: Account[]; sessions: Record<string, string> };
 
 const sessions = new Map<string, string>();
@@ -156,8 +163,8 @@ router.post("/local-accounts", (req, res) => {
   const login = String(req.body?.login ?? "").trim();
   const password = String(req.body?.password ?? "");
   const name = String(req.body?.name ?? "").trim() || login;
-  const role = String(req.body?.role ?? "");
-  if (!login || password.length < 4 || !ROLES.includes(role as Account["role"])) {
+  const role = normalizeRole(String(req.body?.role ?? ""));
+  if (!login || password.length < 4 || !role) {
     res.status(400).json({ error: "invalid" });
     return;
   }
@@ -166,7 +173,7 @@ router.post("/local-accounts", (req, res) => {
     res.status(409).json({ error: "exists" });
     return;
   }
-  store.accounts.push({ id: randomUUID(), name, login, password, role: role as Account["role"] });
+  store.accounts.push({ id: randomUUID(), name, login, password, role });
   write(store);
   res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole })));
 });

@@ -284,7 +284,8 @@ html:has(.tasks) body::-webkit-scrollbar,
 .task-block-head h3 { margin: 0; }
 .task-block .field span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .task-block .field span em { font-style: normal; color: #94a3b8; font-weight: 600; font-size: .75rem; }
-.task-textarea { min-height: 118px; resize: vertical; }
+.task-textarea { min-height: 118px; resize: none; }
+.task-block textarea.input { resize: none; min-height: 72px; height: auto; }
 .task-avatar {
   width: 28px; height: 28px; border-radius: 999px; display: inline-grid; place-items: center;
   background: #dbeafe; color: #1d4ed8; font-size: .78rem; font-weight: 800; flex: none;

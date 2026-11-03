@@ -100,7 +100,11 @@ async function loadPdfFonts() {
 
 export function OfficeReportPage() {
   const { t, date, fmt } = useI18n();
-  const roleLabel = (role: string) => t(`role.${role}` as TKey);
+  const roleLabel = (role: string) => {
+    const key = `role.${role}` as TKey;
+    const label = t(key);
+    return label === key ? role : label;
+  };
   const today = tashkentDay();
   const [mode, setMode] = useState<Mode>('day');
   const [day, setDay] = useState(today);
