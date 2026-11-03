@@ -327,22 +327,27 @@ export function OfficeTasksPage() {
           <div className="task-pane">
             <section className="task-block">
               <h3>{t('office.mainInfo')}</h3>
-              <label className="field"><span>{t('office.taskName')} · {title.length}/200</span>
+              <label className="field"><span>{t('office.taskName')}<em>{title.length}/200</em></span>
                 <input className="input" value={title} onChange={event => setTitle(event.target.value)} maxLength={200} placeholder={t('office.taskNamePh')} required/>
               </label>
-              <label className="field"><span>{t('office.taskDesc')} · {body.length}/2000</span>
-                <textarea className="input" value={body} onChange={event => setBody(event.target.value)} rows={6} maxLength={2000} placeholder={t('office.taskText')}/>
+              <label className="field"><span>{t('office.taskDesc')}<em>{body.length}/2000</em></span>
+                <textarea className="input task-textarea" value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={2000} placeholder={t('office.taskText')}/>
               </label>
             </section>
             <section className="task-block">
-              <h3>{t('office.assignees')}</h3>
+              <div className="task-block-head">
+                <h3>{t('office.assignees')}</h3>
+                <span className="task-picked">{picked.length} {t('office.selected')}</span>
+              </div>
               <p className="muted task-hint">{t('office.assigneesHint')}</p>
-              <div className="tabel-people">
+              <div className="task-people">
                 {people.length ? people.map(item => (
-                  <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
+                  <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>
+                    <span className="task-avatar">{item.name.slice(0, 1)}</span>
+                    {item.name}
+                  </button>
                 )) : <p className="muted">{t('office.noPeople')}</p>}
               </div>
-              <span className="task-picked">{picked.length} {t('office.selected')}</span>
             </section>
             <section className="task-block">
               <h3>{t('office.deadlineBlock')}</h3>
@@ -351,44 +356,56 @@ export function OfficeTasksPage() {
                 <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={event => setDueTime(event.target.value)}/></label>
               </div>
               <p className="field-label">{t('office.importance')}</p>
-              <div className="tabel-prio">
+              <div className="task-prio">
                 {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
                   <button type="button" key={id} className={`is-${id} ${priority === id ? 'is-on' : ''}`} onClick={() => setPriority(id)}>{t(key)}</button>
                 ))}
               </div>
-              <label className="task-check"><input type="checkbox" checked={acceptDeadline} onChange={event => setAcceptDeadline(event.target.checked)}/> {t('office.acceptDeadline')}</label>
-              <p className="muted task-hint">{t('office.acceptDeadlineHint')}</p>
+              <label className="task-check"><input type="checkbox" checked={acceptDeadline} onChange={event => setAcceptDeadline(event.target.checked)}/> <span><b>{t('office.acceptDeadline')}</b><small>{t('office.acceptDeadlineHint')}</small></span></label>
             </section>
             <section className="task-block">
               <h3>{t('office.filesBlock')}</h3>
               <label className="task-drop">
-                <Paperclip size={20}/>
+                <span className="task-drop-ico"><Paperclip size={18}/></span>
                 <span>{t('office.filesDrop')}</span>
                 <small>{t('office.filesHint')}</small>
                 <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.mp4" onChange={event => setFiles(Array.from(event.target.files || []).slice(0, 5))}/>
               </label>
               {files.length > 0 && <ul className="task-file-list">{files.map(file => <li key={file.name}>{file.name}</li>)}</ul>}
-              <label className="field"><span>{t('office.extraComment')} · {comment.length}/500</span>
-                <textarea className="input" value={comment} onChange={event => setComment(event.target.value)} rows={3} maxLength={500} placeholder={t('office.extraCommentPh')}/>
+              <label className="field"><span>{t('office.extraComment')}<em>{comment.length}/500</em></span>
+                <textarea className="input" value={comment} onChange={event => setComment(event.target.value)} rows={2} maxLength={500} placeholder={t('office.extraCommentPh')}/>
               </label>
             </section>
           </div>
 
           <div className="task-pane">
             <section className="task-block task-giver">
-              <span className="task-role-badge">{t('office.giver')}</span>
-              <b>{t('office.you')} · {me}</b>
-              <em>{t('office.auto')}</em>
+              <span className="task-avatar is-lg">{me.slice(0, 1)}</span>
+              <div>
+                <span className="task-role-badge">{t('office.giver')}</span>
+                <b>{t('office.you')} · {me}</b>
+                <em>{t('office.auto')}</em>
+              </div>
             </section>
             <section className="task-block">
               <h3>{t('office.taskStatus')}</h3>
               <ol className="task-flow">
-                <li className="is-on"><b>{t('office.stNew')}</b><span>{t('office.stNewHint')}</span><i>{t('office.nowTag')}</i></li>
-                <li><b>{t('office.stAccepted')}</b><span>{t('office.stAcceptedHint')}</span></li>
-                <li><b>{t('office.stProgress')}</b><span>{t('office.stProgressHint')}</span></li>
-                <li><b>{t('office.late')}</b><span>{t('office.stLateHint')}</span></li>
-                <li><b>{t('office.stReview')}</b><span>{t('office.stReviewHint')}</span></li>
-                <li><b>{t('office.colDone')}</b><span>{t('office.stDoneHint')}</span></li>
+                {([
+                  ['office.stNew', 'office.stNewHint', true],
+                  ['office.stAccepted', 'office.stAcceptedHint', false],
+                  ['office.stProgress', 'office.stProgressHint', false],
+                  ['office.late', 'office.stLateHint', false],
+                  ['office.stReview', 'office.stReviewHint', false],
+                  ['office.colDone', 'office.stDoneHint', false],
+                ] as const).map(([titleKey, hintKey, on]) => (
+                  <li key={titleKey} className={on ? 'is-on' : ''}>
+                    <span className="task-flow-dot"/>
+                    <div>
+                      <b>{t(titleKey)}{on && <i>{t('office.nowTag')}</i>}</b>
+                      <span>{t(hintKey)}</span>
+                    </div>
+                  </li>
+                ))}
               </ol>
             </section>
             <section className="task-block">
@@ -401,23 +418,18 @@ export function OfficeTasksPage() {
                 <option value="1w">{t('office.remind1w')}</option>
               </select>
               <p className="muted task-hint">{t('office.remindHint')}</p>
-              <label className="task-check"><input type="checkbox" checked={recurring} onChange={event => setRecurring(event.target.checked)}/> {t('office.recurring')}</label>
+              <label className="task-check"><input type="checkbox" checked={recurring} onChange={event => setRecurring(event.target.checked)}/> <span><b>{t('office.recurring')}</b></span></label>
               {recurring && <select className="input" value={recurringKind} onChange={event => setRecurringKind(event.target.value as 'weekly' | 'daily' | 'monthly')}>
                 <option value="daily">{t('office.recDaily')}</option>
                 <option value="weekly">{t('office.recWeekly')}</option>
                 <option value="monthly">{t('office.recMonthly')}</option>
               </select>}
               <p className="field-label">{t('office.visibility')}</p>
-              <div className="tabel-chips">
+              <div className="task-seg">
                 <button type="button" className={visibility === 'shared' ? 'is-on' : ''} onClick={() => setVisibility('shared')}>{t('office.visShared')}</button>
                 <button type="button" className={visibility === 'private' ? 'is-on' : ''} onClick={() => setVisibility('private')}>{t('office.visPrivate')}</button>
               </div>
             </section>
-            {note && <p className="muted">{note}</p>}
-            <div className="task-create-actions">
-              <button type="submit" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length}><Send size={16}/> {t('office.createTask')}</button>
-              <button type="button" className="btn btn-secondary" onClick={() => setOpenNew(false)}>{t('common.cancel')}</button>
-            </div>
           </div>
 
           <div className="task-pane task-side">
@@ -430,27 +442,35 @@ export function OfficeTasksPage() {
               {sideTab === 'chat' && <>
                 <p className="task-side-head">{picked.length ? picked.map(id => people.find(item => item.id === id)?.name || id).join(', ') : t('office.pickAssigneesFirst')}</p>
                 <div className="task-side-empty">
-                  <MessageSquare size={36}/>
+                  <span className="task-empty-ico"><MessageSquare size={28}/></span>
                   <b>{t('office.noChat')}</b>
                   <span>{t('office.noChatBody')}</span>
                 </div>
                 <div className="task-chat-input">
                   <input className="input" value={draftMsg} onChange={event => setDraftMsg(event.target.value)} placeholder={t('office.chatPh')} disabled={!picked.length}/>
-                  <button type="button" className="btn btn-primary btn-sm" disabled={!picked.length || !draftMsg.trim()} onClick={() => setDraftMsg('')}><Send size={14}/></button>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={!picked.length || !draftMsg.trim()} onClick={() => setDraftMsg('')} aria-label={t('office.tabChat')}><Send size={14}/></button>
                 </div>
                 <p className="muted task-hint">{t('office.chatSaveHint')}</p>
               </>}
               {sideTab === 'files' && <div className="task-side-empty">
-                <Paperclip size={36}/>
+                <span className="task-empty-ico"><Paperclip size={28}/></span>
                 <b>{files.length ? `${files.length}` : t('office.noFiles')}</b>
                 <span>{files.length ? files.map(file => file.name).join(', ') : t('office.filesHint')}</span>
               </div>}
               {sideTab === 'history' && <div className="task-side-empty">
-                <ClipboardList size={36}/>
+                <span className="task-empty-ico"><ClipboardList size={28}/></span>
                 <b>{t('office.noHistory')}</b>
                 <span>{t('office.noHistoryBody')}</span>
               </div>}
             </div>
+          </div>
+        </div>
+
+        <div className="task-editor-foot">
+          {note && <p className="muted">{note}</p>}
+          <div className="task-create-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => setOpenNew(false)}>{t('common.cancel')}</button>
+            <button type="submit" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length}><Send size={16}/> {t('office.createTask')}</button>
           </div>
         </div>
       </form>
