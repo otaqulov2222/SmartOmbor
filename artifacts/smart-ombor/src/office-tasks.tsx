@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ClipboardList, Eye, FileText,
-  LayoutGrid, List, MessageSquare, Paperclip, PlayCircle, Plus, Search, Send, ShieldCheck, X,
+  Check, ChevronDown, LayoutGrid, List, MessageSquare, Paperclip, PlayCircle, Plus, Search, Send, ShieldCheck, X,
 } from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
 import { officeHeaders } from '@/office';
@@ -62,6 +62,10 @@ export function OfficeTasksPage() {
   const [dueTime, setDueTime] = useState('18:00');
   const [priority, setPriority] = useState<Priority>('normal');
   const [picked, setPicked] = useState<string[]>([]);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [peopleQuery, setPeopleQuery] = useState('');
+  const [filterOfis, setFilterOfis] = useState(true);
+  const [filterDorixona, setFilterDorixona] = useState(true);
   const [remindBefore, setRemindBefore] = useState('1d');
   const [recurring, setRecurring] = useState(false);
   const [recurringKind, setRecurringKind] = useState<'weekly' | 'daily' | 'monthly'>('weekly');
@@ -122,10 +126,26 @@ export function OfficeTasksPage() {
   };
   const pct = (n: number) => stats.total ? Math.round((n / stats.total) * 100) : 0;
 
+  const roleLabel = (role: string) => t(`role.${role}` as TKey);
+  const isOfisRole = (role: string) => ['office', 'super_admin', 'manager', 'accountant', 'analyst'].includes(role);
+  const peopleFiltered = useMemo(() => {
+    const q = peopleQuery.trim().toLowerCase();
+    return people.filter(item => {
+      if (!filterOfis && isOfisRole(item.role)) return false;
+      if (!filterDorixona && !isOfisRole(item.role)) return false;
+      if (!filterOfis && !filterDorixona) return false;
+      if (q && !`${item.name} ${item.login} ${item.role}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [people, peopleQuery, filterOfis, filterDorixona]);
+  const togglePerson = (id: string) => {
+    setPicked(list => list.includes(id) ? list.filter(item => item !== id) : [...list, id]);
+  };
   const resetForm = () => {
     setTitle(''); setBody(''); setPicked([]); setPriority('normal'); setDueDate(today); setDueTime('18:00');
     setRemindBefore('1d'); setRecurring(false); setRecurringKind('weekly'); setAcceptDeadline(false);
     setVisibility('shared'); setComment(''); setFiles([]); setDraftMsg(''); setNote(''); setSideTab('chat');
+    setPeopleOpen(false); setPeopleQuery(''); setFilterOfis(true); setFilterDorixona(true);
   };
   const openCreate = () => { resetForm(); setOpenNew(true); };
   const createTask = async () => {
@@ -346,19 +366,49 @@ export function OfficeTasksPage() {
                 <textarea className="input task-textarea" value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={2000} placeholder={t('office.taskText')}/>
               </label>
             </section>
-            <section className="task-block">
+            <section className="task-block task-assignee-block">
               <div className="task-block-head">
+                <h3>{t('office.assigneeOne')}</h3>
+                <div className="task-scope">
+                  <label className={filterOfis ? 'is-on' : ''}><input type="checkbox" checked={filterOfis} onChange={event => setFilterOfis(event.target.checked)}/> {t('office.scopeOffice')}</label>
+                  <label className={filterDorixona ? 'is-on' : ''}><input type="checkbox" checked={filterDorixona} onChange={event => setFilterDorixona(event.target.checked)}/> {t('office.scopeShop')}</label>
+                </div>
+              </div>
+              <p className="field-label">{t('office.assigneeOne')}</p>
+              <div className={`task-picker ${peopleOpen ? 'is-open' : ''}`}>
+                <button type="button" className="task-picker-trigger" onClick={() => setPeopleOpen(open => !open)} aria-expanded={peopleOpen}>
+                  <span>{picked.length ? t('office.selectedCount', { n: picked.length }) : t('office.pickEmployee')}</span>
+                  <ChevronDown size={16}/>
+                </button>
+                {peopleOpen && <div className="task-picker-menu">
+                  <label className="task-picker-search"><Search size={15}/><input className="input" value={peopleQuery} onChange={event => setPeopleQuery(event.target.value)} placeholder={t('office.taskSearch')} autoFocus/></label>
+                  <div className="task-picker-list">
+                    {peopleFiltered.length ? peopleFiltered.map(item => {
+                      const on = picked.includes(item.id);
+                      return <button type="button" key={item.id} className={on ? 'is-on' : ''} onClick={() => togglePerson(item.id)}>
+                        <span className="task-avatar">{item.name.slice(0, 1)}</span>
+                        <span className="task-picker-meta"><b>{item.name}</b><small>{roleLabel(item.role)}</small></span>
+                        {on && <Check size={16}/>}
+                      </button>;
+                    }) : <p className="muted task-picker-empty">{people.length ? t('office.empty') : t('office.noPeople')}</p>}
+                  </div>
+                </div>}
+              </div>
+              <div className="task-block-head task-assignee-multi">
                 <h3>{t('office.assignees')}</h3>
                 <span className="task-picked">{picked.length} {t('office.selected')}</span>
               </div>
               <p className="muted task-hint">{t('office.assigneesHint')}</p>
               <div className="task-people">
-                {people.length ? people.map(item => (
-                  <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>
+                {picked.length ? picked.map(id => {
+                  const item = people.find(row => row.id === id);
+                  if (!item) return null;
+                  return <button type="button" key={id} className="is-on" onClick={() => togglePerson(id)}>
                     <span className="task-avatar">{item.name.slice(0, 1)}</span>
                     {item.name}
-                  </button>
-                )) : <p className="muted">{t('office.noPeople')}</p>}
+                    <X size={14}/>
+                  </button>;
+                }) : <p className="muted">{t('office.pickEmployee')}</p>}
               </div>
             </section>
             <section className="task-block">
