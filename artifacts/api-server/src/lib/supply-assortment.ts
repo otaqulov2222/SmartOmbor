@@ -596,6 +596,56 @@ async function variantsOf(productId: string) {
   return rows;
 }
 
+function freshAssortmentCode() {
+  return `${Date.now()}${Math.floor(Math.random() * 900 + 100)}`.slice(-12);
+}
+
+async function assortmentHoldersOfCode(code: string) {
+  const wanted = code.trim();
+  if (!wanted) return [] as string[];
+  const ids = new Set<string>();
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string }> }>(
+      `/entity/assortment?limit=20&filter=${encodeURIComponent(`code=${quoteFilterValue(wanted)}`)}`,
+    );
+    for (const row of page.rows) {
+      if (row.id) ids.add(row.id);
+    }
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+  }
+  return [...ids];
+}
+
+/** Modifikatsiya kodi ota tovar yoki boshqa kartochka bilan to‘qnashsa — yangi unikal kod beradi. */
+async function ensureUniqueVariantCode(variant: VariantRow, product: ProductRow): Promise<VariantRow> {
+  if (!variant.id) return variant;
+  const current = String(variant.code || "").trim();
+  const parentCode = String(product.code || "").trim();
+  const holders = current ? await assortmentHoldersOfCode(current) : [];
+  const clashes = holders.some((id) => id !== variant.id) || (current && parentCode && current === parentCode);
+  if (!clashes) return variant;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const next = freshAssortmentCode();
+    if (next === current || next === parentCode) continue;
+    try {
+      const saved = await moyskladSend<VariantRow>(`/entity/variant/${encodeURIComponent(variant.id)}`, { code: next }, "PUT");
+      logger.warn({ variant: variant.id, from: current || null, to: next, product: product.name }, "MoySklad variant code reassigned");
+      return { ...variant, ...saved, code: saved.code || next };
+    } catch (error) {
+      const parameter = uniqueNameParameter(error);
+      if (uniqueNameConflict(error) && (parameter === "code" || !parameter)) continue;
+      if (permissionDenied(error)) {
+        logger.warn({ variant: variant.id, err: error instanceof Error ? error.message : error }, "MoySklad variant code repair skipped");
+        return variant;
+      }
+      if (!(error instanceof MoySkladError)) throw error;
+      logger.warn({ variant: variant.id, err: error.message }, "MoySklad variant code repair retry");
+    }
+  }
+  return variant;
+}
+
 async function ensureVariant(
   product: ProductRow,
   color: string,
@@ -606,7 +656,14 @@ async function ensureVariant(
   const wanted = normalizeBordoColor(color);
   if (!wanted) return null;
   const found = known.find((row) => sameBordoColor(variantColor(row), wanted));
-  if (found?.id) return found;
+  if (found?.id) {
+    const fixed = await ensureUniqueVariantCode(found, product);
+    if (fixed.code !== found.code) {
+      const index = known.findIndex((row) => row.id === found.id);
+      if (index >= 0) known[index] = fixed;
+    }
+    return fixed;
+  }
   const rang = await colorCharacteristic();
   if (!rang || !product.meta) return null;
   const prices = (product.salePrices ?? []).filter((price) => price.priceType?.meta && price.value != null);
@@ -630,20 +687,28 @@ async function ensureVariant(
   ];
   for (const body of attempts) {
     try {
+      // Kodni hech qachon ota tovardan ko‘chirmaymiz — MoySklad o‘zi bersin, keyin unikaliligini tekshiramiz.
+      delete body.code;
       const created = await moyskladSend<VariantRow>("/entity/variant", body);
-      used.add(barcode);
-      known.push({ ...created, characteristics: [{ name: "rang", value: wanted }] });
-      return created;
+      used.add(String((body.barcodes as Array<{ ean13?: string }> | undefined)?.[0]?.ean13 || barcode));
+      const fixed = await ensureUniqueVariantCode({ ...created, characteristics: [{ name: "rang", value: wanted }] }, product);
+      known.push(fixed);
+      return fixed;
     } catch (error) {
       const rows = await variantsOf(product.id).catch(() => known);
       known.splice(0, known.length, ...rows);
       const hit = rows.find((row) => sameBordoColor(variantColor(row), wanted));
-      if (hit?.id) return hit;
+      if (hit?.id) return ensureUniqueVariantCode(hit, product);
       const parameter = uniqueNameParameter(error);
       if (parameter === "barcodes" && body.barcodes) {
         const next = nextInternalEan13(catalog, used);
         body.barcodes = [{ ean13: next }];
         logger.warn({ color, product: product.name, parameter }, "MoySklad variant barcode retry");
+        continue;
+      }
+      if (parameter === "code") {
+        body.code = freshAssortmentCode();
+        logger.warn({ color, product: product.name, parameter }, "MoySklad variant code retry");
         continue;
       }
       if (uniqueNameConflict(error) || permissionDenied(error)) {
@@ -1191,7 +1256,16 @@ export async function buildSupplyPositions(
 
   const colorIds = [...new Set(resolved.flatMap((item) => (item.parent && receiptParts(item.line).some((part) => part.color) ? [item.parent.id] : [])))];
   await Promise.all(colorIds.map(async (id) => {
-    if (!variantCache.has(id)) variantCache.set(id, await variantsOf(id));
+    if (variantCache.has(id)) return;
+    const parent = parents.get(id) ?? resolved.find((item) => item.parent?.id === id)?.parent;
+    const rows = await variantsOf(id);
+    if (!parent) {
+      variantCache.set(id, rows);
+      return;
+    }
+    // Kirim oldidan modifikatsiya kodlari to‘qnashuvini tuzatamiz — UI “код должен быть уникальным” chiqmasin.
+    const fixed = await Promise.all(rows.map((row) => ensureUniqueVariantCode(row, parent)));
+    variantCache.set(id, fixed);
   }));
 
   const positions: SupplyPosition[] = [];
