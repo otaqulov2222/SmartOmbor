@@ -490,19 +490,13 @@ async function productByExactName(name: string) {
 async function recoverExistingProduct(name: string) {
   const wanted = name.trim().replace(/\s+/g, " ");
   if (!wanted) return null;
-  // Avval aniq nom — fuzzy search noto‘g‘ri kodni eski kartochkaga ulab yubormasin.
+  // Faqat aniq nom — fuzzy recovery 277/106 kabi kodlarni eski kartochkaga ulab yubormasin.
   for (const alias of nameAliases(wanted)) {
     const hit = await productByExactName(alias);
     if (hit && recoveredCardFits(hit, wanted)) return hit;
   }
   const exact = await productByExactName(wanted);
-  if (exact && recoveredCardFits(exact, wanted)) return exact;
-  await sleep(80);
-  for (const alias of nameAliases(wanted)) {
-    const hit = await searchListedName(alias);
-    if (hit && recoveredCardFits(hit, wanted) && sameListedName(hit.name || "", alias)) return hit;
-  }
-  return null;
+  return exact && recoveredCardFits(exact, wanted) ? exact : null;
 }
 
 async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
