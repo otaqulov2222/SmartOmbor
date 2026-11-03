@@ -59,7 +59,7 @@ function requireFactory(req: Request, res: Response, next: NextFunction) {
 
 router.get("/partner-alerts", async (_req, res, next) => {
   try {
-    await refreshPartnersIfNeeded();
+    void refreshPartnersIfNeeded();
     const pending = listShipments().filter((item) => item.status === "sent").length;
     res.json({ pending, revision: partnerRevision() });
   } catch (error) {

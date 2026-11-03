@@ -19,6 +19,7 @@ function normalizeRole(value: string) {
 type Store = { secret: string; accounts: Account[]; sessions: Record<string, string> };
 
 const sessions = new Map<string, string>();
+let memory: Store | null = null;
 
 function same(left: string, right: string) {
   const a = createHash("sha256").update(left).digest();
@@ -27,13 +28,14 @@ function same(left: string, right: string) {
 }
 
 function write(store: Store) {
+  memory = store;
   mkdirSync(path.dirname(FILE), { recursive: true });
   const tmp = `${FILE}.tmp`;
   writeFileSync(tmp, JSON.stringify(store));
   renameSync(tmp, FILE);
 }
 
-function read(): Store {
+function readDisk(): Store {
   try {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
     if (parsed.secret && Array.isArray(parsed.accounts)) {
@@ -51,15 +53,32 @@ function read(): Store {
   return store;
 }
 
-function ensureAdmin(store: Store) {
+function read(): Store {
+  if (!memory) memory = readDisk();
+  return memory;
+}
+
+/** Returns true when admin row was created or corrected. */
+function ensureAdmin(store: Store): boolean {
   const admin = store.accounts.find((account) => account.login === "bordouzadmin");
   if (admin) {
-    admin.password = "2026@admin";
-    admin.role = "super_admin";
-    if (!admin.name.trim()) admin.name = "Administrator";
-    return;
+    let changed = false;
+    if (admin.password !== "2026@admin") {
+      admin.password = "2026@admin";
+      changed = true;
+    }
+    if (admin.role !== "super_admin") {
+      admin.role = "super_admin";
+      changed = true;
+    }
+    if (!admin.name.trim()) {
+      admin.name = "Administrator";
+      changed = true;
+    }
+    return changed;
   }
   store.accounts.unshift({ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" });
+  return true;
 }
 
 function remember(token: string, login: string) {
@@ -71,15 +90,18 @@ function remember(token: string, login: string) {
 
 function forgetLogin(login: string) {
   const store = read();
+  let changed = false;
   for (const [token, owner] of sessions) {
     if (owner !== login) continue;
     sessions.delete(token);
     delete store.sessions[token];
+    changed = true;
   }
-  write(store);
+  if (changed) write(store);
 }
 
 const loaded = read();
+if (ensureAdmin(loaded)) write(loaded);
 for (const [token, login] of Object.entries(loaded.sessions)) sessions.set(token, login);
 
 function actor(req: Request): Account | null {
@@ -141,8 +163,7 @@ router.post("/local-login", (req, res) => {
   const login = String(req.body?.login ?? "").trim();
   const password = String(req.body?.password ?? "");
   const store = read();
-  ensureAdmin(store);
-  write(store);
+  if (ensureAdmin(store)) write(store);
   const account = store.accounts.find((item) => item.login === login && same(item.password, password));
   if (!account) {
     res.status(401).json({ error: "invalid" });

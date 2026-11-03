@@ -155,7 +155,7 @@ router.get("/moysklad/status", async (_req, res) => {
   }
 
   const cached = peekCatalog();
-  if (catalogSyncing() && cached) {
+  if (cached) {
     res.json(
       GetMoyskladStatusResponse.parse({
         configured: true,
@@ -168,29 +168,38 @@ router.get("/moysklad/status", async (_req, res) => {
     return;
   }
 
-  try {
-    const [organization, catalog] = await Promise.all([
-      moysklad<{ rows?: Array<{ name?: string }> }>("/entity/organization?limit=1"),
-      loadCatalog(),
-    ]);
+  if (catalogSyncing()) {
     res.json(
       GetMoyskladStatusResponse.parse({
         configured: true,
         connected: true,
-        companyName: organization.rows?.[0]?.name ?? catalog.companyName,
-        lastSync: catalog.loadedAt,
-        error: catalog.error,
+        companyName: null,
+        lastSync: catalogLoadedAt(),
+        error: null,
+      }),
+    );
+    return;
+  }
+
+  try {
+    const organization = await moysklad<{ rows?: Array<{ name?: string }> }>("/entity/organization?limit=1");
+    res.json(
+      GetMoyskladStatusResponse.parse({
+        configured: true,
+        connected: true,
+        companyName: organization.rows?.[0]?.name ?? null,
+        lastSync: catalogLoadedAt(),
+        error: null,
       }),
     );
   } catch (error) {
     const problem = fail(error);
-    const catalog = peekCatalog();
     res.json(
       GetMoyskladStatusResponse.parse({
         configured: true,
         connected: false,
-        companyName: catalog?.companyName ?? null,
-        lastSync: catalog?.loadedAt ?? catalogLoadedAt(),
+        companyName: null,
+        lastSync: catalogLoadedAt(),
         error: problem.status === 403 ? "MoySklad API ruxsati yo‘q" : problem.message,
       }),
     );
@@ -295,7 +304,7 @@ router.post("/moysklad/sync", async (_req, res) => {
 
 router.get("/dashboard", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     const products = catalog.products;
     res.json(
       GetDashboardResponse.parse({
@@ -529,7 +538,7 @@ router.get("/dashboard/day", async (req, res, next) => {
 
 router.get("/dashboard/warehouses", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     const totals = new Map<string, { id: string; name: string; units: number; products: number; inTransit: number; value: number }>();
     for (const warehouse of catalog.warehouses) {
       totals.set(warehouse.id, { id: warehouse.id, name: warehouse.name, units: 0, products: 0, inTransit: 0, value: 0 });
@@ -550,7 +559,7 @@ router.get("/dashboard/warehouses", async (_req, res, next) => {
 
 router.get("/warehouses", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalog();
     res.json(ListWarehousesResponse.parse(catalog.warehouses));
   } catch (error) {
     next(error);

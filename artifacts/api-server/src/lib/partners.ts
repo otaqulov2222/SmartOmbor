@@ -72,6 +72,8 @@ let revision = 1;
 let memoryUpdatedAt = 0;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let syncingRemote: Promise<void> | null = null;
+let lastRemoteCheckAt = 0;
+const REMOTE_SYNC_MIN_MS = 5_000;
 
 function emptyStore(): Store {
   return { accounts: [], shipments: [], sessions: [] };
@@ -144,12 +146,15 @@ function syncFromFile() {
   }
 }
 
-export async function refreshPartnersIfNeeded() {
+export async function refreshPartnersIfNeeded(force = false) {
   syncFromFile();
+  const now = Date.now();
+  if (!force && now - lastRemoteCheckAt < REMOTE_SYNC_MIN_MS) return;
   if (syncingRemote) {
     await syncingRemote;
     return;
   }
+  lastRemoteCheckAt = now;
   syncingRemote = (async () => {
     try {
       const result = await pool.query<{ document: unknown; updated_at: Date | string }>(
@@ -199,6 +204,7 @@ export async function flushPartners() {
   const store = load();
   await persistStore(store);
   memoryUpdatedAt = Math.max(memoryUpdatedAt, Date.now());
+  lastRemoteCheckAt = 0;
 }
 
 function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {

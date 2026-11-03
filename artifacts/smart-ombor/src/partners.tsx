@@ -488,8 +488,8 @@ export function PartnersPage() {
   const held = useRef<Row | null>(null);
   const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
-    staleTime: 0,
-    refetchInterval: 500,
+    staleTime: 5_000,
+    refetchInterval: 4_000,
     queryFn: async () => {
       const response = await fetch('/api/partner-alerts');
       if (!response.ok) throw new Error('alerts');
@@ -497,15 +497,18 @@ export function PartnersPage() {
     },
   });
   const revision = alerts.data?.revision;
+  const lastRevision = useRef<number | null>(null);
   useEffect(() => {
     if (revision == null) return;
+    if (lastRevision.current === revision) return;
+    lastRevision.current = revision;
     void cache.refetchQueries({ queryKey: ['partner-factories'] });
     void cache.refetchQueries({ queryKey: ['partner-detail'] });
   }, [revision, cache]);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
-    staleTime: 0,
-    refetchInterval: 1_500,
+    staleTime: 8_000,
+    refetchInterval: 10_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
@@ -718,8 +721,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
-    staleTime: 0,
-    refetchInterval: 800,
+    staleTime: 4_000,
+    refetchInterval: 5_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
