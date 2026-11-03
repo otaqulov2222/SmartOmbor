@@ -465,26 +465,34 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
 }
 
 /** Faqat aniq name= filter — fuzzy search bilan noto‘g‘ri kartochka olinmasin. */
-async function productByExactName(name: string) {
+async function listExactNamedProducts(name: string) {
   const trimmed = name.trim().replace(/\s+/g, " ");
-  if (!trimmed) return null;
+  if (!trimmed) return [] as ProductRow[];
+  const rows: ProductRow[] = [];
+  const seen = new Set<string>();
   const remembered = cachedByName(trimmed);
-  if (remembered && recoveredCardFits(remembered, trimmed) && sameListedName(remembered.name || "", trimmed)) {
-    return remembered;
+  if (remembered?.id && recoveredCardFits(remembered, trimmed) && sameListedName(remembered.name || "", trimmed)) {
+    rows.push(remembered);
+    seen.add(remembered.id);
   }
   try {
-    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=${encodeURIComponent(`name=${quoteFilterValue(trimmed)}`)}`);
-    const hit = pickNamedRow(page.rows, trimmed);
-    if (hit?.id) {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=25&filter=${encodeURIComponent(`name=${quoteFilterValue(trimmed)}`)}`);
+    for (const hit of page.rows) {
+      if (!hit.id || seen.has(hit.id) || !sameListedName(hit.name || "", trimmed)) continue;
       const row = await productById(hit.id);
-      if (row && recoveredCardFits(row, trimmed) && sameListedName(row.name || "", trimmed)) {
-        return rememberProduct(row, [trimmed]);
-      }
+      if (!row?.id || !recoveredCardFits(row, trimmed) || !sameListedName(row.name || "", trimmed)) continue;
+      rows.push(rememberProduct(row, [trimmed]));
+      seen.add(row.id);
     }
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
   }
-  return null;
+  return rows;
+}
+
+async function productByExactName(name: string) {
+  const rows = await listExactNamedProducts(name);
+  return rows[0] ?? null;
 }
 
 async function recoverExistingProduct(name: string) {
@@ -499,21 +507,52 @@ async function recoverExistingProduct(name: string) {
   return exact && recoveredCardFits(exact, wanted) ? exact : null;
 }
 
-async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
+function listedNameKey(name: string) {
+  return name.trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US");
+}
+
+type CreatedProduct = ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> };
+
+function asCreated(row: ProductRow): CreatedProduct {
+  return row as CreatedProduct;
+}
+
+async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<CreatedProduct> {
   const payload: Record<string, unknown> = { ...body };
   const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
-  // Yangi kartochka uchun oldindan qidiruv daqiqalar oladi — conflict bo‘lsa recovery ishlaydi.
+  // MoySkladda nom UNIQUE EMAS — oldindan aniq nom bo‘yicha qayta ishlatish majburiy, aks holda dublikat kodlar chiqadi.
+  if (wanted) {
+    const exact = await productByExactName(wanted);
+    if (exact && recoveredCardFits(exact, wanted) && sameListedName(exact.name || "", wanted)) {
+      return asCreated(exact);
+    }
+  }
+  // skipLookup faqat sekin fuzzy search’ni o‘tkazib yuboradi; aniq nom yuqorida tekshirildi.
   if (!opts?.skipLookup) {
     const listed = wanted ? await productByName(wanted) : null;
-    if (listed && recoveredCardFits(listed, wanted)) return listed;
+    if (listed && recoveredCardFits(listed, wanted)) return asCreated(listed);
   }
   for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 3; attempt += 1) {
     try {
-      const created = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
-      return rememberProduct(created, [wanted]);
+      const created = await moyskladSend<CreatedProduct>("/entity/product", payload);
+      // Parallel/race: bir xil nomli eski kartochka bo‘lsa — yangisini tashlab eskisini ishlatamiz (MoySklad nomni unique qilmaydi).
+      if (wanted && created.id) {
+        const twins = await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]);
+        const older = twins.find((row) => row.id && row.id !== created.id);
+        if (older?.id) {
+          logger.warn({ wanted, created: created.id, reuse: older.id }, "MoySklad duplicate name after create — reusing existing card");
+          void optionalWrite(
+            () => moyskladSend(`/entity/product/${encodeURIComponent(created.id!)}`, undefined, "DELETE"),
+            "MoySklad duplicate product delete skipped",
+            { created: created.id, reuse: older.id },
+          );
+          return asCreated(rememberProduct(older, [wanted]));
+        }
+      }
+      return asCreated(rememberProduct(created, [wanted]));
     } catch (error) {
       const existing = wanted ? await recoverExistingProduct(wanted) : null;
-      if (existing) return existing;
+      if (existing) return asCreated(existing);
       if (uniqueNameConflict(error) || writeDropped(error)) {
         const parameter = uniqueNameParameter(error);
         if (parameter === "barcodes") {
@@ -543,7 +582,7 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
     }
   }
   const fallback = wanted ? await recoverExistingProduct(wanted) : null;
-  if (fallback) return fallback;
+  if (fallback) return asCreated(fallback);
   throw new MoySkladError("MoySklad mahsulot yaratilmadi", 403);
 }
 
@@ -1061,14 +1100,28 @@ export async function buildSupplyPositions(
   }
   const createQueue: typeof resolved = [];
   const seenKeys = new Set<string>();
+  const seenNames = new Set<string>();
   for (const item of resolved) {
     if (item.parent) continue;
-    if (seenKeys.has(item.key)) continue;
+    const nameKey = listedNameKey(item.name);
+    if (seenKeys.has(item.key) || (nameKey && seenNames.has(nameKey))) continue;
     seenKeys.add(item.key);
+    if (nameKey) seenNames.add(nameKey);
     createQueue.push(item);
   }
   const CREATE_POOL = 8;
   const createT0 = Date.now();
+  // Bir xil nom parallel create qilinmasin — MoySklad nomni unique qilmaydi, dublikat kod chiqadi.
+  const createInflight = new Map<string, Promise<CreatedProduct>>();
+  const createOnce = (name: string, factory: () => Promise<CreatedProduct>) => {
+    const key = listedNameKey(name);
+    let pending = createInflight.get(key);
+    if (!pending) {
+      pending = factory();
+      createInflight.set(key, pending);
+    }
+    return pending;
+  };
   // Narx tipini bir marta hisobla — har create da listedAllPrices takrorlanmasin.
   const listedCache = new Map<string, Awaited<ReturnType<typeof listedAllPrices>>>();
   for (let i = 0; i < createQueue.length; i += CREATE_POOL) {
@@ -1076,8 +1129,6 @@ export async function buildSupplyPositions(
     await Promise.all(batch.map(async (item) => {
       const packSize = packSizeOf(item.line);
       const folder = item.folder;
-      const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
-      usedBarcodes.add(barcode);
       const sales = salesForLine(item.line);
       const salesKey = sales ? JSON.stringify(sales) : "";
       let listed = salesKey ? listedCache.get(salesKey) : null;
@@ -1085,16 +1136,20 @@ export async function buildSupplyPositions(
         listed = await listedAllPrices(undefined, sales, currencyMeta);
         listedCache.set(salesKey, listed);
       }
-      const product = await createProduct({
-        name: item.name,
-        uom: { meta: uomMeta(PIECE_UOM) },
-        barcodes: [{ ean13: barcode }],
-        ...(folder ? { productFolder: { meta: folder.meta } } : {}),
-        ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
-        ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-        ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
-        ...(listed ? { salePrices: priceBody(listed) } : {}),
-      }, { skipLookup: true });
+      const product = await createOnce(item.name, async () => {
+        const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
+        usedBarcodes.add(barcode);
+        return createProduct({
+          name: item.name,
+          uom: { meta: uomMeta(PIECE_UOM) },
+          barcodes: [{ ean13: barcode }],
+          ...(folder ? { productFolder: { meta: folder.meta } } : {}),
+          ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
+          ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
+          ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
+          ...(listed ? { salePrices: priceBody(listed) } : {}),
+        }, { skipLookup: true });
+      });
       if (listed) product.salePrices = listed;
       if (folder) product.folderName = folder.name;
       product.barcodes = barcodeValues(product.barcodes);
