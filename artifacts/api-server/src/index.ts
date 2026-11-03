@@ -28,23 +28,26 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-void hydratePartners()
-  .catch((error: unknown) => {
-    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
-  })
-  .finally(() => {
-    app.listen(port, (err) => {
-      if (err) {
-        logger.error({ err }, "Error listening on port");
-        process.exit(1);
-      }
+app.listen(port, (err) => {
+  if (err) {
+    logger.error({ err }, "Error listening on port");
+    process.exit(1);
+  }
 
-      logger.info({ port }, "Server listening");
+  logger.info({ port }, "Server listening");
+  void hydratePartners()
+    .then(() => {
       resumePendingSupplies();
-      void loadCatalog().catch((error: unknown) => {
-        logger.warn({ err: error }, "Catalog cache was not warmed");
-      });
-      startTelegramDigest();
+    })
+    .catch((error: unknown) => {
+      logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
+    });
+  // Warm catalog off the critical path so login/HTML stay responsive.
+  setImmediate(() => {
+    void loadCatalog().catch((error: unknown) => {
+      logger.warn({ err: error }, "Catalog cache was not warmed");
     });
   });
+  startTelegramDigest();
+});
 }

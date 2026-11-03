@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { dataFile } from "./data-dir";
 import { idFromHref, money, moysklad, moyskladAll, MoySkladError } from "./moysklad";
@@ -159,23 +160,27 @@ let epoch = 0;
 
 function remember(next: Catalog) {
   cache = next;
-  try {
-    mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-    const tmp = `${CACHE_FILE}.tmp`;
-    const body = {
-      ...next,
-      imageHrefs: [...next.imageHrefs.entries()],
-    };
-    writeFileSync(tmp, JSON.stringify(body));
-    renameSync(tmp, CACHE_FILE);
-  } catch (error) {
-    logger.warn({ err: error }, "Catalog cache was not saved");
-  }
+  // Persist off the event loop so huge catalog JSON never freezes login/HTML.
+  void (async () => {
+    try {
+      mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+      const tmp = `${CACHE_FILE}.tmp`;
+      const body = {
+        ...next,
+        imageHrefs: [...next.imageHrefs.entries()],
+      };
+      await writeFile(tmp, JSON.stringify(body));
+      renameSync(tmp, CACHE_FILE);
+    } catch (error) {
+      logger.warn({ err: error }, "Catalog cache was not saved");
+    }
+  })();
 }
 
-function recall(): Catalog | null {
+async function recall(): Promise<Catalog | null> {
   try {
-    const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Catalog & { imageHrefs: Array<[string, string]> };
+    const text = await readFile(CACHE_FILE, "utf8");
+    const raw = JSON.parse(text) as Catalog & { imageHrefs: Array<[string, string]> };
     if (!raw?.loadedAt || !Array.isArray(raw.products)) return null;
     const catalog = { ...raw, imageHrefs: new Map(raw.imageHrefs ?? []) };
     alignStoreStock(catalog);
@@ -529,12 +534,12 @@ export function resetCatalog() {
 }
 
 export async function loadCatalog(force = false): Promise<Catalog> {
-  if (!cache) cache = recall();
+  if (!cache) cache = await recall();
   if (!force && cache) return cache;
   try {
     return await (pending ?? startBuild());
   } catch (error) {
-    if (!cache) cache = recall();
+    if (!cache) cache = await recall();
     if (cache) {
       logger.warn({ err: error }, "MoySklad refresh failed; keeping saved catalog");
       return cache;
@@ -593,7 +598,7 @@ async function fillSuppliers(catalog: Catalog): Promise<Catalog> {
 }
 
 export function updateCatalogProduct(id: string, patch: Partial<CatalogProduct>) {
-  const current = cache ?? recall();
+  const current = cache;
   const product = current?.products.find((item) => item.id === id);
   if (!current || !product) return;
   Object.assign(product, patch);
@@ -603,7 +608,7 @@ export function updateCatalogProduct(id: string, patch: Partial<CatalogProduct>)
 }
 
 export function applyReceiptStock(entries: Array<{ productId: string; warehouseId: string; quantity: number }>) {
-  const current = cache ?? recall();
+  const current = cache;
   if (!current) return;
   for (const entry of entries) {
     if (entry.quantity <= 0) continue;
@@ -635,7 +640,7 @@ export function applyReceiptStock(entries: Array<{ productId: string; warehouseI
 }
 
 export function addCatalogProduct(product: CatalogProduct) {
-  const current = cache ?? recall();
+  const current = cache;
   if (!current || current.products.some((item) => item.id === product.id)) return;
   current.products.unshift(product);
   current.productCount = current.products.length;
@@ -645,7 +650,6 @@ export function addCatalogProduct(product: CatalogProduct) {
 }
 
 export function peekCatalog(): Catalog | null {
-  if (!cache) cache = recall();
   return cache;
 }
 

@@ -55,10 +55,17 @@ app.use("/api", router);
 
 const webRoot = path.resolve(process.cwd(), "artifacts/smart-ombor/dist/public");
 if (existsSync(webRoot)) {
-  app.use(express.static(webRoot, { index: false, maxAge: "1h" }));
+  app.use(express.static(webRoot, {
+    index: false,
+    maxAge: "1h",
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
+    },
+  }));
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.path.startsWith("/api")) return next();
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.join(webRoot, "index.html"), (error) => {
       if (error) next(error);
     });
