@@ -295,8 +295,22 @@
   color: #93c5fd; border: 1px solid rgb(59 130 246 / .45);
   border-radius: 999px; padding: 8px 18px; font-size: .88rem;
 }
-.office-task { background: #101c31; border: 1px solid var(--o-line); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
-.office-task p { color: var(--o-muted); font-size: .9rem; margin: 6px 0 10px; }
+.office-task { background: #101c31; border: 1px solid var(--o-line); border-radius: 16px; padding: 14px; margin-bottom: 10px; display: grid; gap: 8px; }
+.office-task.is-late { border-color: rgb(239 68 68 / .45); }
+.office-task-top { display: flex; flex-wrap: wrap; gap: 6px; }
+.office-pill {
+  display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px;
+  font-size: .72rem; font-weight: 700; background: #1e293b; color: #cbd5e1;
+}
+.office-pill.is-low { background: #1e293b; color: #94a3b8; }
+.office-pill.is-normal { background: #172554; color: #93c5fd; }
+.office-pill.is-high { background: #422006; color: #fbbf24; }
+.office-pill.is-urgent { background: #450a0a; color: #fca5a5; }
+.office-pill.is-assigned { background: #1e293b; color: #cbd5e1; }
+.office-pill.is-accepted, .office-pill.is-progress { background: #172554; color: #93c5fd; }
+.office-pill.is-review { background: #2e1065; color: #c4b5fd; }
+.office-pill.is-done { background: #052e16; color: #86efac; }
+.office-task p { color: var(--o-muted); font-size: .9rem; margin: 0; }
 .office-task-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .office-task-actions button {
   background: #2563eb; color: #fff; border-radius: 12px; padding: 10px 14px;

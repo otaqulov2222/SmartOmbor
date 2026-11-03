@@ -406,9 +406,9 @@ export function OfficePage() {
         </div>
       </div>
       <div className="office-hero-copy">
-        <small>{t('office.hello')}</small>
+        <small>{me?.director ? t('office.hello') : t('office.cabinet')}</small>
         <h1>{me?.name || '—'}</h1>
-        <p>{me?.login} · {me?.office.name}</p>
+        <p>{me?.director ? `${me?.login} · ${me?.office.name}` : t('office.cabinetLead')}</p>
       </div>
     </section>
     <div className="office-body">
@@ -497,18 +497,26 @@ export function OfficePage() {
       {!me?.director && <>
         <h2>{t('office.myTasks')}</h2>
         <p className="lead">{t('office.tasksBody')}</p>
-        {ownTasks.length ? ownTasks.map(task => <article className="office-task" key={task.id}>
-          <b>{task.title}</b>
-          <p>{task.description || t('office.noDesc')}</p>
-          <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
-          <div className="office-task-actions">
-            {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
-            {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
-            {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
-            {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
-            {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
-          </div>
-        </article>) : <p className="office-empty">{t('office.noTasks')}</p>}
+        {ownTasks.length ? ownTasks.map(task => {
+          const statusKey = task.status === 'assigned' ? 'office.stNew' : task.status === 'accepted' ? 'office.stAccepted' : task.status === 'progress' ? 'office.stProgress' : task.status === 'review' ? 'office.stReview' : 'office.colDone';
+          const prioKey = task.priority === 'low' ? 'office.pLow' : task.priority === 'high' ? 'office.pHigh' : task.priority === 'urgent' ? 'office.pNow' : 'office.pMid';
+          return <article className={`office-task is-${task.priority}${task.late ? ' is-late' : ''}`} key={task.id}>
+            <div className="office-task-top">
+              <span className={`office-pill is-${task.priority}`}>{t(prioKey as TKey)}</span>
+              <span className={`office-pill is-${task.status}`}>{t(statusKey as TKey)}</span>
+            </div>
+            <b>{task.title}</b>
+            <p>{task.description || t('office.noDesc')}</p>
+            <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
+            <div className="office-task-actions">
+              {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
+              {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
+              {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
+              {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
+              {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
+            </div>
+          </article>;
+        }) : <p className="office-empty">{t('office.noTasks')}</p>}
       </>}
       {me?.director && <Link href="/office/report" className="office-report">{t('office.report')}</Link>}
     </div>

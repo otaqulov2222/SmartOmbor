@@ -87,7 +87,39 @@ const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
+const warehouseAllowedHrefs = new Set([
+  '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
+  '/scanner', '/recommendations', '/office', '/tasks',
+]);
+const warehousePrimaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner'];
+const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
+];
 const roleOptions: AppUserRole[] = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'analyst'];
+
+/* ---------- role access ---------- */
+function isDirector(role?: string | null) {
+  return role === 'super_admin' || role === 'manager';
+}
+function isWarehouse(role?: string | null) {
+  return role === 'warehouse_manager' || role === 'warehouse_staff';
+}
+function isEmployeeCabinet(role?: string | null) {
+  return Boolean(role) && !isDirector(role) && !isWarehouse(role);
+}
+function homeForRole(role?: string | null) {
+  if (isEmployeeCabinet(role)) return '/office';
+  return '/dashboard';
+}
+function pathAllowedForRole(path: string, role?: string | null) {
+  if (isDirector(role)) return true;
+  if (isEmployeeCabinet(role)) return path === '/office';
+  if (isWarehouse(role)) {
+    if (path === '/office/report' || path === '/office/tasks') return false;
+    return warehouseAllowedHrefs.has(path);
+  }
+  return true;
+}
 
 /* ---------- small helpers ---------- */
 function useRole() {
@@ -229,9 +261,12 @@ function LocalLoginForm() {
       const here = `${window.location.pathname}${window.location.search}`;
       const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
-      const target = body.role === 'office'
+      const preferred = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '';
+      const target = isEmployeeCabinet(body.role)
         ? '/office'
-        : here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '/dashboard';
+        : preferred && pathAllowedForRole(preferred.split('?')[0], body.role)
+          ? preferred
+          : homeForRole(body.role);
       setLocation(target);
     } catch {
       setError(true);
@@ -264,9 +299,14 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const { t, fmt } = useI18n();
   const [path] = useLocation(); const [open, setOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
-  const inMore = moreHrefs.includes(path);
-  const inOfficeNav = officeHrefs.includes(path);
-  const director = ['super_admin', 'manager'].includes(readLocalSession()?.role || '');
+  const role = readLocalSession()?.role || '';
+  const director = isDirector(role);
+  const warehouse = isWarehouse(role);
+  const visiblePrimary = warehouse ? warehousePrimaryHrefs : primaryHrefs;
+  const visibleMoreGroups = warehouse ? warehouseMoreGroups : moreGroups;
+  const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
+  const inMore = visibleMoreHrefs.includes(path);
+  const inOfficeNav = officeHrefs.includes(path) || path === '/office';
   const [moreOpen, setMoreOpen] = useState(inMore);
   const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
@@ -282,9 +322,11 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     },
     staleTime: 800,
     refetchInterval: 1_000,
+    enabled: director && !warehouse,
   });
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   const navItem = (href: string) => {
+    if (!pathAllowedForRole(href, role)) return null;
     const item = navigation.find(entry => entry.href === href);
     if (!item) return null;
     const Icon = item.icon;
@@ -311,17 +353,17 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {director && navItem('/office/report')}
             {director && navItem('/office/tasks')}
           </div>}
-          {primaryHrefs.filter(href => href !== '/dashboard').map(href => navItem(href))}
+          {visiblePrimary.filter(href => href !== '/dashboard').map(href => navItem(href))}
           <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
         </div>
-        {moreOpen && <div className="nav-more-panel">{moreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
+        {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
       <div className="sidebar-bottom">
         <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
       </div>
     </aside>
     <div className="main">
-      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/><Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link></div></header>
+      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{(director || warehouse) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
@@ -1299,6 +1341,7 @@ function AccessPanel() {
           <input className="input" list="access-role-suggestions" value={role} onChange={event => setRole(event.target.value)} placeholder={t('auth.accessRolePh')} autoComplete="off" data-testid="select-access-role"/>
           <datalist id="access-role-suggestions">{accessRoles.map(item => <option key={item} value={roleLabel(item)}/>)}</datalist>
           <small className="field-hint">{t('auth.accessRoleHint')}</small>
+          <small className="field-hint">{t('auth.accessRoleAccess')}</small>
         </Field>
         <div className="form-actions span-2 access-create"><Button testId="button-access-create" type="submit" disabled={busy}>{busy ? t('common.saving') : t('auth.accessCreate')}</Button></div>
       </div>
@@ -1506,10 +1549,13 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
       if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
       return <EntryScreen><LocalLoginForm/></EntryScreen>;
     }
-    if (localRole === 'office' && location !== '/office') return <Redirect to="/office"/>;
-    const director = localRole === 'super_admin' || localRole === 'manager';
-    if (!director && (location === '/office/report' || location === '/office/tasks')) return <Redirect to="/office"/>;
-    if (location === '/office') return body;
+    if (isEmployeeCabinet(localRole)) {
+      if (location !== '/office') return <Redirect to="/office"/>;
+      return body;
+    }
+    if (!pathAllowedForRole(location, localRole)) {
+      return <Redirect to={homeForRole(localRole)}/>;
+    }
     return <LocalShell title={title}>{body}</LocalShell>;
   }
   return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
@@ -1521,7 +1567,9 @@ function ProtectedRoute({ titleKey, children }: { titleKey: TKey; children: Reac
 function SignedInHome() {
   const back = sessionStorage.getItem(RETURN_PATH) || '';
   sessionStorage.removeItem(RETURN_PATH);
-  const next = back.startsWith('/') && !back.startsWith('//') ? back : '/dashboard';
+  const role = readLocalSession()?.role;
+  const candidate = back.startsWith('/') && !back.startsWith('//') ? back : '';
+  const next = candidate && pathAllowedForRole(candidate.split('?')[0], role) ? candidate : homeForRole(role);
   return <Redirect to={next}/>;
 }
 function HomeRoute() {
