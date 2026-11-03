@@ -52,7 +52,7 @@ export function OfficeTasksPage() {
   const [prioFilter, setPrioFilter] = useState<'all' | Priority>('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [chip, setChip] = useState<'all' | 'today' | 'week' | 'month' | 'urgent' | 'late' | 'review'>('all');
+  const [chip, setChip] = useState<'all' | 'week' | 'month' | 'urgent'>('all');
   const [openNew, setOpenNew] = useState(false);
   const [open, setOpen] = useState<Task | null>(null);
   const [sideTab, setSideTab] = useState<'chat' | 'files' | 'history'>('chat');
@@ -96,12 +96,9 @@ export function OfficeTasksPage() {
       if (prioFilter !== 'all' && task.priority !== prioFilter) return false;
       if (from && task.dueDate < from) return false;
       if (to && task.dueDate > to) return false;
-      if (chip === 'today') return task.dueDate === today && task.status !== 'done';
       if (chip === 'week') return task.dueDate >= weekFrom && task.dueDate <= today;
       if (chip === 'month') return task.dueDate >= monthFrom && task.dueDate <= today;
       if (chip === 'urgent') return task.priority === 'urgent' || task.priority === 'high';
-      if (chip === 'late') return Boolean(task.late) && task.status !== 'done';
-      if (chip === 'review') return task.status === 'review';
       return true;
     });
   }, [tasks, search, chip, today, prioFilter, from, to]);
@@ -178,17 +175,16 @@ export function OfficeTasksPage() {
     ['analysis', 'office.viewAnalysis', BarChart3],
     ['list', 'office.viewList', List],
   ];
-  const chips: Array<['all' | 'today' | 'week' | 'month' | 'urgent' | 'late' | 'review', TKey]> = [
-    ['all', 'common.all'], ['today', 'office.quickToday'], ['week', 'office.quickWeek'], ['month', 'office.quickMonth'],
-    ['urgent', 'office.quickUrgent'], ['late', 'office.quickLate'], ['review', 'office.quickReview'],
+  const chips: Array<['all' | 'week' | 'month' | 'urgent', TKey]> = [
+    ['all', 'common.all'], ['week', 'office.quickWeek'], ['month', 'office.quickMonth'], ['urgent', 'office.quickUrgent'],
   ];
-  const statCards: Array<{ id: typeof chip | 'total' | 'progress' | 'done'; label: string; value: number; tone: string; icon: ReactNode }> = [
-    { id: 'total', label: t('common.total'), value: stats.total, tone: '', icon: <ClipboardList size={18}/> },
-    { id: 'late', label: t('office.colLateTasks'), value: stats.late, tone: 'is-late', icon: <AlertTriangle size={18}/> },
-    { id: 'today', label: t('office.colToday'), value: stats.today, tone: 'is-today', icon: <CalendarDays size={18}/> },
-    { id: 'progress', label: t('office.colProgress'), value: stats.progress, tone: 'is-progress', icon: <PlayCircle size={18}/> },
-    { id: 'review', label: t('office.colReview'), value: stats.review, tone: 'is-review', icon: <ShieldCheck size={18}/> },
-    { id: 'done', label: t('office.colDone'), value: stats.done, tone: 'is-done', icon: <CheckCircle2 size={18}/> },
+  const statCards: Array<{ label: string; value: number; tone: string; icon: ReactNode }> = [
+    { label: t('common.total'), value: stats.total, tone: '', icon: <ClipboardList size={18}/> },
+    { label: t('office.colLateTasks'), value: stats.late, tone: 'is-late', icon: <AlertTriangle size={18}/> },
+    { label: t('office.colToday'), value: stats.today, tone: 'is-today', icon: <CalendarDays size={18}/> },
+    { label: t('office.colProgress'), value: stats.progress, tone: 'is-progress', icon: <PlayCircle size={18}/> },
+    { label: t('office.colReview'), value: stats.review, tone: 'is-review', icon: <ShieldCheck size={18}/> },
+    { label: t('office.colDone'), value: stats.done, tone: 'is-done', icon: <CheckCircle2 size={18}/> },
   ];
 
   const card = (task: Task) => (
@@ -245,18 +241,13 @@ export function OfficeTasksPage() {
 
       <div className="task-stats">
         {statCards.map(item => (
-          <button
-            type="button"
-            key={item.id}
-            className={`task-stat ${item.tone} ${(item.id === 'total' && chip === 'all') || chip === item.id ? 'is-on' : ''}`}
-            onClick={() => setChip(item.id === 'total' || item.id === 'progress' || item.id === 'done' ? 'all' : item.id)}
-          >
+          <div key={item.label} className={`task-stat ${item.tone}`}>
             <span className="task-stat-ico">{item.icon}</span>
             <span>{item.label}</span>
             <b>{item.value}</b>
             <div className="task-stat-bar"><i style={{ width: `${pct(item.value)}%` }}/></div>
             <small>{pct(item.value)}%</small>
-          </button>
+          </div>
         ))}
       </div>
     </div>
@@ -274,7 +265,7 @@ export function OfficeTasksPage() {
       <label className="task-date-chip"><span>{t('office.to')}</span><input className="input" type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
       <div className="task-chips">
         {chips.map(([id, key]) => (
-          <button type="button" key={id} className={`${chip === id ? 'is-on' : ''} ${id === 'urgent' || id === 'late' ? 'is-warn' : ''} ${id === 'review' ? 'is-review-chip' : ''}`} onClick={() => setChip(id)}>{t(key)}</button>
+          <button type="button" key={id} className={`${chip === id ? 'is-on' : ''} ${id === 'urgent' ? 'is-warn' : ''}`} onClick={() => setChip(id)}>{t(key)}</button>
         ))}
       </div>
     </div>
