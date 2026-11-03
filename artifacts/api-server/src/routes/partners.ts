@@ -21,6 +21,8 @@ import {
   clearShipmentPosted,
   moyskladDateTime,
   partnerRevision,
+  flushPartners,
+  refreshPartnersIfNeeded,
   tashkentDay,
   deleteAccount,
   deleteShipment,
@@ -55,13 +57,19 @@ function requireFactory(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-router.get("/partner-alerts", (_req, res) => {
-  const pending = listShipments().filter((item) => item.status === "sent").length;
-  res.json({ pending, revision: partnerRevision() });
+router.get("/partner-alerts", async (_req, res, next) => {
+  try {
+    await refreshPartnersIfNeeded();
+    const pending = listShipments().filter((item) => item.status === "sent").length;
+    res.json({ pending, revision: partnerRevision() });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/partner-factories", async (_req, res, next) => {
   try {
+    await refreshPartnersIfNeeded();
     const catalog = peekCatalog();
     const grouped = new Map<string, { name: string; productCount: number; stock: number }>();
     for (const product of catalog?.products ?? []) {
@@ -213,6 +221,7 @@ function lineMatchesCatalogProduct(
 
 router.get("/partner-factories/:id", async (req, res, next) => {
   try {
+    await refreshPartnersIfNeeded();
     const account = getAccount(String(req.params.id));
     if (!account) {
       res.status(404).json({ error: "not_found" });
@@ -1022,6 +1031,7 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
+    await flushPartners();
     if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === saved.id) ?? saved;
     res.json(shipment);
@@ -1048,6 +1058,7 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
+    await flushPartners();
     if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === created.id) ?? created;
     res.status(201).json(shipment);

@@ -320,9 +320,9 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       if (!response.ok) throw new Error('alerts');
       return response.json();
     },
-    staleTime: 800,
-    refetchInterval: 1_000,
-    enabled: director && !warehouse,
+    staleTime: 0,
+    refetchInterval: 500,
+    enabled: director || warehouse,
   });
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   const navItem = (href: string) => {

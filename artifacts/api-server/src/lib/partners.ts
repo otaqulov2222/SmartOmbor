@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
@@ -69,7 +69,9 @@ type Store = {
 const filePath = dataFile("partners.json");
 let memory: Store | null = null;
 let revision = 1;
+let memoryUpdatedAt = 0;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let syncingRemote: Promise<void> | null = null;
 
 function emptyStore(): Store {
   return { accounts: [], shipments: [], sessions: [] };
@@ -118,31 +120,85 @@ export async function hydratePartners() {
   const remote = result.rows[0] ? normalizeStore(result.rows[0].document) : null;
   const hasRemote = Boolean(remote && (remote.accounts.length || remote.shipments.length || remote.sessions.length));
   memory = hasRemote && remote ? remote : readFileStore();
+  memoryUpdatedAt = Date.now();
+  revision = Math.max(revision, memoryUpdatedAt);
   writeFileStore(memory);
   if (!hasRemote) await persistStore(memory);
   logger.info({ accounts: memory.accounts.length, shipments: memory.shipments.length }, "Partner data loaded");
 }
 
+function adoptStore(store: Store, stamp: number) {
+  memory = store;
+  memoryUpdatedAt = Math.max(memoryUpdatedAt, stamp);
+  revision = Math.max(revision, Math.floor(stamp));
+}
+
+function syncFromFile() {
+  try {
+    const mtime = statSync(filePath).mtimeMs;
+    if (!memory || mtime > memoryUpdatedAt + 1) {
+      adoptStore(readFileStore(), mtime);
+    }
+  } catch {
+    memory ??= emptyStore();
+  }
+}
+
+export async function refreshPartnersIfNeeded() {
+  syncFromFile();
+  if (syncingRemote) {
+    await syncingRemote;
+    return;
+  }
+  syncingRemote = (async () => {
+    try {
+      const result = await pool.query<{ document: unknown; updated_at: Date | string }>(
+        "select document, updated_at from partner_store where id = 'main'",
+      );
+      const row = result.rows[0];
+      if (!row) return;
+      const stamp = new Date(row.updated_at).getTime();
+      if (!Number.isFinite(stamp) || stamp <= memoryUpdatedAt) return;
+      const next = normalizeStore(row.document);
+      adoptStore(next, stamp);
+      writeFileStore(next);
+    } catch (error: unknown) {
+      logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner store remote sync failed");
+    } finally {
+      syncingRemote = null;
+    }
+  })();
+  await syncingRemote;
+}
+
 function load(): Store {
-  memory ??= readFileStore();
+  syncFromFile();
+  memory ??= emptyStore();
   return memory;
 }
 
 export function partnerRevision() {
+  syncFromFile();
   return revision;
 }
 
 function save(store: Store) {
-  memory = store;
-  revision += 1;
+  const stamp = Date.now();
+  adoptStore(store, stamp);
   writeFileStore(store);
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    void persistStore(store).catch((error: unknown) => {
-      logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner data was not saved to the database");
-    });
-  }, 250);
+  persistTimer = null;
+  const pending = persistStore(store).catch((error: unknown) => {
+    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner data was not saved to the database");
+  });
+  void pending;
+  return pending;
+}
+
+export async function flushPartners() {
+  const store = load();
+  await persistStore(store);
+  memoryUpdatedAt = Math.max(memoryUpdatedAt, Date.now());
 }
 
 function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {

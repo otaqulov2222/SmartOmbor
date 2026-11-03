@@ -488,8 +488,8 @@ export function PartnersPage() {
   const held = useRef<Row | null>(null);
   const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
-    staleTime: 800,
-    refetchInterval: 1_000,
+    staleTime: 0,
+    refetchInterval: 500,
     queryFn: async () => {
       const response = await fetch('/api/partner-alerts');
       if (!response.ok) throw new Error('alerts');
@@ -499,13 +499,13 @@ export function PartnersPage() {
   const revision = alerts.data?.revision;
   useEffect(() => {
     if (revision == null) return;
-    void cache.invalidateQueries({ queryKey: ['partner-factories'] });
-    void cache.invalidateQueries({ queryKey: ['partner-detail'] });
+    void cache.refetchQueries({ queryKey: ['partner-factories'] });
+    void cache.refetchQueries({ queryKey: ['partner-detail'] });
   }, [revision, cache]);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
-    staleTime: 1_000,
-    refetchInterval: 3_000,
+    staleTime: 0,
+    refetchInterval: 1_500,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
@@ -718,8 +718,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
-    staleTime: 800,
-    refetchInterval: 2_000,
+    staleTime: 0,
+    refetchInterval: 800,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
@@ -1013,7 +1013,11 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
-  const visible = useMemo(() => shipments.filter(shipment => !day || tashkentDay(shipment.date) === day), [shipments, day]);
+  const visible = useMemo(() => shipments.filter(shipment => {
+    if (shipment.status === 'sent') return true;
+    if (!day) return true;
+    return tashkentDay(shipment.date) === day;
+  }), [shipments, day]);
   const pairs = visible.reduce((sum, shipment) => sum + shipment.pairs, 0);
   const amount = visible.reduce((sum, shipment) => sum + shipment.amount, 0);
   const passwordShown = detail.data?.account.password || row.account?.password || '';
