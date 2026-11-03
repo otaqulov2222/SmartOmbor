@@ -158,23 +158,50 @@ let pending: Promise<Catalog> | null = null;
 let lastBuildError: string | null = null;
 let epoch = 0;
 
+let persistQueued: Catalog | null = null;
+let persistRunning = false;
+
 function remember(next: Catalog) {
   cache = next;
-  // Persist off the event loop so huge catalog JSON never freezes login/HTML.
-  void (async () => {
-    try {
-      mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-      const tmp = `${CACHE_FILE}.tmp`;
-      const body = {
-        ...next,
-        imageHrefs: [...next.imageHrefs.entries()],
-      };
-      await writeFile(tmp, JSON.stringify(body));
-      renameSync(tmp, CACHE_FILE);
-    } catch (error) {
-      logger.warn({ err: error }, "Catalog cache was not saved");
+  persistQueued = next;
+  if (persistRunning) return;
+  persistRunning = true;
+  // Katta JSON.stringify event loopni muzlatadi — faqat bo‘sh paytda, bo‘laklab.
+  const pump = () => {
+    const job = persistQueued;
+    persistQueued = null;
+    if (!job) {
+      persistRunning = false;
+      return;
     }
-  })();
+    setTimeout(() => {
+      void (async () => {
+        try {
+          mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+          const plain = {
+            ...job,
+            imageHrefs: [...job.imageHrefs.entries()],
+          };
+          const text = await new Promise<string>((resolve, reject) => {
+            setImmediate(() => {
+              try {
+                resolve(JSON.stringify(plain));
+              } catch (error) {
+                reject(error);
+              }
+            });
+          });
+          await writeFile(CACHE_FILE, text);
+        } catch (error) {
+          logger.warn({ err: error }, "Catalog cache was not saved");
+        } finally {
+          if (persistQueued) pump();
+          else persistRunning = false;
+        }
+      })();
+    }, 1500);
+  };
+  pump();
 }
 
 async function recall(): Promise<Catalog | null> {
@@ -286,7 +313,10 @@ async function build(): Promise<Catalog> {
 
   const products = new Map<string, CatalogProduct>();
   const supplierIds = new Map<string, string>();
-  for (const row of productPage.rows) {
+  for (let i = 0; i < productPage.rows.length; i += 1) {
+    const row = productPage.rows[i];
+    // Event loopni bo‘shatish — parallel kirim so‘rovlari muzlamasin.
+    if (i > 0 && i % 400 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     if (row.archived) continue;
     const id = row.id || idFromHref(row.meta?.href);
     if (!id) continue;
@@ -546,6 +576,42 @@ export async function loadCatalog(force = false): Promise<Catalog> {
     }
     throw error;
   }
+}
+
+let warehousesOnly: CatalogWarehouse[] | null = null;
+
+/** Kirim uchun: xotiradagi katalog yoki faqat omborlar. Diskdagi 5MB+ JSON o‘qilmaydi. */
+export async function loadCatalogForSupply(): Promise<Catalog> {
+  if (cache?.warehouses?.length) return cache;
+  if (!warehousesOnly?.length) {
+    const storesPage = await moyskladAll<StoreRow>("/entity/store");
+    warehousesOnly = storesPage.rows.map((store) => ({
+      id: store.id || idFromHref(store.meta?.href),
+      name: store.name || "Ombor",
+      code: store.code || null,
+      address: store.address || null,
+    }));
+  }
+  const warehouses = warehousesOnly;
+  if (cache) {
+    cache.warehouses = warehouses;
+    return cache;
+  }
+  return {
+    companyName: null,
+    loadedAt: new Date().toISOString(),
+    productCount: 0,
+    products: [],
+    warehouses,
+    stockRows: [],
+    documents: [],
+    salesToday: 0,
+    incomingToday: 0,
+    pendingTransfers: 0,
+    error: null,
+    imageHrefs: new Map(),
+    salesCoverage: { days7: false, days30: false, days90: false },
+  };
 }
 
 let supplierFill: Promise<Catalog> | null = null;

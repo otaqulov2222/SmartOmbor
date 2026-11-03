@@ -104,13 +104,37 @@ const MAX_IN_FLIGHT = 12;
 const MIN_GAP_MS = 5;
 let inFlight = 0;
 let lastStart = 0;
+let reservedSlots = 0;
 const waiters: Array<() => void> = [];
 
+/** Kirim paytida katalog sync slotlarni yeb qo‘ymasligi uchun. */
+export function reserveMoySkladSlots(count: number) {
+  reservedSlots = Math.max(0, Math.min(MAX_IN_FLIGHT - 2, count));
+  flushWaiters();
+}
+
+export function releaseMoySkladSlots() {
+  reservedSlots = 0;
+  flushWaiters();
+}
+
+function slotLimit() {
+  return Math.max(2, MAX_IN_FLIGHT - reservedSlots);
+}
+
+function flushWaiters() {
+  while (waiters.length && inFlight < slotLimit()) {
+    const next = waiters.shift();
+    if (!next) break;
+    inFlight += 1;
+    next();
+  }
+}
+
 async function takeSlot(): Promise<void> {
-  if (inFlight >= MAX_IN_FLIGHT) {
+  if (inFlight >= slotLimit()) {
     await new Promise<void>((resolve) => {
       waiters.push(() => {
-        inFlight += 1;
         resolve();
       });
     });
@@ -124,8 +148,7 @@ async function takeSlot(): Promise<void> {
 
 function freeSlot() {
   inFlight -= 1;
-  const next = waiters.shift();
-  if (next) next();
+  flushWaiters();
 }
 
 function attachRetryAfter(error: MoySkladError, header: string | null): MoySkladError {

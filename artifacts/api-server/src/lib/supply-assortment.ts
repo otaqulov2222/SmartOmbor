@@ -477,11 +477,14 @@ async function recoverExistingProduct(name: string) {
   return fallback && recoveredCardFits(fallback, wanted) ? fallback : null;
 }
 
-async function createProduct(body: Record<string, unknown>): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
+async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
   const payload: Record<string, unknown> = { ...body };
   const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
-  const listed = wanted ? await productByName(wanted) : null;
-  if (listed && recoveredCardFits(listed, wanted)) return listed;
+  // Yangi kartochka uchun oldindan qidiruv daqiqalar oladi — conflict bo‘lsa recovery ishlaydi.
+  if (!opts?.skipLookup) {
+    const listed = wanted ? await productByName(wanted) : null;
+    if (listed && recoveredCardFits(listed, wanted)) return listed;
+  }
   for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 3; attempt += 1) {
     try {
       const created = await moyskladSend<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }>("/entity/product", payload);
@@ -911,6 +914,7 @@ function acceptFactoryProduct(
 export async function findExistingBordoProduct(
   line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+  opts?: { remote?: boolean },
 ): Promise<ProductRow | null> {
   const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
@@ -947,6 +951,9 @@ export async function findExistingBordoProduct(
     }, scope, line);
     if (accepted) return rememberProduct(accepted, [name]);
   }
+  // Kirim tezligi: katalogda yo‘q bo‘lsa remote qidiruvni o‘tkazib yuborish.
+  // Dublikat bo‘lsa createProduct conflict recovery topadi.
+  if (opts?.remote === false) return null;
   const named = name.length >= 2 ? acceptFactoryProduct(await productByName(name), scope, line) : null;
   if (named) return named;
   const code = line.productCode.trim();
@@ -1001,9 +1008,21 @@ export async function buildSupplyPositions(
   const created: ProductRow[] = [];
   const wanted = lines.filter((line) => receiptParts(line).length);
   for (const line of wanted) requireWaybillLine(line);
+  const findInflight = new Map<string, Promise<ProductRow | null>>();
+  const findOnce = (cacheKey: string, line: ShipmentLine) => {
+    let pending = findInflight.get(cacheKey);
+    if (!pending) {
+      // Katalog/local ID yetarli; remote qidiruv yangi tovarlarda daqiqalar olib tashlaydi.
+      pending = findExistingBordoProduct(line, scope, { remote: false });
+      findInflight.set(cacheKey, pending);
+    }
+    return pending;
+  };
+  const findT0 = Date.now();
   resolved.push(...await Promise.all(wanted.map(async (line) => {
     const name = ["Bordo", canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
-    const parent = await findExistingBordoProduct(line, scope);
+    const cacheKey = String(line.productId || productIdentity(line, scope.factoryCode) || name);
+    const parent = await findOnce(cacheKey, line);
     if (parent) rememberProduct(parent, [name]);
     if (parent?.name) {
       const parsed = parseBordoName(parent.name);
@@ -1017,16 +1036,21 @@ export async function buildSupplyPositions(
     }
     return { line, parent, name, key, folder: null as FolderRow | null };
   })));
+  logger.info({ ms: Date.now() - findT0, lines: resolved.length, hits: resolved.filter((row) => row.parent).length }, "kirim findExisting");
   if (!resolved.length) throw new MoySkladError("Kirim qatorlari bo‘sh", 400);
 
   const byIdentity = new Map<string, ProductRow>();
   const byName = new Map<string, ProductRow>();
-  const folders = await productFolders();
+  const posT0 = Date.now();
+  const [folders] = await Promise.all([productFolders(), saleTypes()]);
+  logger.info({ ms: Date.now() - posT0, folderCount: folders.length }, "kirim folders+priceTypes");
   const sectionCodes = [...new Set(resolved.map((item) => item.line.sectionCode.trim()).filter(Boolean))];
   const folderByCode = new Map<string, FolderRow | null>();
+  const foldT0 = Date.now();
   await Promise.all(sectionCodes.map(async (code) => {
     folderByCode.set(code, await ensureFolder(folders, code));
   }));
+  if (sectionCodes.length) logger.info({ ms: Date.now() - foldT0, sections: sectionCodes.length }, "kirim ensureFolder");
   for (const item of resolved) {
     const code = item.line.sectionCode.trim();
     if (code) item.folder = folderByCode.get(code) ?? null;
@@ -1047,8 +1071,10 @@ export async function buildSupplyPositions(
     seenKeys.add(item.key);
     createQueue.push(item);
   }
-  await saleTypes();
   const CREATE_POOL = 8;
+  const createT0 = Date.now();
+  // Narx tipini bir marta hisobla — har create da listedAllPrices takrorlanmasin.
+  const listedCache = new Map<string, Awaited<ReturnType<typeof listedAllPrices>>>();
   for (let i = 0; i < createQueue.length; i += CREATE_POOL) {
     const batch = createQueue.slice(i, i + CREATE_POOL);
     await Promise.all(batch.map(async (item) => {
@@ -1057,7 +1083,12 @@ export async function buildSupplyPositions(
       const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
       usedBarcodes.add(barcode);
       const sales = salesForLine(item.line);
-      const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : null;
+      const salesKey = sales ? JSON.stringify(sales) : "";
+      let listed = salesKey ? listedCache.get(salesKey) : null;
+      if (sales && listed === undefined) {
+        listed = await listedAllPrices(undefined, sales, currencyMeta);
+        listedCache.set(salesKey, listed);
+      }
       const product = await createProduct({
         name: item.name,
         uom: { meta: uomMeta(PIECE_UOM) },
@@ -1067,7 +1098,7 @@ export async function buildSupplyPositions(
         ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
         ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
         ...(listed ? { salePrices: priceBody(listed) } : {}),
-      });
+      }, { skipLookup: true });
       if (listed) product.salePrices = listed;
       if (folder) product.folderName = folder.name;
       product.barcodes = barcodeValues(product.barcodes);
@@ -1080,6 +1111,7 @@ export async function buildSupplyPositions(
       if (!created.some((row) => row.id === product.id)) created.push(product);
     }));
   }
+  if (createQueue.length) logger.info({ ms: Date.now() - createT0, created: createQueue.length }, "kirim createProduct pool");
   for (const item of resolved) {
     if (item.parent) continue;
     const known = byIdentity.get(item.key) || byName.get(item.name) || null;

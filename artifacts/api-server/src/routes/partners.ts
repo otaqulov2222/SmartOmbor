@@ -2,9 +2,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { dataFile } from "../lib/data-dir";
-import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, loadCatalog, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
-import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, writeDropped } from "../lib/moysklad";
+import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import {
@@ -407,9 +407,11 @@ function scheduleSupplyName(shipment: { id: string; number: string; date?: strin
   });
 }
 
-async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name?: string; reused: boolean }> {
-  const existing = await findExistingSupply(shipment);
-  if (existing) return { ...existing, reused: true };
+async function postSupplyDocument(core: Record<string, unknown>, positions: Array<Record<string, unknown>>, shipment: { id: string; number: string; date?: string }, opts?: { skipExistingCheck?: boolean }): Promise<{ id: string; name?: string; reused: boolean }> {
+  if (!opts?.skipExistingCheck) {
+    const existing = await findExistingSupply(shipment);
+    if (existing) return { ...existing, reused: true };
+  }
   const names = [...new Set([chooseSupplyName(shipment), ...supplyNames(shipment).slice(1), `${shipment.number.trim()} ${shipment.id.slice(0, 6)}`])].filter(Boolean);
   const payloads: Array<Record<string, unknown>> = [
     ...names.map((name) => ({ ...core, name, applicable: true, positions })),
@@ -703,22 +705,40 @@ function rememberFactoryAgent(
   }
 }
 
+function agentFromId(id: string, name = ""): SupplyAgent {
+  const base = "https://api.moysklad.ru/api/remap/1.2";
+  return {
+    id,
+    name,
+    meta: { href: `${base}/entity/counterparty/${id}`, type: "counterparty", mediaType: "application/json" },
+  };
+}
+
 async function resolveFactoryAgent(
   account: { id: string; name: string; catalogName: string; code: string; login: string; counterpartyId: string | null; counterpartyName: string | null } | null,
   hint?: { id: string; name: string },
 ): Promise<SupplyAgent | null> {
-  const hinted = hint?.id ? await loadCounterparty(hint.id) : null;
-  const saved = account?.counterpartyId ? await loadCounterparty(account.counterpartyId) : null;
-  const found = account ? await searchFactoryAgent(account) : null;
   const usable = (agent: SupplyAgent | null) => {
     if (!agent) return null;
     if (account && agentConflictsWithFactory(agent.name, account.code)) return null;
     return agent;
   };
-  const chosen = usable(hinted) || usable(saved) || usable(found);
-  if (!chosen) return null;
-  if (account) rememberFactoryAgent(account, chosen);
-  return chosen;
+  // Tez yo‘l: tanlangan/saqlangan kontragent ID yetarli — qidiruvsiz.
+  if (hint?.id) {
+    const hinted = usable(agentFromId(hint.id, hint.name || "")) || usable(await loadCounterparty(hint.id));
+    if (hinted) {
+      if (account) rememberFactoryAgent(account, hinted);
+      return hinted;
+    }
+  }
+  if (account?.counterpartyId) {
+    const saved = usable(agentFromId(account.counterpartyId, account.counterpartyName || "")) || usable(await loadCounterparty(account.counterpartyId));
+    if (saved) return saved;
+  }
+  const found = account ? usable(await searchFactoryAgent(account)) : null;
+  if (!found) return null;
+  if (account) rememberFactoryAgent(account, found);
+  return found;
 }
 
 async function ensureSupplyAgent(supplyId: string, agentMeta: { href: string; type: string; mediaType: string }) {
@@ -743,6 +763,11 @@ async function ensureSupplyAgent(supplyId: string, agentMeta: { href: string; ty
 
 async function writeShipmentSupply(shipmentId: string, storeId: string, agentHint?: { id: string; name: string }): Promise<SupplyResult> {
   const unlock = await acquireSupplyLock(shipmentId);
+  reserveMoySkladSlots(8);
+  const t0 = Date.now();
+  const mark = (step: string, started: number) => {
+    logger.info({ shipment: shipmentId, step, ms: Date.now() - started, totalMs: Date.now() - t0 }, "MoySklad kirim timing");
+  };
   try {
     const shipment = listShipments().find((item) => item.id === shipmentId);
     if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -751,29 +776,24 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
       return { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true };
     }
     const account = getAccount(shipment.factoryId);
-    const [agent, reused] = await Promise.all([
+    let stepAt = Date.now();
+    // Parallel: agent + catalog + org. Existing supply — faqat conflict paytida (tez yo‘l).
+    const [agent, catalog, orgBundle] = await Promise.all([
       resolveFactoryAgent(account, agentHint),
-      findExistingSupply(shipment),
+      loadCatalogForSupply(),
+      loadOrgCurrency(),
     ]);
-    if (reused) {
-      const saved = markShipmentPosted(shipment.id, { id: reused.id, number: reused.name || shipment.number });
-      if (agent) void ensureSupplyAgent(reused.id, agent.meta);
-      void fillZeroSupplyPrices(reused.id, shipment.lines).catch((error) => {
-        if (!supplyGone(error)) {
-          logger.warn({ supply: reused.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill on reuse failed");
-        }
-      });
-      void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: reused.name || shipment.number });
-      return { id: reused.id, number: reused.name || shipment.number, shipment: saved, already: true };
+    mark("agent+catalog+org", stepAt);
+    // To‘liq katalog yo‘q bo‘lsa linkExact’ni o‘tkazib yuborish (sekin disk scan yo‘q).
+    if (account && catalog.products.length > 0) {
+      linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     }
-    const catalog = peekCatalog() ?? await loadCatalog();
-    if (account) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
     let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
     const store = catalog.warehouses.find((item) => item.id === storeId) || (catalog.warehouses.length === 1 ? catalog.warehouses[0] : null);
     if (!store) throw Object.assign(new Error("store"), { status: 400 });
-    const { organization, currencies } = await loadOrgCurrency();
+    const { organization, currencies } = orgBundle;
     const currency = currencies.rows.find((row) => row.isoCode === "UZS");
     const company = organization.rows[0];
     const base = "https://api.moysklad.ru/api/remap/1.2";
@@ -782,6 +802,7 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
     if (!agentMeta || !currency || !company) {
       throw Object.assign(new Error(agentMeta ? "currency" : "agent"), { status: 400 });
     }
+    stepAt = Date.now();
     const planned = await buildSupplyPositions(positions.map((item) => ({
       ...item.line,
       factoryCode: account?.code || item.line.factoryCode,
@@ -791,6 +812,7 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
       catalog,
       supplierMeta: agentMeta,
     });
+    mark("positions", stepAt);
     if (!planned.positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
     for (const product of planned.created) {
@@ -847,7 +869,9 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
       vatEnabled: false,
       assortment: item.assortment,
     }));
-    const created = await postSupplyDocument(supplyCore, supplyPositions, shipment);
+    stepAt = Date.now();
+    const created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
+    mark("post-supply", stepAt);
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;
@@ -864,8 +888,10 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }
     void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: number });
+    mark("done", t0);
     return { id: created.id, number, shipment: saved, already: created.reused };
   } finally {
+    releaseMoySkladSlots();
     unlock();
   }
 }
@@ -927,7 +953,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
   }
   // Tez yo‘l: kirim tayyor bo‘lsa shu so‘rovda qaytarish (poll kutmasin).
   const started = Date.now();
-  while (Date.now() - started < 12_000) {
+  while (Date.now() - started < 25_000) {
     const payload = supplyJobPayload(shipmentId);
     if (!payload.pending) {
       if ("error" in payload && payload.error && payload.error !== "idle") {
@@ -1045,7 +1071,9 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    await flushPartners();
+    void flushPartners().catch((error: unknown) => {
+      logger.warn({ err: error instanceof Error ? error.message : error }, "Partner flush after revise failed");
+    });
     if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === saved.id) ?? saved;
     res.json(shipment);
@@ -1072,7 +1100,10 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
       note: req.body?.note,
       lines,
     });
-    await flushPartners();
+    // Postgres sync fon rejimida — zavod yuk xati yuborishi kutmasin.
+    void flushPartners().catch((error: unknown) => {
+      logger.warn({ err: error instanceof Error ? error.message : error }, "Partner flush after create failed");
+    });
     if (catalog) linkExactShipmentLines(res.locals.factory.id, (line) => exactCatalogProduct(catalog, line, res.locals.factory));
     const shipment = listShipments(res.locals.factory.id).find((item) => item.id === created.id) ?? created;
     res.status(201).json(shipment);

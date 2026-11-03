@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -559,7 +559,7 @@ router.get("/dashboard/warehouses", async (_req, res, next) => {
 
 router.get("/warehouses", async (_req, res, next) => {
   try {
-    const catalog = peekCatalog() ?? await loadCatalog();
+    const catalog = peekCatalog() ?? await loadCatalogForSupply();
     res.json(ListWarehousesResponse.parse(catalog.warehouses));
   } catch (error) {
     next(error);
