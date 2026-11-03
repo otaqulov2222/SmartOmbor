@@ -580,9 +580,29 @@ export async function loadCatalog(force = false): Promise<Catalog> {
 
 let warehousesOnly: CatalogWarehouse[] | null = null;
 
-/** Kirim uchun: xotiradagi katalog yoki faqat omborlar. Diskdagi 5MB+ JSON o‘qilmaydi. */
+/** Kirim uchun: disk/xotira katalogi (moslash aniq), yo‘q bo‘lsa faqat omborlar. */
 export async function loadCatalogForSupply(): Promise<Catalog> {
-  if (cache?.warehouses?.length) return cache;
+  const known = await peekOrRecallCatalog();
+  if (known?.warehouses?.length) return known;
+  if (known?.products?.length) {
+    if (!warehousesOnly?.length) {
+      try {
+        const storesPage = await moyskladAll<StoreRow>("/entity/store");
+        warehousesOnly = storesPage.rows.map((store) => ({
+          id: store.id || idFromHref(store.meta?.href),
+          name: store.name || "Ombor",
+          code: store.code || null,
+          address: store.address || null,
+        }));
+        known.warehouses = warehousesOnly;
+      } catch (error) {
+        logger.warn({ err: error }, "Supply warehouse fetch failed; using catalog without stores");
+      }
+    } else {
+      known.warehouses = warehousesOnly;
+    }
+    return known;
+  }
   if (!warehousesOnly?.length) {
     const storesPage = await moyskladAll<StoreRow>("/entity/store");
     warehousesOnly = storesPage.rows.map((store) => ({
@@ -592,17 +612,12 @@ export async function loadCatalogForSupply(): Promise<Catalog> {
       address: store.address || null,
     }));
   }
-  const warehouses = warehousesOnly;
-  if (cache) {
-    cache.warehouses = warehouses;
-    return cache;
-  }
   return {
     companyName: null,
     loadedAt: new Date().toISOString(),
     productCount: 0,
     products: [],
-    warehouses,
+    warehouses: warehousesOnly,
     stockRows: [],
     documents: [],
     salesToday: 0,
@@ -728,6 +743,58 @@ export async function peekOrRecallCatalog(): Promise<Catalog | null> {
     return disk;
   }
   return cache;
+}
+
+let bootstrapOnce: Promise<Catalog | null> | null = null;
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Server start: diskdan darhol, keyin fon sync. Ro‘yxatlar bo‘sh qolmasin. */
+export function ensureCatalogBootstrapped(): Promise<Catalog | null> {
+  if (!bootstrapOnce) {
+    bootstrapOnce = (async () => {
+      const disk = await peekOrRecallCatalog();
+      logger.info({
+        products: disk?.products.length ?? 0,
+        warehouses: disk?.warehouses.length ?? 0,
+        source: disk ? "disk-or-memory" : "empty",
+      }, "Catalog bootstrap");
+      return disk;
+    })().catch((error) => {
+      logger.warn({ err: error }, "Catalog bootstrap failed");
+      return null;
+    });
+  }
+  return bootstrapOnce;
+}
+
+export function startCatalogKeepalive() {
+  if (keepAliveTimer) return;
+  const refresh = () => {
+    void loadCatalog(false).catch((error) => {
+      logger.warn({ err: error }, "Catalog keepalive soft load failed");
+    });
+  };
+  // Tez soft-load (disk), keyin periodik yangilash.
+  setTimeout(refresh, 2_000);
+  setTimeout(() => {
+    void loadCatalog(true).catch((error) => {
+      logger.warn({ err: error }, "Catalog keepalive force sync failed");
+    });
+  }, 45_000);
+  keepAliveTimer = setInterval(() => {
+    if (!cache?.products?.length) {
+      void peekOrRecallCatalog().then((hit) => {
+        if (!hit?.products?.length) void loadCatalog(true).catch(() => undefined);
+      });
+      return;
+    }
+    void loadCatalog(true).catch((error) => {
+      logger.warn({ err: error }, "Catalog periodic refresh failed");
+    });
+  }, 15 * 60_000);
+  if (typeof keepAliveTimer === "object" && keepAliveTimer && "unref" in keepAliveTimer) {
+    keepAliveTimer.unref();
+  }
 }
 
 export function catalogLoadedAt(): string | null {

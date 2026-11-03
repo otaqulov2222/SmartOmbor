@@ -1038,7 +1038,7 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
       res.json({ items: [] });
       return;
     }
-    const catalog = peekCatalog() ?? await loadCatalog();
+    const catalog = (await peekOrRecallCatalog()) ?? await loadCatalog();
     const account = res.locals.factory as { code?: string; name?: string; catalogName?: string };
     const compact = compactCode(query);
     const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];
@@ -1061,7 +1061,7 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
 
 router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
   try {
-    const catalog = peekCatalog();
+    const catalog = await peekOrRecallCatalog();
     const byId = new Map((catalog?.products ?? []).map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());
@@ -1090,7 +1090,7 @@ router.put("/factory/shipments/:id", requireFactory, async (req, res, next) => {
 
 router.post("/factory/shipments", requireFactory, async (req, res, next) => {
   try {
-    const catalog = peekCatalog();
+    const catalog = await peekOrRecallCatalog();
     const byId = new Map((catalog?.products ?? []).map((product) => [product.id, product]));
     const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line: { productId?: string; productCode?: string }) => {
       const product = byId.get(String(line?.productId ?? "").trim());

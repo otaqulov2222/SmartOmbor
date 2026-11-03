@@ -1,5 +1,5 @@
 import app from "./app";
-import { loadCatalog } from "./lib/catalog";
+import { ensureCatalogBootstrapped, startCatalogKeepalive } from "./lib/catalog";
 import { logger } from "./lib/logger";
 import { hydratePartners } from "./lib/partners";
 import { resumePendingSupplies } from "./routes/partners";
@@ -35,19 +35,19 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
-  void hydratePartners()
-    .then(() => {
-      resumePendingSupplies();
-    })
-    .catch((error: unknown) => {
-      logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
-    });
-  // Disk cache bo‘lsa tez ko‘tarish; to‘liq sync biroz kechroq — kirimni bloklamasin.
-  setTimeout(() => {
-    void loadCatalog().catch((error: unknown) => {
-      logger.warn({ err: error }, "Catalog cache was not warmed");
-    });
-  }, 8_000);
+  // Listen dan keyin: disk katalog + partners parallel — UI bo‘sh qolmasin.
+  void Promise.all([
+    ensureCatalogBootstrapped(),
+    hydratePartners()
+      .then(() => {
+        resumePendingSupplies();
+      })
+      .catch((error: unknown) => {
+        logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
+      }),
+  ]).finally(() => {
+    startCatalogKeepalive();
+  });
   startTelegramDigest();
 });
 }

@@ -104,6 +104,21 @@ function writeFileStore(store: Store) {
 }
 
 async function persistStore(store: Store) {
+  try {
+    const result = await pool.query<{ document: unknown }>("select document from partner_store where id = 'main'");
+    if (result.rows[0]) {
+      const remote = normalizeStore(result.rows[0].document);
+      const remoteN = remote.accounts.length;
+      const localN = store.accounts.length;
+      // Tasodifiy tozalanishdan himoya: katta remote’ni 2-3 ta local bilan yozib yubormaslik.
+      if (remoteN >= 8 && localN <= 3 && localN < remoteN - 2) {
+        logger.error({ remoteN, localN }, "Partner persist blocked: refusing accidental account wipe");
+        return;
+      }
+    }
+  } catch (error: unknown) {
+    logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner persist pre-check skipped");
+  }
   await pool.query(
     "insert into partner_store (id, document, updated_at) values ('main', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
     [JSON.stringify(store)],
@@ -139,7 +154,19 @@ function syncFromFile() {
   try {
     const mtime = statSync(filePath).mtimeMs;
     if (!memory || mtime > memoryUpdatedAt + 1) {
-      adoptStore(readFileStore(), mtime);
+      const next = readFileStore();
+      if (
+        memory
+        && memory.accounts.length >= 5
+        && next.accounts.length + 2 < memory.accounts.length
+      ) {
+        logger.warn({
+          memory: memory.accounts.length,
+          file: next.accounts.length,
+        }, "Ignoring partner file shrink");
+        return;
+      }
+      adoptStore(next, mtime);
     }
   } catch {
     memory ??= emptyStore();
