@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { dataFile } from "../lib/data-dir";
-import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -193,13 +193,18 @@ function exactCatalogProduct(
   line: { factoryCode: string; sectionCode: string; productCode: string; size: string },
   account: { code?: string; name?: string; catalogName?: string },
 ) {
-  const matched = matchWaybillProduct(catalog, {
+  const input = {
     factoryCode: account.code || line.factoryCode || "",
     factoryName: account.catalogName || account.name || "",
     groupCode: line.sectionCode,
     productCode: line.productCode,
     size: line.size,
-  });
+  };
+  const hits = listWaybillProducts(catalog, input);
+  // Guruh bo‘sh bo‘lsa faqat bitta aniq kartochka bo‘lganda to‘ldiramiz — noto‘g‘ri guruh yopishtirmaymiz.
+  if (!hits.length) return null;
+  if (hits.length > 1 && !line.sectionCode.trim()) return null;
+  const matched = hits.length === 1 ? { id: hits[0].id, name: hits[0].name } : matchWaybillProduct(catalog, input);
   if (!matched) return null;
   const parsed = parseBordoName(matched.name);
   if (line.sectionCode.trim() && parsed?.groupCode && compactCode(parsed.groupCode) !== compactCode(line.sectionCode)) return null;
@@ -229,6 +234,9 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
+    // Faqat xotiradagi katalog (sync) — GET bloklanmasin. Bo‘sh guruhni faqat aniq (bitta) kartochkadan to‘ldiramiz.
+    const catalog = peekCatalog();
+    if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {

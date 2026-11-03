@@ -402,13 +402,14 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
       <label className="field yx-date"><span>{t('zavod.date')}</span><input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
     </div>
     <div className="yx-sheet factory-sheet">
-      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
+      <div className="yx-sheet-head"><span/><span>{t('zavod.brand')}</span><span>{t('zavod.factoryCode')}</span><span>{t('zavod.groupCode')}</span><span>{t('zavod.product')}</span><span>{t('zavod.size')}</span><span>{t('zavod.pairs')}</span><span>{t('zavod.boxes')}</span><span>{t('zavod.price')}</span><span>{t('zavod.sum')}</span><span/></div>
       {lines.map((line, index) => {
         const sum = unitsOf(line) * num(line.price);
         return <div className="yx-sheet-row factory-row" key={line.key}>
           <b>{String(index + 1).padStart(2, '0')}</b>
           <strong className="yx-brand">{t('zavod.brand')}</strong>
           <strong className="yx-brand">{account.code}</strong>
+          <label className="yx-cell"><span>{t('zavod.groupCode')}</span><input className="input" aria-label={t('zavod.groupCode')} autoCapitalize="characters" inputMode="numeric" value={line.groupCode} onChange={e => patch(line.key, { groupCode: digits(e.target.value) })} onBlur={e => fillPassport(line.key, { groupCode: digits(e.target.value) })} data-testid={`input-factory-group-${index}`}/></label>
           <label className="yx-cell"><span>{t('zavod.product')}</span><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={line.productCode} onChange={e => patch(line.key, { productCode: codeInput(e.target.value) })} onBlur={e => fillPassport(line.key, { productCode: codeValue(e.target.value) })} data-testid={`input-factory-product-${index}`}/></label>
           <label className="yx-cell"><span>{t('zavod.size')}</span><select className="input" aria-label={t('zavod.size')} value={line.size} onChange={e => fillPassport(line.key, { size: e.target.value })} data-testid={`select-factory-size-${index}`}><option value="">{t('products.sizeEmpty')}</option>{!isBordoSize(line.size) && line.size ? <option value={line.size}>{line.size}</option> : null}{BORDO_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>
           <label className="yx-cell"><span>{t('zavod.pairs')}</span><input className="input" aria-label={t('zavod.pairs')} inputMode="numeric" value={line.pairs} onChange={e => patch(line.key, { pairs: digits(e.target.value) })} onBlur={e => fillPassport(line.key, { pairs: digits(e.target.value) })}/></label>
