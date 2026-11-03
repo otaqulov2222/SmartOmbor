@@ -178,13 +178,19 @@ export function OfficeTasksPage() {
   ];
 
   const card = (task: Task) => (
-    <article key={task.id} className={`task-card is-${task.priority}`} onClick={() => setOpen(task)}>
-      <b>{task.title}</b>
-      <p>{task.description || t('office.noDesc')}</p>
-      <small>{date(task.dueDate)} {task.dueTime} · {task.assignees.map(item => item.name).join(', ') || '—'}</small>
-      <div className="task-card-foot">
+    <article key={task.id} className={`task-card is-${task.priority}${task.late ? ' is-late-card' : ''}`} onClick={() => setOpen(task)}>
+      <div className="task-card-top">
         <span className={`tabel-pill is-${task.priority}`}>{prioLabel(task.priority)}</span>
         <span className={`tabel-pill is-${task.status}`}>{statusLabel(task.status)}</span>
+      </div>
+      <b>{task.title}</b>
+      <p>{task.description || t('office.noDesc')}</p>
+      <div className="task-card-meta">
+        <span><CalendarDays size={13}/> {date(task.dueDate)} {task.dueTime}</span>
+        <span className="task-card-people">
+          {task.assignees.slice(0, 3).map(item => <i key={item.id} title={item.name}>{item.name.slice(0, 1)}</i>)}
+          <em>{task.assignees.map(item => item.name).join(', ') || '—'}</em>
+        </span>
       </div>
     </article>
   );
@@ -204,54 +210,55 @@ export function OfficeTasksPage() {
   }, [today]);
 
   return <div className="tasks">
-    <div className="page-head">
-      <div>
-        <h1>{t('nav.officeTasks')}</h1>
-        <p>{t('office.tasksLead')}</p>
-      </div>
-      <div className="page-actions task-head-actions">
-        <div className="task-view-modes">
-          {views.map(([id, key, Icon]) => (
-            <button type="button" key={id} className={`btn btn-sm ${view === id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView(id)}>
-              <Icon size={15}/> {t(key)}
-            </button>
-          ))}
+    <div className="task-hero">
+      <div className="page-head">
+        <div>
+          <p className="task-kicker">{t('nav.office')}</p>
+          <h1>{t('nav.officeTasks')}</h1>
+          <p>{t('office.tasksLead')}</p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={openCreate}><Plus size={16}/> {t('office.addTask')}</button>
+        <div className="page-actions task-head-actions">
+          <div className="task-view-modes">
+            {views.map(([id, key, Icon]) => (
+              <button type="button" key={id} className={view === id ? 'is-on' : ''} onClick={() => setView(id)}>
+                <Icon size={15}/> {t(key)}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn btn-primary task-cta" onClick={openCreate}><Plus size={16}/> {t('office.addTask')}</button>
+        </div>
       </div>
-    </div>
 
-    <div className="task-stats">
-      {statCards.map(item => (
-        <button
-          type="button"
-          key={item.id}
-          className={`task-stat ${item.tone} ${(item.id === 'total' && chip === 'all') || chip === item.id ? 'is-on' : ''}`}
-          onClick={() => setChip(item.id === 'total' || item.id === 'progress' || item.id === 'done' ? 'all' : item.id)}
-        >
-          <span className="task-stat-ico">{item.icon}</span>
-          <span>{item.label}</span>
-          <b>{item.value}</b>
-          <small>{pct(item.value)}%</small>
-        </button>
-      ))}
+      <div className="task-stats">
+        {statCards.map(item => (
+          <button
+            type="button"
+            key={item.id}
+            className={`task-stat ${item.tone} ${(item.id === 'total' && chip === 'all') || chip === item.id ? 'is-on' : ''}`}
+            onClick={() => setChip(item.id === 'total' || item.id === 'progress' || item.id === 'done' ? 'all' : item.id)}
+          >
+            <span className="task-stat-ico">{item.icon}</span>
+            <span>{item.label}</span>
+            <b>{item.value}</b>
+            <div className="task-stat-bar"><i style={{ width: `${pct(item.value)}%` }}/></div>
+            <small>{pct(item.value)}%</small>
+          </button>
+        ))}
+      </div>
     </div>
 
     <div className="task-tools">
-      <label className="search"><Search size={16}/><input className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder={t('office.taskSearch')} aria-label={t('office.taskSearch')}/></label>
-      <div className="task-filter-row">
-        <select className="input" value={prioFilter} onChange={event => setPrioFilter(event.target.value as 'all' | Priority)} aria-label={t('office.importance')}>
-          <option value="all">{t('office.allPriority')}</option>
-          <option value="low">{t('office.pLow')}</option>
-          <option value="normal">{t('office.pMid')}</option>
-          <option value="high">{t('office.pHigh')}</option>
-          <option value="urgent">{t('office.pNow')}</option>
-        </select>
-        <label className="field task-date-field"><span>{t('office.from')}</span><input className="input" type="date" value={from} onChange={event => setFrom(event.target.value)}/></label>
-        <label className="field task-date-field"><span>{t('office.to')}</span><input className="input" type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
-      </div>
-      <div className="tabel-chips">
-        <span className="task-quick-label">{t('office.quick')}</span>
+      <label className="task-search"><Search size={16}/><input className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder={t('office.taskSearch')} aria-label={t('office.taskSearch')}/></label>
+      <select className="input task-select" value={prioFilter} onChange={event => setPrioFilter(event.target.value as 'all' | Priority)} aria-label={t('office.importance')}>
+        <option value="all">{t('office.allPriority')}</option>
+        <option value="low">{t('office.pLow')}</option>
+        <option value="normal">{t('office.pMid')}</option>
+        <option value="high">{t('office.pHigh')}</option>
+        <option value="urgent">{t('office.pNow')}</option>
+      </select>
+      <label className="task-date-chip"><span>{t('office.from')}</span><input className="input" type="date" value={from} onChange={event => setFrom(event.target.value)}/></label>
+      <label className="task-date-chip"><span>{t('office.to')}</span><input className="input" type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
+      <div className="task-chips">
         {chips.map(([id, key]) => (
           <button type="button" key={id} className={`${chip === id ? 'is-on' : ''} ${id === 'urgent' || id === 'late' ? 'is-warn' : ''} ${id === 'review' ? 'is-review-chip' : ''}`} onClick={() => setChip(id)}>{t(key)}</button>
         ))}
@@ -264,15 +271,20 @@ export function OfficeTasksPage() {
         const share = stats.total ? Math.round((rows.length / stats.total) * 100) : 0;
         return <section key={col.id} className={`task-col is-${col.tone}`}>
           <header>
-            <col.icon size={16}/>
-            <b>{t(col.title)}</b>
+            <span className="task-col-ico"><col.icon size={15}/></span>
+            <div>
+              <b>{t(col.title)}</b>
+              <div className="task-col-bar"><i style={{ width: `${share}%` }}/></div>
+            </div>
             <em>{rows.length}</em>
           </header>
-          <div className="task-col-bar"><i style={{ width: `${share}%` }}/></div>
-          {rows.length ? rows.map(card) : <div className="task-empty-box">
-            <p className="task-empty">{t(col.emptyOk || col.empty)}</p>
-            {col.add && <button type="button" className="btn btn-sm btn-secondary" onClick={openCreate}><Plus size={14}/> {t('office.addInCol')}</button>}
-          </div>}
+          <div className="task-col-body">
+            {rows.length ? rows.map(card) : <div className="task-empty-box">
+              <span className="task-empty-mark"><col.icon size={22}/></span>
+              <p className="task-empty">{t(col.emptyOk || col.empty)}</p>
+              {col.add && <button type="button" className="task-ghost-add" onClick={openCreate}><Plus size={14}/> {t('office.addInCol')}</button>}
+            </div>}
+          </div>
           <button type="button" className="task-col-add" onClick={openCreate}><Plus size={14}/> {t('office.addTask')}</button>
         </section>;
       })}
