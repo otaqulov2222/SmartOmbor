@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { dataFile } from "../lib/data-dir";
-import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -70,7 +70,9 @@ router.get("/partner-alerts", async (_req, res, next) => {
 router.get("/partner-factories", async (_req, res, next) => {
   try {
     void refreshPartnersIfNeeded();
-    const catalog = peekCatalog();
+    // Katalog xotirada bo‘lmasa diskdan — aks holda MoySkladdagi zavodlar “yo‘qolib” ko‘rinardi.
+    const catalog = await peekOrRecallCatalog();
+    if (!catalog?.products?.length) void loadCatalog().catch(() => undefined);
     const grouped = new Map<string, { name: string; productCount: number; stock: number }>();
     for (const product of catalog?.products ?? []) {
       const name = product.factory?.trim();
@@ -80,7 +82,7 @@ router.get("/partner-factories", async (_req, res, next) => {
       current.stock += product.stock;
       grouped.set(name, current);
     }
-    const accounts = listAccounts();
+    const accounts = listAccounts().filter((account) => account.active !== false);
     const shipments = listShipments();
     const used = new Set<string>();
     const sameFactory = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase();

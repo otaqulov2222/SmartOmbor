@@ -42,12 +42,12 @@ app.listen(port, (err) => {
     .catch((error: unknown) => {
       logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
     });
-  // Katalogni juda kech yuklash — birinchi kirimlar tugaguncha MoySklad band bo‘lmasin.
+  // Disk cache bo‘lsa tez ko‘tarish; to‘liq sync biroz kechroq — kirimni bloklamasin.
   setTimeout(() => {
     void loadCatalog().catch((error: unknown) => {
       logger.warn({ err: error }, "Catalog cache was not warmed");
     });
-  }, 300_000);
+  }, 8_000);
   startTelegramDigest();
 });
 }

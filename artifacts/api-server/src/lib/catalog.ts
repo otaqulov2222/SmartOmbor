@@ -719,6 +719,17 @@ export function peekCatalog(): Catalog | null {
   return cache;
 }
 
+/** Xotirada yo‘q bo‘lsa disk cache’dan — to‘liq MoySklad sync kutmasdan. */
+export async function peekOrRecallCatalog(): Promise<Catalog | null> {
+  if (cache?.products?.length) return cache;
+  const disk = await recall();
+  if (disk?.products?.length) {
+    cache = disk;
+    return disk;
+  }
+  return cache;
+}
+
 export function catalogLoadedAt(): string | null {
   return cache?.loadedAt ?? null;
 }
