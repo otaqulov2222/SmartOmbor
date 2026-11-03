@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardList, Eye, LayoutGrid, List, Plus, Search, X } from 'lucide-react';
+import {
+  AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ClipboardList, Eye, FileText,
+  LayoutGrid, List, MessageSquare, Paperclip, PlayCircle, Plus, Search, Send, ShieldCheck, X,
+} from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
 import { officeHeaders } from '@/office';
 import './office-report.css';
@@ -9,10 +12,11 @@ import './office-tasks.css';
 type Status = 'assigned' | 'accepted' | 'progress' | 'review' | 'done';
 type Priority = 'low' | 'normal' | 'high' | 'urgent';
 type Column = 'late' | 'today' | 'progress' | 'review' | 'done';
+type View = 'kanban' | 'calendar' | 'analysis' | 'list';
 type Person = { id: string; name: string; login: string; role: string };
 type Task = {
   id: string; title: string; description: string; dueDate: string; dueTime: string; priority: Priority;
-  status: Status; remind?: boolean; late?: boolean; note?: string;
+  status: Status; remind?: boolean; late?: boolean; note?: string; comment?: string;
   assignees: Array<{ id: string; name: string }>;
 };
 
@@ -30,26 +34,45 @@ function columnOf(task: Task, today: string): Column {
   if (task.dueDate === today) return 'today';
   return 'progress';
 }
+function sessionName() {
+  try {
+    return (JSON.parse(sessionStorage.getItem('smart-ombor-session') || '') as { name?: string }).name || 'Administrator';
+  } catch {
+    return 'Administrator';
+  }
+}
 
 export function OfficeTasksPage() {
   const { t, date } = useI18n();
   const today = tashkentDay();
   const [people, setPeople] = useState<Person[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [view, setView] = useState<'kanban' | 'list'>('kanban');
+  const [view, setView] = useState<View>('kanban');
   const [search, setSearch] = useState('');
-  const [chip, setChip] = useState<'all' | 'today' | 'week' | 'urgent' | 'late' | 'review'>('all');
+  const [prioFilter, setPrioFilter] = useState<'all' | Priority>('all');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [chip, setChip] = useState<'all' | 'today' | 'week' | 'month' | 'urgent' | 'late' | 'review'>('all');
   const [openNew, setOpenNew] = useState(false);
   const [open, setOpen] = useState<Task | null>(null);
+  const [sideTab, setSideTab] = useState<'chat' | 'files' | 'history'>('chat');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [dueDate, setDueDate] = useState(today);
   const [dueTime, setDueTime] = useState('18:00');
   const [priority, setPriority] = useState<Priority>('normal');
   const [picked, setPicked] = useState<string[]>([]);
-  const [remind, setRemind] = useState(true);
+  const [remindBefore, setRemindBefore] = useState('1d');
+  const [recurring, setRecurring] = useState(false);
+  const [recurringKind, setRecurringKind] = useState<'weekly' | 'daily' | 'monthly'>('weekly');
+  const [acceptDeadline, setAcceptDeadline] = useState(false);
+  const [visibility, setVisibility] = useState<'shared' | 'private'>('shared');
+  const [comment, setComment] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [draftMsg, setDraftMsg] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const me = sessionName();
 
   const loadTasks = async () => {
     const response = await fetch('/api/office/tasks', { headers: officeHeaders() });
@@ -65,22 +88,27 @@ export function OfficeTasksPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const weekFrom = shift(today, -6);
+    const monthFrom = `${today.slice(0, 8)}01`;
     return tasks.filter(task => {
       if (q && !`${task.title} ${task.description} ${task.assignees.map(item => item.name).join(' ')}`.toLowerCase().includes(q)) return false;
+      if (prioFilter !== 'all' && task.priority !== prioFilter) return false;
+      if (from && task.dueDate < from) return false;
+      if (to && task.dueDate > to) return false;
       if (chip === 'today') return task.dueDate === today && task.status !== 'done';
       if (chip === 'week') return task.dueDate >= weekFrom && task.dueDate <= today;
+      if (chip === 'month') return task.dueDate >= monthFrom && task.dueDate <= today;
       if (chip === 'urgent') return task.priority === 'urgent' || task.priority === 'high';
       if (chip === 'late') return Boolean(task.late) && task.status !== 'done';
       if (chip === 'review') return task.status === 'review';
       return true;
     });
-  }, [tasks, search, chip, today]);
+  }, [tasks, search, chip, today, prioFilter, from, to]);
 
-  const columns: Array<{ id: Column; title: TKey; empty: TKey; icon: typeof AlertTriangle; tone: string }> = [
-    { id: 'late', title: 'office.colLateTasks', empty: 'office.emptyLate', icon: AlertTriangle, tone: 'late' },
-    { id: 'today', title: 'office.colToday', empty: 'office.emptyToday', icon: CalendarDays, tone: 'today' },
-    { id: 'progress', title: 'office.colProgress', empty: 'office.emptyProgress', icon: ClipboardList, tone: 'progress' },
-    { id: 'review', title: 'office.colReview', empty: 'office.emptyReview', icon: Eye, tone: 'review' },
+  const columns: Array<{ id: Column; title: TKey; empty: TKey; emptyOk?: TKey; icon: typeof AlertTriangle; tone: string; add?: boolean }> = [
+    { id: 'late', title: 'office.colLateTasks', empty: 'office.emptyLate', emptyOk: 'office.emptyLateOk', icon: AlertTriangle, tone: 'late' },
+    { id: 'today', title: 'office.colToday', empty: 'office.emptyToday', icon: CalendarDays, tone: 'today', add: true },
+    { id: 'progress', title: 'office.colProgress', empty: 'office.emptyProgress', icon: PlayCircle, tone: 'progress', add: true },
+    { id: 'review', title: 'office.colReview', empty: 'office.emptyReview', icon: ShieldCheck, tone: 'review' },
     { id: 'done', title: 'office.colDone', empty: 'office.emptyDone', icon: CheckCircle2, tone: 'done' },
   ];
   const grouped = Object.fromEntries(columns.map(col => [col.id, filtered.filter(task => columnOf(task, today) === col.id)])) as Record<Column, Task[]>;
@@ -95,13 +123,20 @@ export function OfficeTasksPage() {
   const pct = (n: number) => stats.total ? Math.round((n / stats.total) * 100) : 0;
 
   const resetForm = () => {
-    setTitle(''); setBody(''); setPicked([]); setPriority('normal'); setDueDate(today); setDueTime('18:00'); setRemind(true); setNote('');
+    setTitle(''); setBody(''); setPicked([]); setPriority('normal'); setDueDate(today); setDueTime('18:00');
+    setRemindBefore('1d'); setRecurring(false); setRecurringKind('weekly'); setAcceptDeadline(false);
+    setVisibility('shared'); setComment(''); setFiles([]); setDraftMsg(''); setNote(''); setSideTab('chat');
   };
+  const openCreate = () => { resetForm(); setOpenNew(true); };
   const createTask = async () => {
     setBusy(true); setNote('');
     const response = await fetch('/api/office/tasks', {
       method: 'POST', headers: officeHeaders(),
-      body: JSON.stringify({ title, description: body, assignedTo: picked, dueDate, dueTime, priority, remind }),
+      body: JSON.stringify({
+        title, description: body, assignedTo: picked, dueDate, dueTime, priority,
+        remindBefore, recurring: recurring ? recurringKind : '', acceptDeadline, visibility, comment,
+        splitAssignees: true,
+      }),
     });
     setBusy(false);
     if (!response.ok) { setNote(t('office.taskNeed')); return; }
@@ -123,9 +158,23 @@ export function OfficeTasksPage() {
     return t('office.colDone');
   };
   const prioLabel = (value: Priority) => t((value === 'low' ? 'office.pLow' : value === 'high' ? 'office.pHigh' : value === 'urgent' ? 'office.pNow' : 'office.pMid') as TKey);
-  const chips: Array<['all' | 'today' | 'week' | 'urgent' | 'late' | 'review', TKey]> = [
-    ['all', 'common.all'], ['today', 'office.quickToday'], ['week', 'office.quickWeek'],
+  const views: Array<[View, TKey, typeof LayoutGrid]> = [
+    ['kanban', 'office.viewKanban', LayoutGrid],
+    ['calendar', 'office.viewCalendar', CalendarDays],
+    ['analysis', 'office.viewAnalysis', BarChart3],
+    ['list', 'office.viewList', List],
+  ];
+  const chips: Array<['all' | 'today' | 'week' | 'month' | 'urgent' | 'late' | 'review', TKey]> = [
+    ['all', 'common.all'], ['today', 'office.quickToday'], ['week', 'office.quickWeek'], ['month', 'office.quickMonth'],
     ['urgent', 'office.quickUrgent'], ['late', 'office.quickLate'], ['review', 'office.quickReview'],
+  ];
+  const statCards: Array<{ id: typeof chip | 'total' | 'progress' | 'done'; label: string; value: number; tone: string; icon: ReactNode }> = [
+    { id: 'total', label: t('common.total'), value: stats.total, tone: '', icon: <ClipboardList size={18}/> },
+    { id: 'late', label: t('office.colLateTasks'), value: stats.late, tone: 'is-late', icon: <AlertTriangle size={18}/> },
+    { id: 'today', label: t('office.colToday'), value: stats.today, tone: 'is-today', icon: <CalendarDays size={18}/> },
+    { id: 'progress', label: t('office.colProgress'), value: stats.progress, tone: 'is-progress', icon: <PlayCircle size={18}/> },
+    { id: 'review', label: t('office.colReview'), value: stats.review, tone: 'is-review', icon: <ShieldCheck size={18}/> },
+    { id: 'done', label: t('office.colDone'), value: stats.done, tone: 'is-done', icon: <CheckCircle2 size={18}/> },
   ];
 
   const card = (task: Task) => (
@@ -140,56 +189,96 @@ export function OfficeTasksPage() {
     </article>
   );
 
+  const monthDays = useMemo(() => {
+    const [y, m] = today.split('-').map(Number);
+    const first = new Date(Date.UTC(y, m - 1, 1));
+    const startPad = (first.getUTCDay() + 6) % 7;
+    const daysIn = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const cells: Array<{ day: string; n: number } | null> = [];
+    for (let i = 0; i < startPad; i++) cells.push(null);
+    for (let d = 1; d <= daysIn; d++) {
+      const day = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      cells.push({ day, n: d });
+    }
+    return cells;
+  }, [today]);
+
   return <div className="tasks">
     <div className="page-head">
       <div>
         <h1>{t('nav.officeTasks')}</h1>
         <p>{t('office.tasksLead')}</p>
       </div>
-      <div className="page-actions">
-        <div className="tabel-day-modes">
-          <button type="button" className={`btn btn-sm ${view === 'kanban' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView('kanban')}><LayoutGrid size={15}/> {t('office.viewKanban')}</button>
-          <button type="button" className={`btn btn-sm ${view === 'list' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView('list')}><List size={15}/> {t('office.viewList')}</button>
+      <div className="page-actions task-head-actions">
+        <div className="task-view-modes">
+          {views.map(([id, key, Icon]) => (
+            <button type="button" key={id} className={`btn btn-sm ${view === id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView(id)}>
+              <Icon size={15}/> {t(key)}
+            </button>
+          ))}
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => { resetForm(); setOpenNew(true); }}><Plus size={16}/> {t('office.addTask')}</button>
+        <button type="button" className="btn btn-primary" onClick={openCreate}><Plus size={16}/> {t('office.addTask')}</button>
       </div>
     </div>
+
     <div className="task-stats">
-      {([
-        ['total', t('common.total'), stats.total, ''],
-        ['late', t('office.colLateTasks'), stats.late, 'is-late'],
-        ['today', t('office.colToday'), stats.today, 'is-today'],
-        ['progress', t('office.colProgress'), stats.progress, 'is-progress'],
-        ['review', t('office.colReview'), stats.review, 'is-review'],
-        ['done', t('office.colDone'), stats.done, 'is-done'],
-      ] as const).map(([id, label, value, tone]) => (
-        <button type="button" key={id} className={`task-stat ${tone} ${(id === 'total' && chip === 'all') || chip === id ? 'is-on' : ''}`} onClick={() => setChip(id === 'total' ? 'all' : id === 'progress' ? 'all' : id === 'done' ? 'all' : id)}>
-          <span>{label}</span>
-          <b>{value}</b>
-          <small>{pct(value)}%</small>
+      {statCards.map(item => (
+        <button
+          type="button"
+          key={item.id}
+          className={`task-stat ${item.tone} ${(item.id === 'total' && chip === 'all') || chip === item.id ? 'is-on' : ''}`}
+          onClick={() => setChip(item.id === 'total' || item.id === 'progress' || item.id === 'done' ? 'all' : item.id)}
+        >
+          <span className="task-stat-ico">{item.icon}</span>
+          <span>{item.label}</span>
+          <b>{item.value}</b>
+          <small>{pct(item.value)}%</small>
         </button>
       ))}
     </div>
+
     <div className="task-tools">
-      <label className="search"><Search size={16}/><input className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder={t('common.search')} aria-label={t('common.search')}/></label>
+      <label className="search"><Search size={16}/><input className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder={t('office.taskSearch')} aria-label={t('office.taskSearch')}/></label>
+      <div className="task-filter-row">
+        <select className="input" value={prioFilter} onChange={event => setPrioFilter(event.target.value as 'all' | Priority)} aria-label={t('office.importance')}>
+          <option value="all">{t('office.allPriority')}</option>
+          <option value="low">{t('office.pLow')}</option>
+          <option value="normal">{t('office.pMid')}</option>
+          <option value="high">{t('office.pHigh')}</option>
+          <option value="urgent">{t('office.pNow')}</option>
+        </select>
+        <label className="field task-date-field"><span>{t('office.from')}</span><input className="input" type="date" value={from} onChange={event => setFrom(event.target.value)}/></label>
+        <label className="field task-date-field"><span>{t('office.to')}</span><input className="input" type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
+      </div>
       <div className="tabel-chips">
+        <span className="task-quick-label">{t('office.quick')}</span>
         {chips.map(([id, key]) => (
-          <button type="button" key={id} className={chip === id ? 'is-on' : ''} onClick={() => setChip(id)}>{t(key)}</button>
+          <button type="button" key={id} className={`${chip === id ? 'is-on' : ''} ${id === 'urgent' || id === 'late' ? 'is-warn' : ''} ${id === 'review' ? 'is-review-chip' : ''}`} onClick={() => setChip(id)}>{t(key)}</button>
         ))}
       </div>
     </div>
-    {view === 'kanban' ? <div className="task-board">
-      {columns.map(col => (
-        <section key={col.id} className={`task-col is-${col.tone}`}>
+
+    {view === 'kanban' && <div className="task-board">
+      {columns.map(col => {
+        const rows = grouped[col.id];
+        const share = stats.total ? Math.round((rows.length / stats.total) * 100) : 0;
+        return <section key={col.id} className={`task-col is-${col.tone}`}>
           <header>
             <col.icon size={16}/>
             <b>{t(col.title)}</b>
-            <em>{grouped[col.id].length}</em>
+            <em>{rows.length}</em>
           </header>
-          {grouped[col.id].length ? grouped[col.id].map(card) : <p className="task-empty">{t(col.empty)}</p>}
-        </section>
-      ))}
-    </div> : <section className="card">
+          <div className="task-col-bar"><i style={{ width: `${share}%` }}/></div>
+          {rows.length ? rows.map(card) : <div className="task-empty-box">
+            <p className="task-empty">{t(col.emptyOk || col.empty)}</p>
+            {col.add && <button type="button" className="btn btn-sm btn-secondary" onClick={openCreate}><Plus size={14}/> {t('office.addInCol')}</button>}
+          </div>}
+          <button type="button" className="task-col-add" onClick={openCreate}><Plus size={14}/> {t('office.addTask')}</button>
+        </section>;
+      })}
+    </div>}
+
+    {view === 'list' && <section className="card">
       {filtered.length ? filtered.map(task => <article className="tabel-task" key={task.id} onClick={() => setOpen(task)}>
         <b>{task.title}</b>
         <p>{task.description || t('office.noDesc')}</p>
@@ -197,51 +286,172 @@ export function OfficeTasksPage() {
       </article>) : <p className="muted">{t('office.noTasks')}</p>}
     </section>}
 
-    {openNew && createPortal(<div className="backdrop" onClick={() => setOpenNew(false)}>
-      <form className="modal task-editor" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void createTask(); }} role="dialog" aria-labelledby="task-new-title">
-        <div className="modal-top">
+    {view === 'calendar' && <section className="card task-calendar">
+      <div className="card-head"><h2>{t('office.viewCalendar')}</h2><span className="card-meta">{date(today)}</span></div>
+      <div className="task-cal-grid">
+        {monthDays.map((cell, index) => cell ? (
+          <button type="button" key={cell.day} className={`task-cal-day ${cell.day === today ? 'is-today' : ''} ${tasks.some(task => task.dueDate === cell.day) ? 'has-task' : ''}`} onClick={() => { setFrom(cell.day); setTo(cell.day); setChip('all'); setView('list'); }}>
+            <b>{cell.n}</b>
+            <em>{tasks.filter(task => task.dueDate === cell.day).length || ''}</em>
+          </button>
+        ) : <span key={`pad-${index}`} className="task-cal-day is-pad"/>)}
+      </div>
+    </section>}
+
+    {view === 'analysis' && <section className="card task-analysis">
+      <div className="card-head"><h2>{t('office.viewAnalysis')}</h2></div>
+      <div className="task-analysis-grid">
+        {statCards.map(item => (
+          <div key={item.id} className={`task-analysis-card ${item.tone}`}>
+            <span>{item.label}</span>
+            <b>{item.value}</b>
+            <div className="task-col-bar"><i style={{ width: `${pct(item.value)}%` }}/></div>
+            <small>{pct(item.value)}%</small>
+          </div>
+        ))}
+      </div>
+    </section>}
+
+    {openNew && createPortal(<div className="backdrop task-backdrop" onClick={() => setOpenNew(false)}>
+      <form className="modal task-editor-full" onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); void createTask(); }} role="dialog" aria-labelledby="task-new-title">
+        <div className="modal-top task-editor-top">
           <div>
-            <p className="eyebrow">{t('office.addTask')}</p>
-            <h2 id="task-new-title">{t('office.newTask')}</h2>
+            <span className="task-role-badge">{t('office.giver')}</span>
+            <h2 id="task-new-title">{t('office.newTaskFull')}</h2>
+            <p>{t('office.newTaskSub')}</p>
           </div>
           <button type="button" className="icon-btn" onClick={() => setOpenNew(false)} aria-label={t('common.close')}><X size={18}/></button>
         </div>
-        <div className="task-editor-grid">
-          <div>
-            <label className="field"><span>{t('office.taskName')} · {title.length}/200</span><input className="input" value={title} onChange={event => setTitle(event.target.value)} maxLength={200} required/></label>
-            <label className="field"><span>{t('office.taskText')} · {body.length}/2000</span><textarea className="input" value={body} onChange={event => setBody(event.target.value)} rows={5} maxLength={2000}/></label>
-            <p className="field-label">{t('office.assignees')}</p>
-            <div className="tabel-people">
-              {people.length ? people.map(item => (
-                <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
-              )) : <p className="muted">{t('office.noPeople')}</p>}
+
+        <div className="task-editor-3">
+          <div className="task-pane">
+            <section className="task-block">
+              <h3>{t('office.mainInfo')}</h3>
+              <label className="field"><span>{t('office.taskName')} · {title.length}/200</span>
+                <input className="input" value={title} onChange={event => setTitle(event.target.value)} maxLength={200} placeholder={t('office.taskNamePh')} required/>
+              </label>
+              <label className="field"><span>{t('office.taskDesc')} · {body.length}/2000</span>
+                <textarea className="input" value={body} onChange={event => setBody(event.target.value)} rows={6} maxLength={2000} placeholder={t('office.taskText')}/>
+              </label>
+            </section>
+            <section className="task-block">
+              <h3>{t('office.assignees')}</h3>
+              <p className="muted task-hint">{t('office.assigneesHint')}</p>
+              <div className="tabel-people">
+                {people.length ? people.map(item => (
+                  <button type="button" key={item.id} className={picked.includes(item.id) ? 'is-on' : ''} onClick={() => setPicked(list => list.includes(item.id) ? list.filter(id => id !== item.id) : [...list, item.id])}>{item.name}</button>
+                )) : <p className="muted">{t('office.noPeople')}</p>}
+              </div>
+              <span className="task-picked">{picked.length} {t('office.selected')}</span>
+            </section>
+            <section className="task-block">
+              <h3>{t('office.deadlineBlock')}</h3>
+              <div className="form-grid">
+                <label className="field"><span>{t('common.date')}</span><input className="input" type="date" value={dueDate} onChange={event => setDueDate(event.target.value)}/></label>
+                <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={event => setDueTime(event.target.value)}/></label>
+              </div>
+              <p className="field-label">{t('office.importance')}</p>
+              <div className="tabel-prio">
+                {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
+                  <button type="button" key={id} className={`is-${id} ${priority === id ? 'is-on' : ''}`} onClick={() => setPriority(id)}>{t(key)}</button>
+                ))}
+              </div>
+              <label className="task-check"><input type="checkbox" checked={acceptDeadline} onChange={event => setAcceptDeadline(event.target.checked)}/> {t('office.acceptDeadline')}</label>
+              <p className="muted task-hint">{t('office.acceptDeadlineHint')}</p>
+            </section>
+            <section className="task-block">
+              <h3>{t('office.filesBlock')}</h3>
+              <label className="task-drop">
+                <Paperclip size={20}/>
+                <span>{t('office.filesDrop')}</span>
+                <small>{t('office.filesHint')}</small>
+                <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.mp4" onChange={event => setFiles(Array.from(event.target.files || []).slice(0, 5))}/>
+              </label>
+              {files.length > 0 && <ul className="task-file-list">{files.map(file => <li key={file.name}>{file.name}</li>)}</ul>}
+              <label className="field"><span>{t('office.extraComment')} · {comment.length}/500</span>
+                <textarea className="input" value={comment} onChange={event => setComment(event.target.value)} rows={3} maxLength={500} placeholder={t('office.extraCommentPh')}/>
+              </label>
+            </section>
+          </div>
+
+          <div className="task-pane">
+            <section className="task-block task-giver">
+              <span className="task-role-badge">{t('office.giver')}</span>
+              <b>{t('office.you')} · {me}</b>
+              <em>{t('office.auto')}</em>
+            </section>
+            <section className="task-block">
+              <h3>{t('office.taskStatus')}</h3>
+              <ol className="task-flow">
+                <li className="is-on"><b>{t('office.stNew')}</b><span>{t('office.stNewHint')}</span><i>{t('office.nowTag')}</i></li>
+                <li><b>{t('office.stAccepted')}</b><span>{t('office.stAcceptedHint')}</span></li>
+                <li><b>{t('office.stProgress')}</b><span>{t('office.stProgressHint')}</span></li>
+                <li><b>{t('office.late')}</b><span>{t('office.stLateHint')}</span></li>
+                <li><b>{t('office.stReview')}</b><span>{t('office.stReviewHint')}</span></li>
+                <li><b>{t('office.colDone')}</b><span>{t('office.stDoneHint')}</span></li>
+              </ol>
+            </section>
+            <section className="task-block">
+              <h3>{t('office.remind')}</h3>
+              <select className="input" value={remindBefore} onChange={event => setRemindBefore(event.target.value)}>
+                <option value="none">{t('office.remindNone')}</option>
+                <option value="1h">{t('office.remind1h')}</option>
+                <option value="1d">{t('office.remind1d')}</option>
+                <option value="2d">{t('office.remind2d')}</option>
+                <option value="1w">{t('office.remind1w')}</option>
+              </select>
+              <p className="muted task-hint">{t('office.remindHint')}</p>
+              <label className="task-check"><input type="checkbox" checked={recurring} onChange={event => setRecurring(event.target.checked)}/> {t('office.recurring')}</label>
+              {recurring && <select className="input" value={recurringKind} onChange={event => setRecurringKind(event.target.value as 'weekly' | 'daily' | 'monthly')}>
+                <option value="daily">{t('office.recDaily')}</option>
+                <option value="weekly">{t('office.recWeekly')}</option>
+                <option value="monthly">{t('office.recMonthly')}</option>
+              </select>}
+              <p className="field-label">{t('office.visibility')}</p>
+              <div className="tabel-chips">
+                <button type="button" className={visibility === 'shared' ? 'is-on' : ''} onClick={() => setVisibility('shared')}>{t('office.visShared')}</button>
+                <button type="button" className={visibility === 'private' ? 'is-on' : ''} onClick={() => setVisibility('private')}>{t('office.visPrivate')}</button>
+              </div>
+            </section>
+            {note && <p className="muted">{note}</p>}
+            <div className="task-create-actions">
+              <button type="submit" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length}><Send size={16}/> {t('office.createTask')}</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setOpenNew(false)}>{t('common.cancel')}</button>
             </div>
           </div>
-          <div>
-            <div className="form-grid">
-              <label className="field"><span>{t('common.date')}</span><input className="input" type="date" value={dueDate} onChange={event => setDueDate(event.target.value)}/></label>
-              <label className="field"><span>{t('office.dueTime')}</span><input className="input" type="time" value={dueTime} onChange={event => setDueTime(event.target.value)}/></label>
+
+          <div className="task-pane task-side">
+            <div className="task-side-tabs">
+              <button type="button" className={sideTab === 'chat' ? 'is-on' : ''} onClick={() => setSideTab('chat')}><MessageSquare size={15}/> {t('office.tabChat')}</button>
+              <button type="button" className={sideTab === 'files' ? 'is-on' : ''} onClick={() => setSideTab('files')}><FileText size={15}/> {t('office.tabFiles')}</button>
+              <button type="button" className={sideTab === 'history' ? 'is-on' : ''} onClick={() => setSideTab('history')}><ClipboardList size={15}/> {t('office.tabHistory')}</button>
             </div>
-            <p className="field-label">{t('office.importance')}</p>
-            <div className="tabel-prio">
-              {([['low', 'office.pLow'], ['normal', 'office.pMid'], ['high', 'office.pHigh'], ['urgent', 'office.pNow']] as const).map(([id, key]) => (
-                <button type="button" key={id} className={`is-${id} ${priority === id ? 'is-on' : ''}`} onClick={() => setPriority(id)}>{t(key)}</button>
-              ))}
+            <div className="task-side-body">
+              {sideTab === 'chat' && <>
+                <p className="task-side-head">{picked.length ? picked.map(id => people.find(item => item.id === id)?.name || id).join(', ') : t('office.pickAssigneesFirst')}</p>
+                <div className="task-side-empty">
+                  <MessageSquare size={36}/>
+                  <b>{t('office.noChat')}</b>
+                  <span>{t('office.noChatBody')}</span>
+                </div>
+                <div className="task-chat-input">
+                  <input className="input" value={draftMsg} onChange={event => setDraftMsg(event.target.value)} placeholder={t('office.chatPh')} disabled={!picked.length}/>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={!picked.length || !draftMsg.trim()} onClick={() => setDraftMsg('')}><Send size={14}/></button>
+                </div>
+                <p className="muted task-hint">{t('office.chatSaveHint')}</p>
+              </>}
+              {sideTab === 'files' && <div className="task-side-empty">
+                <Paperclip size={36}/>
+                <b>{files.length ? `${files.length}` : t('office.noFiles')}</b>
+                <span>{files.length ? files.map(file => file.name).join(', ') : t('office.filesHint')}</span>
+              </div>}
+              {sideTab === 'history' && <div className="task-side-empty">
+                <ClipboardList size={36}/>
+                <b>{t('office.noHistory')}</b>
+                <span>{t('office.noHistoryBody')}</span>
+              </div>}
             </div>
-            <label className="task-check"><input type="checkbox" checked={remind} onChange={event => setRemind(event.target.checked)}/> {t('office.remind')}</label>
-            <ol className="task-flow">
-              <li className="is-on"><b>{t('office.stNew')}</b><span>{t('office.stNewHint')}</span></li>
-              <li><b>{t('office.stAccepted')}</b><span>{t('office.stAcceptedHint')}</span></li>
-              <li><b>{t('office.stProgress')}</b><span>{t('office.stProgressHint')}</span></li>
-              <li><b>{t('office.stReview')}</b><span>{t('office.stReviewHint')}</span></li>
-              <li><b>{t('office.colDone')}</b><span>{t('office.stDoneHint')}</span></li>
-            </ol>
           </div>
-        </div>
-        {note && <p className="muted">{note}</p>}
-        <div className="form-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => setOpenNew(false)}>{t('common.cancel')}</button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !title.trim() || !picked.length}>{t('office.createTask')}</button>
         </div>
       </form>
     </div>, document.body)}
@@ -256,6 +466,7 @@ export function OfficeTasksPage() {
           <button type="button" className="icon-btn" onClick={() => setOpen(null)} aria-label={t('common.close')}><X size={18}/></button>
         </div>
         <p>{open.description || t('office.noDesc')}</p>
+        {open.comment && <p className="muted">{open.comment}</p>}
         <p className="muted">{open.assignees.map(item => item.name).join(', ')} · {prioLabel(open.priority)}{open.late ? ` · ${t('office.late')}` : ''}</p>
         <div className="form-actions">
           {open.status === 'assigned' && <button type="button" className="btn btn-secondary" onClick={() => void patch(open.id, 'accepted')}>{t('office.accept')}</button>}

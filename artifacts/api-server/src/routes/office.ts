@@ -210,10 +210,16 @@ router.post("/office/tasks", (req, res) => {
       dueDate: String(req.body?.dueDate ?? ""),
       dueTime: String(req.body?.dueTime ?? "18:00"),
       priority: String(req.body?.priority ?? "normal") as "low" | "normal" | "high" | "urgent",
-      remind: Boolean(req.body?.remind),
+      remind: req.body?.remind == null ? undefined : Boolean(req.body.remind),
+      remindBefore: String(req.body?.remindBefore ?? ""),
+      recurring: String(req.body?.recurring ?? ""),
+      acceptDeadline: Boolean(req.body?.acceptDeadline),
+      visibility: String(req.body?.visibility ?? "shared"),
+      comment: String(req.body?.comment ?? ""),
       createdBy: user.id,
+      splitAssignees: req.body?.splitAssignees !== false,
     });
-    res.status(201).json(task);
+    res.status(201).json(Array.isArray(task) ? { items: task, item: task[0] } : task);
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
     res.status(status).json({ error: error instanceof Error ? error.message : "task" });

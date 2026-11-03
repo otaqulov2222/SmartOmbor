@@ -43,6 +43,11 @@ export type OfficeTask = {
   priority: OfficePriority;
   status: OfficeTaskStatus;
   remind: boolean;
+  remindBefore: "none" | "1h" | "1d" | "2d" | "1w";
+  recurring: "" | "daily" | "weekly" | "monthly";
+  acceptDeadline: boolean;
+  visibility: "shared" | "private";
+  comment: string;
   createdBy: string;
   createdAt: string;
   acceptedAt: string | null;
@@ -84,6 +89,17 @@ function load(): Store {
         ? parsed.tasks.map((row) => ({
             ...row,
             status: TASK_STATUSES.includes(row.status) ? row.status : "assigned",
+            remindBefore: (["none", "1h", "1d", "2d", "1w"] as const).includes(row.remindBefore as "1d")
+              ? row.remindBefore
+              : row.remind
+                ? "1d"
+                : "none",
+            recurring: (["", "daily", "weekly", "monthly"] as const).includes(row.recurring as "weekly")
+              ? row.recurring
+              : "",
+            acceptDeadline: Boolean(row.acceptDeadline),
+            visibility: row.visibility === "private" ? "private" : "shared",
+            comment: typeof row.comment === "string" ? row.comment : "",
           }))
         : [],
       fiksa: parsed.fiksa && typeof parsed.fiksa === "object" ? parsed.fiksa : {},
@@ -302,8 +318,14 @@ export function createOfficeTask(input: {
   dueDate: string;
   dueTime: string;
   priority: OfficePriority;
-  remind: boolean;
+  remind?: boolean;
+  remindBefore?: string;
+  recurring?: string;
+  acceptDeadline?: boolean;
+  visibility?: string;
+  comment?: string;
   createdBy: string;
+  splitAssignees?: boolean;
 }) {
   const title = input.title.trim().slice(0, 200);
   const assignedTo = [...new Set(input.assignedTo.map((id) => id.trim()).filter(Boolean))];
@@ -311,26 +333,44 @@ export function createOfficeTask(input: {
   const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(input.dueDate) ? input.dueDate : tashkentParts().date;
   const dueTime = /^\d{2}:\d{2}$/.test(input.dueTime) ? input.dueTime : "18:00";
   const priority = ["low", "normal", "high", "urgent"].includes(input.priority) ? input.priority : "normal";
+  const remindBefore = (["none", "1h", "1d", "2d", "1w"] as const).includes(input.remindBefore as "1d")
+    ? (input.remindBefore as OfficeTask["remindBefore"])
+    : input.remind === false
+      ? "none"
+      : "1d";
+  const recurring = (["", "daily", "weekly", "monthly"] as const).includes(input.recurring as "weekly")
+    ? (input.recurring as OfficeTask["recurring"])
+    : "";
   const store = load();
-  const task: OfficeTask = {
-    id: randomUUID(),
-    title,
-    description: input.description.trim().slice(0, 2000),
-    assignedTo,
-    dueDate,
-    dueTime,
-    priority,
-    status: "assigned",
-    remind: Boolean(input.remind),
-    createdBy: input.createdBy,
-    createdAt: new Date().toISOString(),
-    acceptedAt: null,
-    doneAt: null,
-    note: "",
-  };
-  store.tasks.unshift(task);
+  const groups = input.splitAssignees === false ? [assignedTo] : assignedTo.map((id) => [id]);
+  const created: OfficeTask[] = [];
+  for (const group of groups) {
+    const task: OfficeTask = {
+      id: randomUUID(),
+      title,
+      description: input.description.trim().slice(0, 2000),
+      assignedTo: group,
+      dueDate,
+      dueTime,
+      priority,
+      status: "assigned",
+      remind: remindBefore !== "none",
+      remindBefore,
+      recurring,
+      acceptDeadline: Boolean(input.acceptDeadline),
+      visibility: input.visibility === "private" ? "private" : "shared",
+      comment: String(input.comment || "").trim().slice(0, 500),
+      createdBy: input.createdBy,
+      createdAt: new Date().toISOString(),
+      acceptedAt: null,
+      doneAt: null,
+      note: "",
+    };
+    store.tasks.unshift(task);
+    created.push(task);
+  }
   save(store);
-  return task;
+  return created.length === 1 ? created[0] : created;
 }
 
 export function updateOfficeTask(id: string, accountId: string, director: boolean, patch: { status?: string; note?: string }) {
