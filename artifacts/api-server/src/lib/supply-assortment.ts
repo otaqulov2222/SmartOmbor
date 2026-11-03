@@ -899,7 +899,9 @@ function acceptFactoryProduct(
   if (!row?.id) return null;
   const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode);
   const catalogProduct = scope.catalog.products.find((product) => product.id === row.id);
-  const name = row.name || catalogProduct?.name || "";
+  // Faqat kartochkadagi HAQIQIY nom — wanted nom bilan yopib qo‘yib eski id’ni qabul qilmaslik.
+  const name = (row.name || catalogProduct?.name || "").trim();
+  if (!name) return null;
   const probe = { name, factory: catalogProduct?.factory ?? null };
   if (!productBelongsToFactory(probe, factory, scope.factoryName)) return null;
   const parts = parseBordoName(name);
@@ -907,7 +909,9 @@ function acceptFactoryProduct(
   if (line.productCode.trim() && !productCodeMatches(parts.productCode, line.productCode)) return null;
   if (line.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(line.size))) return null;
   const group = compactCode(line.sectionCode || "");
-  if (group && parts.groupCode && compactCode(parts.groupCode) !== group) return null;
+  if (group) {
+    if (!parts.groupCode || compactCode(parts.groupCode) !== group) return null;
+  }
   return row;
 }
 
@@ -925,15 +929,17 @@ export async function findExistingBordoProduct(
   const localId = String(line.productId || "").trim();
   if (localId) {
     const local = scope.catalog.products.find((product) => product.id === localId);
-    const loaded = local
+    // Nom yo‘q/bo‘sh bo‘lsa MoySkladdan o‘qiymiz — wanted name bilan eski id’ni “277” deb o‘tkazmaslik.
+    const loaded = local?.name?.trim()
       ? {
         id: local.id,
-        name: local.name || name,
+        name: local.name,
         meta: entityMeta(`${BASE}/entity/product/${local.id}`, "product"),
       }
       : await productById(localId);
     const accepted = acceptFactoryProduct(loaded, scope, line);
     if (accepted) return rememberProduct(accepted, [name]);
+    // productId boshqa kodga tegishli bo‘lsa — e’tiborsiz qoldiramiz, yangi kartochka yaratiladi.
   }
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
@@ -944,12 +950,15 @@ export async function findExistingBordoProduct(
   });
   if (catalogMatch?.id) {
     const listed = scope.catalog.products.find((product) => product.id === catalogMatch.id);
-    const accepted = acceptFactoryProduct({
-      id: catalogMatch.id,
-      name: catalogMatch.name || listed?.name || name,
-      meta: entityMeta(`${BASE}/entity/product/${catalogMatch.id}`, "product"),
-    }, scope, line);
-    if (accepted) return rememberProduct(accepted, [name]);
+    const realName = (catalogMatch.name || listed?.name || "").trim();
+    if (realName) {
+      const accepted = acceptFactoryProduct({
+        id: catalogMatch.id,
+        name: realName,
+        meta: entityMeta(`${BASE}/entity/product/${catalogMatch.id}`, "product"),
+      }, scope, line);
+      if (accepted) return rememberProduct(accepted, [name]);
+    }
   }
   // Kirim tezligi: katalogda yo‘q bo‘lsa remote qidiruvni o‘tkazib yuborish.
   // Dublikat bo‘lsa createProduct conflict recovery topadi.

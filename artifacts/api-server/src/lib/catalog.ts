@@ -979,15 +979,16 @@ export function listWaybillProducts(
     if (parts) {
       if (!productCodeMatches(parts.productCode, code)) return false;
       if (size && compactCode(parts.size) !== compactCode(size)) return false;
-      if (group && parts.groupCode && !sameToken(parts.groupCode, group)) return false;
-      if (group && !parts.groupCode && lastNumericToken(product.category || "") !== group) return false;
+      if (group) {
+        if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
+      }
       return true;
     }
+    // Parse bo‘lmasa faqat code/article aniq tengligi — wholeToken bilan 277→eski tovar xatosi bo‘lmasin.
     const byIdentity = sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code);
-    const byName = wholeToken(product.name, code, 1) || productCodeMatches(product.name, code);
-    if (!byIdentity && !byName) return false;
+    if (!byIdentity) return false;
     if (size && !nameHasSize(product.name, size)) return false;
-    if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group && !wholeToken(product.name, group)) return false;
+    if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group) return false;
     return true;
   });
   if (!group) return rows;
@@ -1013,19 +1014,8 @@ export function matchWaybillProduct(
 ): { id: string; name: string } | null {
   const code = input.productCode.trim();
   if (!code) return null;
-  const group = input.groupCode?.trim() || "";
-  const exact = listWaybillProducts(catalog, input);
-  const hit = pickPassport(exact);
-  if (hit || !group) return hit;
-  const typed = group.toLowerCase();
-  const loose = listWaybillProducts(catalog, { ...input, groupCode: "" }).filter((product) => {
-    const other = (parseBordoName(product.name)?.groupCode || "").toLowerCase();
-    if (!other) return true;
-    return other !== typed && !other.startsWith(typed) && !typed.startsWith(other);
-  });
-  const withGroup = loose.filter((product) => Boolean(parseBordoName(product.name)?.groupCode));
-  const ungrouped = loose.filter((product) => !parseBordoName(product.name)?.groupCode);
-  return pickPassport(withGroup.length ? withGroup : ungrouped);
+  // Faqat aniq factory+group+code+size. Boshqa guruhdagi eski kartochkaga yopishtirish taqiqlanadi.
+  return pickPassport(listWaybillProducts(catalog, input));
 }
 
 export function matchNamedProducts(
