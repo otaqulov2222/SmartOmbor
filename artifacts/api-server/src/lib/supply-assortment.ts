@@ -468,7 +468,7 @@ async function recoverExistingProduct(name: string) {
     const hit = await productByName(alias);
     if (hit && recoveredCardFits(hit, wanted)) return hit;
   }
-  await sleep(300);
+  await sleep(80);
   for (const alias of nameAliases(wanted)) {
     const hit = await searchListedName(alias);
     if (hit && recoveredCardFits(hit, wanted)) return hit;
@@ -503,7 +503,7 @@ async function createProduct(body: Record<string, unknown>): Promise<ProductRow 
         }
         logger.warn({ name: wanted, parameter, err: error instanceof Error ? error.message : error }, "MoySklad product create recovered lookup");
         if (writeDropped(error)) {
-          await sleep(400);
+          await sleep(100);
           continue;
         }
         break;
@@ -1021,63 +1021,88 @@ export async function buildSupplyPositions(
 
   const byIdentity = new Map<string, ProductRow>();
   const byName = new Map<string, ProductRow>();
+  const folders = await productFolders();
+  const sectionCodes = [...new Set(resolved.map((item) => item.line.sectionCode.trim()).filter(Boolean))];
+  const folderByCode = new Map<string, FolderRow | null>();
+  await Promise.all(sectionCodes.map(async (code) => {
+    folderByCode.set(code, await ensureFolder(folders, code));
+  }));
+  for (const item of resolved) {
+    const code = item.line.sectionCode.trim();
+    if (code) item.folder = folderByCode.get(code) ?? null;
+  }
   for (const item of resolved) {
     const known = item.parent || byIdentity.get(item.key) || byName.get(item.name) || null;
-    if (known) {
-      item.parent = known;
-      parents.set(known.id, known);
-      byIdentity.set(item.key, known);
-      byName.set(item.name, known);
-      continue;
-    }
-    const packSize = packSizeOf(item.line);
-    const folders = await productFolders();
-    const folder = item.folder ?? await ensureFolder(folders, item.line.sectionCode);
-    item.folder = folder;
-    const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
-    usedBarcodes.add(barcode);
-    const sales = salesForLine(item.line);
-    const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : null;
-    const product = await createProduct({
-      name: item.name,
-      uom: { meta: uomMeta(PIECE_UOM) },
-      barcodes: [{ ean13: barcode }],
-      ...(folder ? { productFolder: { meta: folder.meta } } : {}),
-      ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
-      ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
-      ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
-      ...(listed ? { salePrices: priceBody(listed) } : {}),
-    });
-    if (listed) product.salePrices = listed;
-    if (folder) product.folderName = folder.name;
-    product.barcodes = barcodeValues(product.barcodes);
-    const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
-    if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
-    item.parent = product;
-    parents.set(product.id, product);
-    byIdentity.set(item.key, product);
-    byName.set(item.name, product);
-    if (!created.some((row) => row.id === product.id)) created.push(product);
+    if (!known) continue;
+    item.parent = known;
+    parents.set(known.id, known);
+    byIdentity.set(item.key, known);
+    byName.set(item.name, known);
   }
-
-  const folders = await productFolders();
+  const createQueue: typeof resolved = [];
+  const seenKeys = new Set<string>();
   for (const item of resolved) {
-    if (item.folder || !item.line.sectionCode.trim()) continue;
-    item.folder = await ensureFolder(folders, item.line.sectionCode);
+    if (item.parent) continue;
+    if (seenKeys.has(item.key)) continue;
+    seenKeys.add(item.key);
+    createQueue.push(item);
   }
+  await saleTypes();
+  const CREATE_POOL = 8;
+  for (let i = 0; i < createQueue.length; i += CREATE_POOL) {
+    const batch = createQueue.slice(i, i + CREATE_POOL);
+    await Promise.all(batch.map(async (item) => {
+      const packSize = packSizeOf(item.line);
+      const folder = item.folder;
+      const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
+      usedBarcodes.add(barcode);
+      const sales = salesForLine(item.line);
+      const listed = sales ? await listedAllPrices(undefined, sales, currencyMeta) : null;
+      const product = await createProduct({
+        name: item.name,
+        uom: { meta: uomMeta(PIECE_UOM) },
+        barcodes: [{ ean13: barcode }],
+        ...(folder ? { productFolder: { meta: folder.meta } } : {}),
+        ...(scope.supplierMeta ? { supplier: { meta: scope.supplierMeta } } : {}),
+        ...(packSize ? { packs: [{ quantity: packSize, uom: { meta: uomMeta(PACHKA_UOM) } }] } : {}),
+        ...(item.line.price > 0 ? { buyPrice: { value: Math.round(item.line.price * 100), currency: { meta: currencyMeta } } } : {}),
+        ...(listed ? { salePrices: priceBody(listed) } : {}),
+      });
+      if (listed) product.salePrices = listed;
+      if (folder) product.folderName = folder.name;
+      product.barcodes = barcodeValues(product.barcodes);
+      const createdPack = (product.packs ?? []).find((pack) => pack.id && pack.quantity === packSize);
+      if (createdPack?.uom?.meta) packCache.set(`${product.id}:${packSize}`, createdPack);
+      item.parent = product;
+      parents.set(product.id, product);
+      byIdentity.set(item.key, product);
+      byName.set(item.name, product);
+      if (!created.some((row) => row.id === product.id)) created.push(product);
+    }));
+  }
+  for (const item of resolved) {
+    if (item.parent) continue;
+    const known = byIdentity.get(item.key) || byName.get(item.name) || null;
+    if (!known) continue;
+    item.parent = known;
+    parents.set(known.id, known);
+  }
+  // Kartochka stamp kirimdan KEYIN fon rejimida — kritik yo‘lni bloklamasin.
   const stamped = new Set<string>();
   for (const item of resolved) {
     const product = item.parent;
     if (!product || stamped.has(product.id)) continue;
     stamped.add(product.id);
     const priced = saleForLine(item.line);
-    await writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
+    void writeProductCard(product.id, priced.sale, priced.type, currencyMeta, {
       supplierMeta: scope.supplierMeta,
       folderMeta: item.folder?.meta ?? null,
       description: cardDescription(item.line),
       packSize: packSizeOf(item.line),
       buySom: item.line.price,
       sales: salesForLine(item.line) ?? undefined,
+    }).catch((error) => {
+      logger.warn({ product: product.id, err: error instanceof Error ? error.message : error }, "MoySklad card stamp deferred failed");
     });
   }
 

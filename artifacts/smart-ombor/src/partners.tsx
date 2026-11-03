@@ -360,7 +360,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
   };
   if (locked) {
     return <>
-      <td data-label={t('zavod.brand')}><b>Bordo</b></td>
+      <td data-label={t('zavod.brand')}><b>BORDO</b></td>
       <td data-label={t('zavod.factoryCode')}>{line.factoryCode || '—'}</td>
       <td data-label={t('zavod.groupCode')}>{line.sectionCode || '—'}</td>
       <td data-label={t('zavod.product')}><b>{line.productCode || '—'}</b></td>
@@ -375,7 +375,7 @@ function WaybillCells({ line, locked, markup, onSave }: { line: Line; locked: bo
     </>;
   }
   return <>
-    <td data-label={t('zavod.brand')}><b>Bordo</b></td>
+    <td data-label={t('zavod.brand')}><b>BORDO</b></td>
     <td data-label={t('zavod.factoryCode')}><input className="input" aria-label={t('zavod.factoryCode')} autoCapitalize="characters" value={factoryCode} onChange={event => setFactoryCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.groupCode')}><input className="input" aria-label={t('zavod.groupCode')} autoCapitalize="characters" value={sectionCode} onChange={event => setSectionCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
     <td data-label={t('zavod.product')}><input className="input" aria-label={t('zavod.product')} autoCapitalize="characters" value={productCode} onChange={event => setProductCode(codeInput(event.target.value))} onBlur={() => applyPassport()}/></td>
@@ -431,7 +431,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
       shipment.number,
       date(shipment.date),
       statusLabel(shipment.status, t),
-      'Bordo',
+      'BORDO',
       line.factoryCode,
       line.sectionCode,
       line.productCode,
@@ -450,7 +450,7 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   };
   const pdf = () => {
     const blocks = shipments.map(shipment => {
-      const body = shipment.lines.map(line => `<tr><td>Bordo</td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${line.pachka && line.pachka > 1 ? fmt(line.pachka) : '—'}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(markupLabel(line, DEFAULT_MARKUP))}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
+      const body = shipment.lines.map(line => `<tr><td><b>BORDO</b></td><td>${htmlEscape(line.factoryCode || '—')}</td><td>${htmlEscape(line.sectionCode || '—')}</td><td><b>${htmlEscape(line.productCode || '—')}</b></td><td>${htmlEscape(line.size || '—')}</td><td class="num">${fmt(line.pairs)}</td><td class="num">${line.pachka && line.pachka > 1 ? fmt(line.pachka) : '—'}</td><td class="num">${fmt(line.boxes)}</td><td class="num">${line.price ? htmlEscape(money(line.price)) : '—'}</td><td>${htmlEscape(markupLabel(line, DEFAULT_MARKUP))}</td><td>${htmlEscape(colorText(line, fmt) || '—')}</td><td class="num">${htmlEscape(money(lineUnits(line) * line.price))}</td></tr>`).join('');
       return `<article><header><div><p>${htmlEscape(code || factory)}</p><h2>${htmlEscape(shipment.number)}</h2></div><div class="meta"><div>${htmlEscape(date(shipment.date))}</div><div>${htmlEscape(statusLabel(shipment.status, t))}</div><b>${htmlEscape(money(shipment.amount))}</b></div></header><table><thead><tr><th>${htmlEscape(t('zavod.brand'))}</th><th>${htmlEscape(t('zavod.factoryCode'))}</th><th>${htmlEscape(t('zavod.groupCode'))}</th><th>${htmlEscape(t('zavod.product'))}</th><th>${htmlEscape(t('zavod.size'))}</th><th>${htmlEscape(t('zavod.pairs'))}</th><th>${htmlEscape(t('zavod.pachka'))}</th><th>${htmlEscape(t('zavod.boxes'))}</th><th>${htmlEscape(t('zavod.price'))}</th><th>${htmlEscape(t('zavod.priceType'))}</th><th>${htmlEscape(t('zavod.colors'))}</th><th>${htmlEscape(t('zavod.sum'))}</th></tr></thead><tbody>${body}</tbody></table>${shipment.note ? `<p class="note">${htmlEscape(shipment.note)}</p>` : ''}</article>`;
     }).join('');
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"/><title>${htmlEscape(title)}</title><style>
@@ -827,7 +827,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       for (let i = 0; i < tries; i += 1) {
         const hit = await postedNow();
         if (hit) return hit;
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        await new Promise(resolve => setTimeout(resolve, 120));
       }
       return postedNow();
     };
@@ -867,8 +867,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '' }) });
         return true;
       };
-      for (let i = 0; i < 180; i += 1) {
-        if (i > 0 && i % 6 === 0) {
+      for (let i = 0; i < 600; i += 1) {
+        if (i > 0 && i % 4 === 0) {
           const hit = await postedNow();
           if (hit) {
             setSupplyingId(null);
@@ -879,12 +879,12 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
         const unique = /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(String(body.detail || body.error || ''));
         if (body.pending || status.status === 202) {
-          await new Promise(resolve => setTimeout(resolve, 400));
+          await new Promise(resolve => setTimeout(resolve, 50));
           continue;
         }
         if (status.status === 404 || body.error === 'idle' || unique) {
           await resume();
-          await new Promise(resolve => setTimeout(resolve, 400));
+          await new Promise(resolve => setTimeout(resolve, 50));
           continue;
         }
         if ((status.ok || body.already) && (body.id || body.already)) {
@@ -897,7 +897,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         setPosting(posting);
         return;
       }
-      const hit = await waitPosted(8);
+      const hit = await waitPosted(40);
       if (hit) {
         setSupplyingId(null);
         return;
@@ -1073,7 +1073,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   const editingColors = colorFor === line.id;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
-                      <td>{line.model || '—'}</td>
+                      <td><b>BORDO</b></td>
                       <td>{line.factoryCode || '—'}</td>
                       <td>{line.sectionCode || '—'}</td>
                       <td>{line.productCode || line.productName || '—'}</td>
