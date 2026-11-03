@@ -835,7 +835,7 @@ export function normalizeBordoCode(value: string): string {
   return foldGlyphs(value).trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US");
 }
 
-export const BORDO_SIZES = ["20-23", "20-25", "22-27", "24-29", "30-35", "36-40", "40-44", "41-43"] as const;
+export const BORDO_SIZES = ["20-23", "20-25", "22-27", "24-29", "28-32", "30-35", "33-37", "35-39", "36-40", "40-44", "41-43"] as const;
 
 export function normalizeBordoSize(value: string): string {
   const folded = foldGlyphs(value).trim().replace(/\s+/g, "");
