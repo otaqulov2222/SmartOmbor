@@ -363,6 +363,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .scrim { position: fixed; inset: 0; z-index: 40; background: rgb(15 23 42 / .5); }
 .modal { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; background: var(--surface); border-radius: var(--r-lg); padding: 1.2rem; display: grid; gap: 1rem; box-shadow: var(--shadow-lg); animation: pop-in .2s cubic-bezier(.2,.8,.2,1); }
+.modal.task-editor-full { width: min(1180px, calc(100vw - 1.5rem)); max-width: none; padding: 0; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
 .product-add { width: min(760px, calc(100vw - 2rem)); align-content: start; }
 .product-add .form-grid { align-items: start; }
 .product-add .sale-triple-row { grid-template-columns: 7rem 6.2rem minmax(0, 1fr); }
@@ -1153,7 +1154,7 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   .nav-item { min-height: 2.7rem; }
   .lang-dd-menu { max-width: calc(100vw - 1.25rem); }
   .backdrop { align-items: end; padding: 0; }
-  .modal, .waybill-editor, .product-add, .product-modal, .export-modal {
+  .modal:not(.task-editor-full), .waybill-editor, .product-add, .product-modal, .export-modal {
     width: 100%; max-width: 100%; margin: 0;
     max-height: min(92dvh, 100%);
     border-radius: 1.1rem 1.1rem 0 0;
