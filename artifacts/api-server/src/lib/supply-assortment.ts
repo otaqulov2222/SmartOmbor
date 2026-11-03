@@ -457,24 +457,52 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
   if (!sameFactoryCode(parts.factoryCode, expected.factoryCode)) return false;
   if (!productCodeMatches(parts.productCode, expected.productCode)) return false;
   if (compactCode(parts.size) !== compactCode(expected.size)) return false;
-  if (expected.groupCode && parts.groupCode && compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
+  // Guruh ham bir xil bo‘lishi shart — aks holda 277 boshqa guruhdagi eski kartochkaga yopishadi.
+  if (expected.groupCode) {
+    if (!parts.groupCode || compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
+  }
   return true;
+}
+
+/** Faqat aniq name= filter — fuzzy search bilan noto‘g‘ri kartochka olinmasin. */
+async function productByExactName(name: string) {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  if (!trimmed) return null;
+  const remembered = cachedByName(trimmed);
+  if (remembered && recoveredCardFits(remembered, trimmed) && sameListedName(remembered.name || "", trimmed)) {
+    return remembered;
+  }
+  try {
+    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=10&filter=${encodeURIComponent(`name=${quoteFilterValue(trimmed)}`)}`);
+    const hit = pickNamedRow(page.rows, trimmed);
+    if (hit?.id) {
+      const row = await productById(hit.id);
+      if (row && recoveredCardFits(row, trimmed) && sameListedName(row.name || "", trimmed)) {
+        return rememberProduct(row, [trimmed]);
+      }
+    }
+  } catch (error) {
+    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+  }
+  return null;
 }
 
 async function recoverExistingProduct(name: string) {
   const wanted = name.trim().replace(/\s+/g, " ");
   if (!wanted) return null;
+  // Avval aniq nom — fuzzy search noto‘g‘ri kodni eski kartochkaga ulab yubormasin.
   for (const alias of nameAliases(wanted)) {
-    const hit = await productByName(alias);
+    const hit = await productByExactName(alias);
     if (hit && recoveredCardFits(hit, wanted)) return hit;
   }
+  const exact = await productByExactName(wanted);
+  if (exact && recoveredCardFits(exact, wanted)) return exact;
   await sleep(80);
   for (const alias of nameAliases(wanted)) {
     const hit = await searchListedName(alias);
-    if (hit && recoveredCardFits(hit, wanted)) return hit;
+    if (hit && recoveredCardFits(hit, wanted) && sameListedName(hit.name || "", alias)) return hit;
   }
-  const fallback = await productByName(wanted);
-  return fallback && recoveredCardFits(fallback, wanted) ? fallback : null;
+  return null;
 }
 
 async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> }> {
@@ -918,7 +946,7 @@ function acceptFactoryProduct(
 export async function findExistingBordoProduct(
   line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
-  opts?: { remote?: boolean },
+  opts?: { remote?: boolean | "exact" },
 ): Promise<ProductRow | null> {
   const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode);
   const groupCode = line.sectionCode || "";
@@ -960,47 +988,12 @@ export async function findExistingBordoProduct(
       if (accepted) return rememberProduct(accepted, [name]);
     }
   }
-  // Kirim tezligi: katalogda yo‘q bo‘lsa remote qidiruvni o‘tkazib yuborish.
-  // Dublikat bo‘lsa createProduct conflict recovery topadi.
+  // remote:false — umuman remote yo‘q. default/"exact" — faqat aniq nom (fuzzy search YO‘Q).
   if (opts?.remote === false) return null;
-  const named = name.length >= 2 ? acceptFactoryProduct(await productByName(name), scope, line) : null;
-  if (named) return named;
-  const code = line.productCode.trim();
-  if (code.length < 2) return null;
-  try {
-    const page = await moysklad<{ rows: Array<{ id?: string; name?: string }> }>(`/entity/product?limit=50&search=${encodeURIComponent(code)}`);
-    const rows = page.rows.filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-    const matched = matchNamedProducts(rows, {
-      factoryCode: factory,
-      factoryName: scope.factoryName,
-      groupCode,
-      productCode: line.productCode,
-      size,
-    }) || matchNamedProducts(rows, {
-      factoryCode: factory,
-      factoryName: scope.factoryName,
-      groupCode: "",
-      productCode: line.productCode,
-      size,
-    });
-    if (matched?.id) {
-      const row = acceptFactoryProduct(await productById(matched.id), scope, line);
-      if (row) return rememberProduct(row, [name]);
-    }
-    const identity = rows.find((row) => sameBordoCard(row.name, {
-      factoryCode: factory,
-      productCode: line.productCode,
-      size,
-      groupCode,
-    }));
-    if (identity?.id) {
-      const row = acceptFactoryProduct(await productById(identity.id), scope, line);
-      if (row) return rememberProduct(row, [name]);
-    }
-  } catch (error) {
-    if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
-    logger.warn({ code, err: error instanceof Error ? error.message : error }, "MoySklad product search skipped");
-  }
+  if (name.length < 2) return null;
+  const named = acceptFactoryProduct(await productByExactName(name), scope, line);
+  if (named) return rememberProduct(named, [name]);
+  // Fuzzy search=code olib tashlandi: 277/106 ni eski kartochkaga yopishtirib yuborardi.
   return null;
 }
 
@@ -1021,8 +1014,8 @@ export async function buildSupplyPositions(
   const findOnce = (cacheKey: string, line: ShipmentLine) => {
     let pending = findInflight.get(cacheKey);
     if (!pending) {
-      // Katalog/local ID yetarli; remote qidiruv yangi tovarlarda daqiqalar olib tashlaydi.
-      pending = findExistingBordoProduct(line, scope, { remote: false });
+      // Aniq nom bilan MoySkladdan topish — dublikat bo‘lmasin, fuzzy bilan noto‘g‘ri kartochka bo‘lmasin.
+      pending = findExistingBordoProduct(line, scope, { remote: "exact" });
       findInflight.set(cacheKey, pending);
     }
     return pending;

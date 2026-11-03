@@ -809,6 +809,10 @@ export function sameBordoCard(
   if (!sameFactoryCode(parts.factoryCode, input.factoryCode)) return false;
   if (!productCodeMatches(parts.productCode, input.productCode)) return false;
   if (input.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(input.size))) return false;
+  const group = input.groupCode?.trim() || "";
+  if (group) {
+    if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
+  }
   return true;
 }
 
