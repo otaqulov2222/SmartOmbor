@@ -64,8 +64,6 @@ export function OfficeTasksPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [peopleQuery, setPeopleQuery] = useState('');
-  const [filterOfis, setFilterOfis] = useState(true);
-  const [filterDorixona, setFilterDorixona] = useState(true);
   const [remindBefore, setRemindBefore] = useState('1d');
   const [recurring, setRecurring] = useState(false);
   const [recurringKind, setRecurringKind] = useState<'weekly' | 'daily' | 'monthly'>('weekly');
@@ -127,17 +125,13 @@ export function OfficeTasksPage() {
   const pct = (n: number) => stats.total ? Math.round((n / stats.total) * 100) : 0;
 
   const roleLabel = (role: string) => t(`role.${role}` as TKey);
-  const isOfisRole = (role: string) => ['office', 'super_admin', 'manager', 'accountant', 'analyst'].includes(role);
   const peopleFiltered = useMemo(() => {
     const q = peopleQuery.trim().toLowerCase();
     return people.filter(item => {
-      if (!filterOfis && isOfisRole(item.role)) return false;
-      if (!filterDorixona && !isOfisRole(item.role)) return false;
-      if (!filterOfis && !filterDorixona) return false;
       if (q && !`${item.name} ${item.login} ${item.role}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [people, peopleQuery, filterOfis, filterDorixona]);
+  }, [people, peopleQuery]);
   const togglePerson = (id: string) => {
     setPicked(list => list.includes(id) ? list.filter(item => item !== id) : [...list, id]);
   };
@@ -145,7 +139,7 @@ export function OfficeTasksPage() {
     setTitle(''); setBody(''); setPicked([]); setPriority('normal'); setDueDate(today); setDueTime('18:00');
     setRemindBefore('1d'); setRecurring(false); setRecurringKind('weekly'); setAcceptDeadline(false);
     setVisibility('shared'); setComment(''); setFiles([]); setDraftMsg(''); setNote(''); setSideTab('chat');
-    setPeopleOpen(false); setPeopleQuery(''); setFilterOfis(true); setFilterDorixona(true);
+    setPeopleOpen(false); setPeopleQuery('');
   };
   const openCreate = () => { resetForm(); setOpenNew(true); };
   const createTask = async () => {
@@ -368,13 +362,10 @@ export function OfficeTasksPage() {
             </section>
             <section className="task-block task-assignee-block">
               <div className="task-block-head">
-                <h3>{t('office.assigneeOne')}</h3>
-                <div className="task-scope">
-                  <label className={filterOfis ? 'is-on' : ''}><input type="checkbox" checked={filterOfis} onChange={event => setFilterOfis(event.target.checked)}/> {t('office.scopeOffice')}</label>
-                  <label className={filterDorixona ? 'is-on' : ''}><input type="checkbox" checked={filterDorixona} onChange={event => setFilterDorixona(event.target.checked)}/> {t('office.scopeShop')}</label>
-                </div>
+                <h3>{t('office.assignees')}</h3>
+                <span className="task-picked">{picked.length} {t('office.selected')}</span>
               </div>
-              <p className="field-label">{t('office.assigneeOne')}</p>
+              <p className="muted task-hint">{t('office.assigneesHint')}</p>
               <div className={`task-picker ${peopleOpen ? 'is-open' : ''}`}>
                 <button type="button" className="task-picker-trigger" onClick={() => setPeopleOpen(open => !open)} aria-expanded={peopleOpen}>
                   <span>{picked.length ? t('office.selectedCount', { n: picked.length }) : t('office.pickEmployee')}</span>
@@ -394,13 +385,8 @@ export function OfficeTasksPage() {
                   </div>
                 </div>}
               </div>
-              <div className="task-block-head task-assignee-multi">
-                <h3>{t('office.assignees')}</h3>
-                <span className="task-picked">{picked.length} {t('office.selected')}</span>
-              </div>
-              <p className="muted task-hint">{t('office.assigneesHint')}</p>
-              <div className="task-people">
-                {picked.length ? picked.map(id => {
+              {picked.length > 0 && <div className="task-people">
+                {picked.map(id => {
                   const item = people.find(row => row.id === id);
                   if (!item) return null;
                   return <button type="button" key={id} className="is-on" onClick={() => togglePerson(id)}>
@@ -408,8 +394,8 @@ export function OfficeTasksPage() {
                     {item.name}
                     <X size={14}/>
                   </button>;
-                }) : <p className="muted">{t('office.pickEmployee')}</p>}
-              </div>
+                })}
+              </div>}
             </section>
             <section className="task-block">
               <h3>{t('office.deadlineBlock')}</h3>

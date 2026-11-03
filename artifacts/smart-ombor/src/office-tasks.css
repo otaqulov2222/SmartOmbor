@@ -287,13 +287,6 @@
   display: inline-flex; background: #e2e8f0; border-radius: 999px; padding: 4px 10px;
   font-size: .75rem; font-weight: 700; color: #334155;
 }
-.task-scope { display: flex; flex-wrap: wrap; gap: 8px; }
-.task-scope label {
-  display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
-  border: 1px solid #dbe3f0; background: #fff; font-size: .8rem; font-weight: 700; color: #64748b; cursor: pointer;
-}
-.task-scope label.is-on { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
-.task-scope input { accent-color: #1d4ed8; }
 .task-picker { display: grid; gap: 0; }
 .task-picker-trigger {
   width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -330,8 +323,7 @@
 .task-picker-meta b { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-picker-meta small { color: #94a3b8; font-size: .75rem; }
 .task-picker-empty { margin: 0; padding: 16px 10px; text-align: center; }
-.task-assignee-multi { margin-top: 14px; }
-.task-people { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-people { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .task-people button {
   display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line);
   background: #fff; border-radius: 999px; padding: 6px 10px 6px 6px; font: inherit; font-weight: 600;
