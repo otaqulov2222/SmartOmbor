@@ -89,9 +89,9 @@ const moreGroups: { key: TKey; hrefs: string[] }[] = [
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const warehouseAllowedHrefs = new Set([
   '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
-  '/scanner', '/recommendations', '/office', '/tasks',
+  '/scanner', '/recommendations', '/office', '/tasks', '/partners',
 ]);
-const warehousePrimaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner'];
+const warehousePrimaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
 ];

@@ -488,8 +488,8 @@ export function PartnersPage() {
   const held = useRef<Row | null>(null);
   const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
-    staleTime: 5_000,
-    refetchInterval: 4_000,
+    staleTime: 15_000,
+    refetchInterval: selected ? false : 12_000,
     queryFn: async () => {
       const response = await fetch('/api/partner-alerts');
       if (!response.ok) throw new Error('alerts');
@@ -499,16 +499,15 @@ export function PartnersPage() {
   const revision = alerts.data?.revision;
   const lastRevision = useRef<number | null>(null);
   useEffect(() => {
-    if (revision == null) return;
+    if (revision == null || selected) return;
     if (lastRevision.current === revision) return;
     lastRevision.current = revision;
     void cache.refetchQueries({ queryKey: ['partner-factories'] });
-    void cache.refetchQueries({ queryKey: ['partner-detail'] });
-  }, [revision, cache]);
+  }, [revision, cache, selected]);
   const list = useQuery<{ items: Row[] }>({
     queryKey: ['partner-factories'],
-    staleTime: 8_000,
-    refetchInterval: 10_000,
+    staleTime: 20_000,
+    refetchInterval: selected ? false : 20_000,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch('/api/partner-factories');
@@ -527,18 +526,20 @@ export function PartnersPage() {
   if (selected && row) {
     return <PartnerDetail row={row} onBack={() => setLocation('/partners')} />;
   }
-  if (selected && list.isFetching) {
+  if (selected && (list.isLoading || list.isFetching) && !list.data) {
     return <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div>;
   }
 
   return <>
     <div className="page-head partner-head"><div><h1>{t('partners.title')}</h1><p>{t('partners.sub')}</p></div><div className="partner-bar"><label className="partner-search"><Search size={16}/><input value={q} onChange={e => setQ(e.target.value)} placeholder={t('partners.search')} data-testid="input-partners-search"/>{q && <button type="button" className="partner-search-clear" onClick={() => setQ('')} aria-label={t('common.close')}><X size={14}/></button>}</label><button type="button" className="btn btn-primary" onClick={() => setCreating(true)} data-testid="button-add-partner"><Plus size={16}/>{t('partners.add')}</button></div></div>
-    {list.isLoading ? <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div> : items.length ? <div className="partner-grid">{items.map(row => <button key={row.name} type="button" className="partner-card" onClick={() => setLocation(`/partners?factory=${encodeURIComponent(row.name)}`)} data-testid={`partner-${row.name}`}>
+    {list.isError ? <div className="state state-error"><b>{t('common.loadFailedHint')}</b><button type="button" className="btn btn-secondary" onClick={() => void list.refetch()}>{t('error.retry')}</button></div>
+      : list.isLoading ? <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div>
+      : items.length ? <div className="partner-grid">{items.map(item => <button key={item.name} type="button" className="partner-card" onClick={() => setLocation(`/partners?factory=${encodeURIComponent(item.name)}`)} data-testid={`partner-${item.name}`}>
       <span className="partner-mark"><Factory size={18}/></span>
-      <span className="partner-copy"><b>{row.name}</b><small>{row.account?.code || t('partners.noAccount')}</small></span>
+      <span className="partner-copy"><b>{item.name}</b><small>{item.account?.code || t('partners.noAccount')}</small></span>
       <ChevronRight size={18} className="partner-go"/>
-      {(row.pendingCount ?? 0) > 0 && <span className="partner-alert" title={t('partners.pending', { count: row.pendingCount ?? 0 })}>{fmt(row.pendingCount ?? 0)}</span>}
-      <span className="partner-meta">{t('partners.shipments', { count: fmt(row.shipmentCount) })}{row.lastShipment ? ` · ${date(row.lastShipment)}` : ''}</span>
+      {(item.pendingCount ?? 0) > 0 && <span className="partner-alert" title={t('partners.pending', { count: item.pendingCount ?? 0 })}>{fmt(item.pendingCount ?? 0)}</span>}
+      <span className="partner-meta">{t('partners.shipments', { count: fmt(item.shipmentCount) })}{item.lastShipment ? ` · ${date(item.lastShipment)}` : ''}</span>
     </button>)}</div> : <div className="state state-empty"><b>{t('partners.empty')}</b></div>}
     {creating && <CreatePartner onClose={() => setCreating(false)} onCreated={async () => { setCreating(false); await cache.invalidateQueries({ queryKey: ['partner-factories'] }); }}/>}
   </>;
@@ -599,13 +600,13 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
   const [failed, setFailed] = useState(false);
   const [checked, setChecked] = useState(false);
   const nameRefs = useRef<Array<HTMLInputElement | null>>([]);
-  const focusAt = useRef(rows.length - 1);
+  const focusAt = useRef(-1);
   useEffect(() => {
     const index = focusAt.current;
     if (index < 0) return;
     focusAt.current = -1;
     nameRefs.current[index]?.focus();
-  });
+  }, [rows.length]);
   const edit = (index: number, field: 'name' | 'quantity', value: string) => {
     setChecked(false);
     setFailed(false);
@@ -616,9 +617,9 @@ function LineColors({ line, onSave }: { line: Line; onSave: (colors: ColorLine[]
       return [...next, { name: '', quantity: '' }];
     });
   };
-  const filled = mergeColors(rows
+  const filled = useMemo(() => mergeColors(rows
     .map(row => ({ name: row.name.trim(), quantity: Math.max(0, Number(row.quantity.replace(',', '.')) || 0) }))
-    .filter(row => row.name && row.quantity > 0));
+    .filter(row => row.name && row.quantity > 0)), [rows]);
   const sum = filled.reduce((total, row) => total + row.quantity, 0);
   const boxes = line.boxes;
   const diff = Math.abs(sum - boxes);
@@ -718,11 +719,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     setCode(row.account?.code || '');
     setLogin(row.account?.login || row.name.toLowerCase().replace(/[^a-z0-9]+/gi, '').slice(0, 16));
   }, [row.name, row.account?.code, row.account?.login]);
+  const editingNow = Boolean(colorFor || lineEdit || editing || settings || posting || removing || removingLine);
   const detail = useQuery<{ account: Account; shipments: Shipment[] }>({
     queryKey: ['partner-detail', row.account?.id],
     enabled: !!row.account,
-    staleTime: 4_000,
-    refetchInterval: 5_000,
+    staleTime: 15_000,
+    refetchInterval: editingNow ? false : 12_000,
+    refetchOnWindowFocus: !editingNow,
     placeholderData: previous => previous,
     queryFn: async () => {
       const response = await fetch(`/api/partner-factories/${row.account!.id}`);
@@ -733,15 +736,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const products = useQuery({
     queryKey: ['partner-catalog', row.account?.catalogName || row.name],
     enabled: catalogOpen,
-    staleTime: 60_000,
-    queryFn: async () => {
-      const pageSize = 100;
-      const first = await listProducts({ factory: row.name, page: 1, pageSize });
-      if (first.total <= first.items.length) return first;
-      const pages = Math.ceil(first.total / pageSize);
-      const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, index) => listProducts({ factory: row.name, page: index + 2, pageSize })));
-      return { ...first, items: [first.items, ...rest.map((page) => page.items)].flat() };
-    },
+    staleTime: 120_000,
+    queryFn: async () => listProducts({ factory: row.name, page: 1, pageSize: 80 }),
   });
   const warehouses = useListWarehouses();
   useEffect(() => {
@@ -1073,13 +1069,26 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                 <tbody>{(shipment.lines ?? []).map(line => {
                   const colors = mergeColors(line.colors ?? []);
                   const colored = colors.length > 0;
+                  const locked = Boolean(shipment.moyskladId);
+                  const editingColors = colorFor === line.id;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
-                      <WaybillCells line={line} locked={Boolean(shipment.moyskladId)} markup={markup} onSave={patch => saveLine(shipment, line, patch)}/>
-                      <td className="waybill-line-tools" data-label="">{!shipment.moyskladId && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
+                      <td>{line.model || '—'}</td>
+                      <td>{line.factoryCode || '—'}</td>
+                      <td>{line.sectionCode || '—'}</td>
+                      <td>{line.productCode || line.productName || '—'}</td>
+                      <td className="waybill-size">{line.size || '—'}</td>
+                      <td className="num">{fmt(line.pairs)}</td>
+                      <td className="num waybill-pachka">{line.pachka && line.pachka > 1 ? fmt(line.pachka) : '—'}</td>
+                      <td className="num">{fmt(line.boxes)}</td>
+                      <td className="num">{money(line.price)}</td>
+                      <td>{markupLabel(line, markup)}</td>
+                      <td className="waybill-colors-cell"><ColorCount colors={colors} fmt={fmt}/></td>
+                      <td className="num">{money(line.price * lineUnits(line))}</td>
+                      <td className="waybill-line-tools" data-label="">{!locked && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
                     </tr>
-                    {colored && colorFor !== line.id && <tr className="waybill-color-strip"><td colSpan={13}><div className="color-strip"><em>{t('zavod.colors')}</em><ColorMarks colors={colors} fmt={fmt}/></div></td></tr>}
-                    {colorFor === line.id && <tr><td className="waybill-colors" colSpan={13}><LineColors line={line} onSave={async colors => { const ok = await saveLine(shipment, line, { colors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
+                    {colored && !editingColors && <tr className="waybill-color-strip"><td colSpan={13}><div className="color-strip"><em>{t('zavod.colors')}</em><ColorMarks colors={colors} fmt={fmt}/></div></td></tr>}
+                    {editingColors && <tr><td className="waybill-colors" colSpan={13}><LineColors line={line} onSave={async nextColors => { const ok = await saveLine(shipment, line, { colors: nextColors }); if (ok) setColorFor(null); return ok; }}/></td></tr>}
                   </Fragment>;
                 })}</tbody>
               </table></div>

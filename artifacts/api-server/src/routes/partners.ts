@@ -69,7 +69,7 @@ router.get("/partner-alerts", async (_req, res, next) => {
 
 router.get("/partner-factories", async (_req, res, next) => {
   try {
-    await refreshPartnersIfNeeded();
+    void refreshPartnersIfNeeded();
     const catalog = peekCatalog();
     const grouped = new Map<string, { name: string; productCount: number; stock: number }>();
     for (const product of catalog?.products ?? []) {
@@ -221,14 +221,12 @@ function lineMatchesCatalogProduct(
 
 router.get("/partner-factories/:id", async (req, res, next) => {
   try {
-    await refreshPartnersIfNeeded();
+    void refreshPartnersIfNeeded();
     const account = getAccount(String(req.params.id));
     if (!account) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const catalog = peekCatalog();
-    if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
   } catch (error) {
