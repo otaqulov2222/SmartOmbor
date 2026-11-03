@@ -1077,6 +1077,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                   const editingColors = colorFor === line.id;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>
+                      {/* WaybillCells: guruh/pachka va qator maydonlari. Static <td> bilan almashtirmang. */}
                       <WaybillCells line={line} locked={locked} markup={markup} onSave={patch => saveLine(shipment, line, patch)} onEditFocus={active => setCellsFocus(count => Math.max(0, count + (active ? 1 : -1)))}/>
                       <td className="waybill-line-tools" data-label="">{!locked && <><button type="button" className="icon-btn" aria-label={t('partners.edit')} onClick={() => setLineEdit({ shipment, line })}><Pencil size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.colorAdd')} onClick={() => setColorFor(colorFor === line.id ? null : line.id)}><Plus size={14}/></button><button type="button" className="icon-btn" aria-label={t('partners.delete')} onClick={() => setRemovingLine({ shipment, line })}><Trash2 size={14}/></button></>}</td>
                     </tr>

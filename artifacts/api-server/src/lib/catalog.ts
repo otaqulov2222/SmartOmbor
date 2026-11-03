@@ -1082,6 +1082,13 @@ export function listWaybillProducts(
 }
 
 export function pickPassport(rows: CatalogProduct[]): { id: string; name: string } | null {
+  // Faqat bitta aniq kartochka — bir nechtadan taxminiy tanlash eski/noto‘g‘ri kartaga yopishtirardi.
+  if (rows.length !== 1) return null;
+  return { id: rows[0].id, name: rows[0].name };
+}
+
+/** Markup meros uchun: identity bog‘lamaydi, faqat foizlarni olish. */
+export function pickSibling(rows: CatalogProduct[]): { id: string; name: string } | null {
   if (!rows.length) return null;
   if (rows.length === 1) return { id: rows[0].id, name: rows[0].name };
   const withGroup = rows.filter((product) => Boolean(parseBordoName(product.name)?.groupCode));

@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickPassport, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickSibling, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -682,7 +682,7 @@ router.post("/products", async (req, res, next) => {
       return;
     }
     const family = listWaybillProducts(catalog, { factoryCode, factoryName: partner.name, productCode, size: "", groupCode });
-    const sibling = pickPassport(family);
+    const sibling = pickSibling(family);
     let inheritedMarkups: Partial<SaleMarkup> = {};
     if (sibling?.id) {
       const row = family.find((item) => item.id === sibling.id);
@@ -946,7 +946,7 @@ router.get("/products/passport", async (req, res, next) => {
       let sales: Partial<Record<SaleType, number>> = {};
       if (group) {
         const family = listWaybillProducts(catalog, { ...input, size: "" });
-        const sibling = pickPassport(family);
+        const sibling = pickSibling(family);
         if (sibling?.id) {
           const row = family.find((item) => item.id === sibling.id);
           const inherited = await readProductSaleMarkup(sibling.id, { cost: row?.cost, salePrice: row?.salePrice });
