@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CheckCircle2, Clock, Compass, Fingerprint, LogOut, MapPin, Phone, RefreshCw,
+  CheckCircle2, Clock, Compass, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
   Sparkles, TrendingUp, Users, Wallet,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
 import './kpi.css';
@@ -123,15 +123,46 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
 
 function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
   const [tab, setTab] = useState<Tab>('today');
+  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const cache = useQueryClient();
   const mode = readAgentToken() ? 'agent' : 'admin';
   const q = useQuery({
     queryKey: ['kpi-agent-cabinet'],
     queryFn: () => kpiFetch<CabinetData>('/kpi/agent/cabinet', {}, mode),
   });
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const sendLoc = (pos: GeolocationPosition) => {
+      const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
+      setCoords(next);
+      void kpiFetch('/kpi/agent/location', { method: 'POST', body: JSON.stringify(next) }, mode).catch(() => undefined);
+    };
+    navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, { enableHighAccuracy: true, timeout: 10000 });
+    const watchId = navigator.geolocation.watchPosition(sendLoc, () => undefined, {
+      enableHighAccuracy: true,
+      maximumAge: 30000,
+      timeout: 15000,
+    });
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [mode]);
+
   const markVisit = useMutation({
     mutationFn: (customerId: string) =>
-      kpiFetch('/kpi/agent/visit', { method: 'POST', body: JSON.stringify({ customerId, notes: 'Borildi / gaplashildi' }) }, mode),
+      kpiFetch(
+        '/kpi/agent/visit',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            customerId,
+            lat: coords?.lat ?? null,
+            lng: coords?.lng ?? null,
+            accuracy: coords?.accuracy ?? null,
+            notes: 'Borildi / gaplashildi',
+          }),
+        },
+        mode,
+      ),
     onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }),
   });
 
@@ -154,6 +185,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           </div>
         </div>
         <div className="ag-hero-actions">
+          <span className="ag-btn ag-btn-glass" title="GPS holati">
+            <Navigation size={15} /> {coords ? 'GPS ulangan' : 'GPS kutilmoqda'}
+          </span>
           <Link href="/office" className="ag-btn ag-btn-glass">
             <Fingerprint size={16} /> Davomat va hisobot
           </Link>

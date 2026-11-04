@@ -7,6 +7,7 @@ import {
   kpiCustomerAssignmentsTable,
   kpiCustomersTable,
   kpiLedgerTable,
+  kpiLocationEventsTable,
   kpiOrderItemsTable,
   kpiOrdersTable,
   kpiPaymentsTable,
@@ -1114,6 +1115,8 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       res.status(400).json({ error: "customerId kerak." });
       return;
     }
+    const lat = req.body?.lat != null && Number.isFinite(Number(req.body.lat)) ? String(Number(req.body.lat).toFixed(6)) : null;
+    const lng = req.body?.lng != null && Number.isFinite(Number(req.body.lng)) ? String(Number(req.body.lng).toFixed(6)) : null;
     const [row] = await db
       .insert(kpiVisitsTable)
       .values({
@@ -1122,12 +1125,191 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
         status: "done",
         startedAt: new Date(),
         finishedAt: new Date(),
-        lat: req.body?.lat != null ? String(req.body.lat) : null,
-        lng: req.body?.lng != null ? String(req.body.lng) : null,
+        lat,
+        lng,
         notes,
       })
       .returning();
+    if (lat && lng) {
+      await db.insert(kpiLocationEventsTable).values({
+        agentId: agent.id,
+        lat,
+        lng,
+        accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
+        source: "visit",
+      });
+      // If customer has no coordinates yet, save visit spot as store location
+      const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
+      if (cust && (!cust.lat || !cust.lng)) {
+        await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
+      }
+    }
     res.status(201).json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => {
+  try {
+    const agent = getKpiAgent(res);
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      res.status(400).json({ error: "lat/lng kerak." });
+      return;
+    }
+    const [row] = await db
+      .insert(kpiLocationEventsTable)
+      .values({
+        agentId: agent.id,
+        lat: lat.toFixed(6),
+        lng: lng.toFixed(6),
+        accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
+        source: String(req.body?.source ?? "live"),
+      })
+      .returning();
+    res.status(201).json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
+  try {
+    await ensureKpiBootstrapped();
+    const dateFilter = String(req.query.date ?? "").trim() || tashkentDate();
+    const agentFilter = String(req.query.agentId ?? "").trim();
+
+    const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
+    const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
+    const assigns = await db
+      .select()
+      .from(kpiCustomerAssignmentsTable)
+      .where(eq(kpiCustomerAssignmentsTable.active, true));
+    const assignByCustomer = new Map(assigns.map((a) => [a.customerId, a.agentId]));
+    const customers = await db.select().from(kpiCustomersTable).limit(500);
+    const orders = await db
+      .select({
+        customerId: kpiOrdersTable.customerId,
+        total: kpiOrdersTable.total,
+        paid: kpiOrdersTable.paidAmount,
+      })
+      .from(kpiOrdersTable)
+      .where(sql`${kpiOrdersTable.status} not in ('draft','cancelled')`);
+
+    const debtByCustomer = new Map<string, string>();
+    for (const o of orders) {
+      const due = moneySub(o.total, o.paid);
+      if (moneyCmp(due, 0) > 0) {
+        debtByCustomer.set(o.customerId, moneyAdd(debtByCustomer.get(o.customerId) || 0, due));
+      }
+    }
+
+    const locEvents = await db
+      .select()
+      .from(kpiLocationEventsTable)
+      .orderBy(desc(kpiLocationEventsTable.recordedAt))
+      .limit(400);
+    const visits = await db
+      .select()
+      .from(kpiVisitsTable)
+      .orderBy(desc(kpiVisitsTable.createdAt))
+      .limit(300);
+
+    const todayVisits = visits.filter((v) => v.createdAt.toISOString().slice(0, 10) === dateFilter);
+    const visitedByCustomer = new Map<string, { at: string; lat: string | null; lng: string | null; notes: string }>();
+    for (const v of todayVisits) {
+      if (!visitedByCustomer.has(v.customerId)) {
+        visitedByCustomer.set(v.customerId, {
+          at: v.createdAt.toISOString(),
+          lat: v.lat,
+          lng: v.lng,
+          notes: v.notes,
+        });
+      }
+    }
+
+    const lastLocByAgent = new Map<string, typeof locEvents[number]>();
+    for (const ev of locEvents) {
+      if (!lastLocByAgent.has(ev.agentId)) lastLocByAgent.set(ev.agentId, ev);
+    }
+
+    const agentMap = new Map(allAgents.map((a) => [a.id, a.fullName]));
+
+    const agentPins = agents.map((a) => {
+      const last = lastLocByAgent.get(a.id);
+      const myVisits = todayVisits.filter((v) => v.agentId === a.id);
+      const myCustomers = customers.filter(
+        (c) => (assignByCustomer.get(c.id) || c.createdByAgentId) === a.id,
+      );
+      const myDebtors = myCustomers.filter((c) => Number(debtByCustomer.get(c.id) || 0) > 0);
+      return {
+        id: a.id,
+        fullName: a.fullName,
+        login: a.login,
+        phone: a.phone,
+        lat: last?.lat ? Number(last.lat) : null,
+        lng: last?.lng ? Number(last.lng) : null,
+        accuracyM: last?.accuracyM ? Number(last.accuracyM) : null,
+        lastSeenAt: last?.recordedAt ? last.recordedAt.toISOString() : null,
+        customersCount: myCustomers.length,
+        debtorsCount: myDebtors.length,
+        visitedToday: myVisits.length,
+      };
+    });
+
+    const points = customers
+      .filter((c) => {
+        const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
+        if (agentFilter && owner !== agentFilter) return false;
+        return Boolean(c.lat && c.lng) || Number(debtByCustomer.get(c.id) || 0) > 0 || visitedByCustomer.has(c.id);
+      })
+      .slice(0, 200)
+      .map((c) => {
+        const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
+        const visit = visitedByCustomer.get(c.id);
+        const debt = debtByCustomer.get(c.id) || "0.00";
+        return {
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+          address: c.address,
+          agentId: owner || null,
+          agentName: owner ? agentMap.get(owner) || "—" : "—",
+          lat: c.lat ? Number(c.lat) : visit?.lat ? Number(visit.lat) : null,
+          lng: c.lng ? Number(c.lng) : visit?.lng ? Number(visit.lng) : null,
+          debt,
+          visitedToday: Boolean(visit),
+          visitedAt: visit?.at || null,
+          visitNotes: visit?.notes || "",
+        };
+      });
+
+    const routeLog = todayVisits
+      .filter((v) => !agentFilter || v.agentId === agentFilter)
+      .map((v) => {
+        const c = customers.find((x) => x.id === v.customerId);
+        return {
+          id: v.id,
+          agentId: v.agentId,
+          agentName: agentMap.get(v.agentId) || "—",
+          customerId: v.customerId,
+          customerName: c?.name || "—",
+          address: c?.address || "",
+          lat: v.lat ? Number(v.lat) : c?.lat ? Number(c.lat) : null,
+          lng: v.lng ? Number(v.lng) : c?.lng ? Number(c.lng) : null,
+          at: v.createdAt.toISOString(),
+          notes: v.notes,
+        };
+      });
+
+    res.json({
+      date: dateFilter,
+      agents: agentPins,
+      points,
+      routeLog,
+    });
   } catch (error) {
     next(error);
   }

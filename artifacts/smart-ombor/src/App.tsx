@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Gauge, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Gauge, Handshake, LayoutDashboard, ListChecks, LogOut, MapPin, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -39,6 +39,7 @@ import {
 } from '@/kpi/admin';
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
 import { EmployeesPage } from '@/kpi/employees';
+import { GpsPage } from '@/kpi/gps';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -81,6 +82,7 @@ const navigation: NavItem[] = [
   { key: 'nav.branches', href: '/branches', icon: Repeat, group: 'nav.group.analytics' },
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
   { key: 'nav.employees', href: '/employees', icon: Users, group: 'nav.group.workspace' },
+  { key: 'nav.gps', href: '/gps', icon: MapPin, group: 'nav.group.workspace' },
   { key: 'nav.myAgent', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.kpi', href: '/kpi', icon: Gauge, group: 'nav.group.kpi' },
   { key: 'nav.kpiAgents', href: '/kpi/agents', icon: Users, group: 'nav.group.kpi' },
@@ -93,7 +95,7 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/employees', '/products', '/partners'];
+const primaryHrefs = ['/dashboard', '/gps', '/employees', '/products', '/partners'];
 const officeHrefs = ['/office', '/office/report', '/office/tasks'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
@@ -1633,6 +1635,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/branches', titleKey: 'nav.branches', element: <BranchesPage/> },
   { path: '/partners', titleKey: 'nav.partners', element: <PartnersPage/> },
   { path: '/employees', titleKey: 'nav.employees', element: <EmployeesPage/> },
+  { path: '/gps', titleKey: 'nav.gps', element: <GpsPage/> },
   { path: '/my-kpi', titleKey: 'nav.myAgent', element: <AgentCabinetPage/> },
   { path: '/kpi', titleKey: 'nav.kpi', element: <KpiDashboardPage/> },
   { path: '/kpi/agents', titleKey: 'nav.kpiAgents', element: <KpiAgentsPage/> },

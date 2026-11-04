@@ -192,6 +192,19 @@
 .ag-stage.s-expired .ag-stage-kpi { color: #991b1b; }
 .ag-empty { padding: 1.5rem; text-align: center; color: #64748b; }
 
+/* ---------- GPS & Route Map ---------- */
+.gps-map-card { background: #fff; border: 1px solid #e4e8ee; border-radius: 18px; overflow: hidden; display: grid; }
+.gps-map-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid #eef2f6; flex-wrap: wrap; }
+.gps-iframe { width: 100%; height: 340px; border: 0; display: block; background: #eef2f6; }
+.gps-pins-bar { display: flex; gap: .45rem; flex-wrap: wrap; padding: .75rem 1rem; background: #f8fafc; border-top: 1px solid #eef2f6; }
+.gps-pin-chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  border: 1px solid #cbd5e1; background: #fff; color: #0f1b2d;
+  padding: .35rem .7rem; border-radius: 999px; font-size: .8rem; font-weight: 600; cursor: pointer;
+}
+.gps-pin-chip.is-agent { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
+.gps-pin-chip.is-visited { background: #f0fdf4; border-color: #86efac; color: #15803d; }
+
 @media (max-width: 960px) {
   .ag-stats { grid-template-columns: repeat(2, 1fr); }
   .ag-stages { grid-template-columns: repeat(2, 1fr); }
