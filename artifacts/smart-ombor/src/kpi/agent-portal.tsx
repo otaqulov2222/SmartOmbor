@@ -6,6 +6,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
+import { RouteMap, type RouteStop } from './route-map';
 import './kpi.css';
 
 type StageRow = {
@@ -38,15 +39,30 @@ type DealRow = {
 
 type CustomerCard = {
   id: string;
+  step: number;
   name: string;
   phone: string;
   address: string;
+  lat: number;
+  lng: number;
+  exactGps?: boolean;
   debt: string;
   visitedToday: boolean;
+  visitedAt?: string | null;
+  isNext?: boolean;
+  distanceM?: number | null;
 };
 
 type CabinetData = {
-  agent: { id: string; fullName: string; login: string; phone: string; salesPlan: string };
+  agent: {
+    id: string;
+    fullName: string;
+    login: string;
+    phone: string;
+    salesPlan: string;
+    lat?: number | null;
+    lng?: number | null;
+  };
   summary: {
     customersCount: number;
     debtorsCount: number;
@@ -57,6 +73,7 @@ type CabinetData = {
     kpiEarned: string;
     kpiPotential: string;
   };
+  track?: Array<{ lat: number; lng: number }>;
   customers: CustomerCard[];
   deals: DealRow[];
 };
@@ -123,6 +140,7 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
 
 function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
   const [tab, setTab] = useState<Tab>('today');
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const cache = useQueryClient();
   const mode = readAgentToken() ? 'agent' : 'admin';
@@ -269,47 +287,79 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       {/* TAB 1: Today's Route & Stops */}
       {tab === 'today' ? (
         <section className="ag-section">
+          <RouteMap
+            stops={(debtors.length ? debtors : d?.customers || []) as RouteStop[]}
+            track={d?.track || []}
+            agentPos={
+              coords
+                ? { lat: coords.lat, lng: coords.lng }
+                : d?.agent.lat != null && d?.agent.lng != null
+                  ? { lat: d.agent.lat, lng: d.agent.lng }
+                  : null
+            }
+            selectedStopId={selectedStopId}
+            onSelectStop={(st) => setSelectedStopId(st.id)}
+          />
+
           <div className="ag-section-head">
             <div>
-              <h2>Bugun borish va gaplashish kerak bo‘lgan nuqtalar</h2>
-              <p>Qarzdorligi bor mijozlar birinchi chiqadi. Borib gaplashgach «Bordim / Gaplashdim» tugmasini bosing.</p>
+              <h2>Bugungi marshrut nuqtalari (1 → {(debtors.length ? debtors : d?.customers || []).length})</h2>
+              <p>Nuqtaga borgach «Bordim / Gaplashdim» tugmasini bosing — <b>✓ pitichka</b> tushadi va navbat keyingi nuqtaga o‘tadi.</p>
             </div>
           </div>
           <div className="ag-stops">
             {(debtors.length ? debtors : d?.customers || []).map((c, idx) => {
               const hasDebt = Number(c.debt) > 0;
+              const stepNum = c.step || idx + 1;
               return (
-                <article key={c.id} className={`ag-stop ${c.visitedToday ? 'is-done' : hasDebt ? 'is-due' : ''}`}>
-                  <div className="ag-stop-num">{idx + 1}</div>
+                <article
+                  key={c.id}
+                  className={`ag-stop ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next-stop' : hasDebt ? 'is-due' : ''}`}
+                  onClick={() => setSelectedStopId(c.id)}
+                >
+                  <div className={`ag-stop-num ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next' : ''}`}>
+                    {c.visitedToday ? '✓' : stepNum}
+                  </div>
                   <div className="ag-stop-info">
                     <div className="ag-stop-title">
-                      <b>{c.name}</b>
-                      {c.visitedToday ? <span className="kpi-chip ok">Bugun borildi</span> : hasDebt ? <span className="kpi-chip pending">Pul olish kerak</span> : null}
+                      <b>#{stepNum}. {c.name}</b>
+                      {c.visitedToday ? (
+                        <span className="kpi-chip ok">✓ Borildi</span>
+                      ) : c.isNext ? (
+                        <span className="kpi-chip active">Navbatdagi nuqta</span>
+                      ) : hasDebt ? (
+                        <span className="kpi-chip pending">Pul olish kerak</span>
+                      ) : null}
+                      {c.distanceM != null ? (
+                        <span className="kpi-muted">
+                          · {c.distanceM >= 1000 ? `${(c.distanceM / 1000).toFixed(1)} km` : `${c.distanceM} m`}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="ag-stop-meta">
                       {c.phone ? (
-                        <a href={`tel:${c.phone}`} className="ag-meta-link">
+                        <a href={`tel:${c.phone}`} className="ag-meta-link" onClick={(e) => e.stopPropagation()}>
                           <Phone size={13} /> {c.phone}
                         </a>
                       ) : null}
-                      <span><MapPin size={13} /> {c.address || 'Manzil kiritilmagan'}</span>
+                      <span><MapPin size={13} /> {c.address || 'Manzil xaritada belgilangan'}</span>
                     </div>
                   </div>
                   <div className="ag-stop-amount">
                     <span>Olinishi kerak</span>
                     <strong className={hasDebt ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                   </div>
-                  <div className="ag-stop-actions">
+                  <div className="ag-stop-actions" onClick={(e) => e.stopPropagation()}>
                     <a
                       className="btn"
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address || c.name)}`}
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}`}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      <MapPin size={15} /> Xarita
+                      <Navigation size={15} /> Yo‘nalish
                     </a>
                     {c.visitedToday ? (
-                      <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi</span>
+                      <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi ✓</span>
                     ) : (
                       <button
                         type="button"

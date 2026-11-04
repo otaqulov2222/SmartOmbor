@@ -36,6 +36,7 @@ import {
   snapshotPolicy,
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
+import { inferCoordinates, orderRouteStops } from "../lib/kpi/geo";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 
@@ -1005,11 +1006,23 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .where(eq(kpiVisitsTable.agentId, agent.id))
       .orderBy(desc(kpiVisitsTable.createdAt))
       .limit(100);
-    const todayDone = new Set(
-      visits
-        .filter((v) => v.createdAt.toISOString().slice(0, 10) === today && v.status === "done")
-        .map((v) => v.customerId),
-    );
+    const todayVisitMap = new Map<string, { at: string; lat: string | null; lng: string | null }>();
+    for (const v of visits) {
+      if (v.createdAt.toISOString().slice(0, 10) === today && v.status === "done" && !todayVisitMap.has(v.customerId)) {
+        todayVisitMap.set(v.customerId, { at: v.createdAt.toISOString(), lat: v.lat, lng: v.lng });
+      }
+    }
+    const locRows = await db
+      .select()
+      .from(kpiLocationEventsTable)
+      .where(eq(kpiLocationEventsTable.agentId, agent.id))
+      .orderBy(desc(kpiLocationEventsTable.recordedAt))
+      .limit(60);
+    const latestAgentLoc = locRows[0] ?? null;
+    const todayTrack = locRows
+      .filter((l) => l.recordedAt.toISOString().slice(0, 10) === today)
+      .reverse()
+      .map((l) => ({ lat: Number(l.lat), lng: Number(l.lng), at: l.recordedAt.toISOString() }));
 
     const addDays = (base: Date, days: number) => {
       const d = new Date(base);
@@ -1067,17 +1080,29 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       };
     });
 
-    const customerCards = myCustomers.map((c) => {
+    const rawCustomerCards = myCustomers.map((c) => {
       const debt = debtByCustomer.get(c.id) || "0.00";
+      const v = todayVisitMap.get(c.id);
+      const geo = inferCoordinates(c.id, c.name, c.address, v?.lat || c.lat, v?.lng || c.lng);
       return {
         id: c.id,
         name: c.name,
         phone: c.phone,
         address: c.address,
         debt,
-        visitedToday: todayDone.has(c.id),
+        lat: geo.lat,
+        lng: geo.lng,
+        exactGps: geo.exact,
+        visitedToday: Boolean(v),
+        visitedAt: v?.at || null,
       };
-    }).sort((a, b) => Number(b.debt) - Number(a.debt));
+    });
+
+    const customerCards = orderRouteStops(
+      rawCustomerCards,
+      latestAgentLoc ? Number(latestAgentLoc.lat) : null,
+      latestAgentLoc ? Number(latestAgentLoc.lng) : null,
+    );
 
     res.json({
       agent: {
@@ -1086,17 +1111,21 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
         login: agent.login,
         phone: agentRow?.phone || "",
         salesPlan: agentRow?.salesPlan || "0.00",
+        lat: latestAgentLoc ? Number(latestAgentLoc.lat) : null,
+        lng: latestAgentLoc ? Number(latestAgentLoc.lng) : null,
+        lastSeenAt: latestAgentLoc ? latestAgentLoc.recordedAt.toISOString() : null,
       },
       summary: {
         customersCount: myCustomers.length,
         debtorsCount: customerCards.filter((c) => Number(c.debt) > 0).length,
-        visitedToday: todayDone.size,
+        visitedToday: todayVisitMap.size,
         totalSales,
         totalPaid,
         totalDue,
         kpiEarned,
         kpiPotential,
       },
+      track: todayTrack,
       policyStages: policy.stages,
       customers: customerCards,
       deals: orderDeals,
@@ -1259,10 +1288,11 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       };
     });
 
-    const points = customers
+    const selectedAgentLoc = agentFilter ? lastLocByAgent.get(agentFilter) : null;
+    const rawPoints = customers
       .filter((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
-        if (agentFilter && owner !== agentFilter) return false;
+        if (agentFilter) return owner === agentFilter;
         return Boolean(c.lat && c.lng) || Number(debtByCustomer.get(c.id) || 0) > 0 || visitedByCustomer.has(c.id);
       })
       .slice(0, 200)
@@ -1270,6 +1300,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
         const debt = debtByCustomer.get(c.id) || "0.00";
+        const geo = inferCoordinates(c.id, c.name, c.address, visit?.lat || c.lat, visit?.lng || c.lng);
         return {
           id: c.id,
           name: c.name,
@@ -1277,14 +1308,28 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
           address: c.address,
           agentId: owner || null,
           agentName: owner ? agentMap.get(owner) || "—" : "—",
-          lat: c.lat ? Number(c.lat) : visit?.lat ? Number(visit.lat) : null,
-          lng: c.lng ? Number(c.lng) : visit?.lng ? Number(visit.lng) : null,
+          lat: geo.lat,
+          lng: geo.lng,
+          exactGps: geo.exact,
           debt,
           visitedToday: Boolean(visit),
           visitedAt: visit?.at || null,
           visitNotes: visit?.notes || "",
         };
       });
+
+    const points = orderRouteStops(
+      rawPoints,
+      selectedAgentLoc ? Number(selectedAgentLoc.lat) : null,
+      selectedAgentLoc ? Number(selectedAgentLoc.lng) : null,
+    );
+
+    const agentTrack = agentFilter
+      ? locEvents
+          .filter((e) => e.agentId === agentFilter && e.recordedAt.toISOString().slice(0, 10) === dateFilter)
+          .reverse()
+          .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }))
+      : [];
 
     const routeLog = todayVisits
       .filter((v) => !agentFilter || v.agentId === agentFilter)
@@ -1309,6 +1354,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       agents: agentPins,
       points,
       routeLog,
+      agentTrack,
     });
   } catch (error) {
     next(error);
