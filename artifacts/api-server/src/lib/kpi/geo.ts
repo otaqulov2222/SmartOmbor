@@ -1,5 +1,5 @@
 /**
- * Smart location resolver for Uzbekistan / Tashkent stores & markets
+ * Smart location resolver for Tashkent stores & markets
  * when MoySklad counterparty doesn't yet have exact GPS coordinates,
  * plus Haversine distance and nearest-neighbor 1 -> 2 -> 3 -> 4 -> 5 route ordering.
  */
@@ -23,31 +23,14 @@ const PLACES: Array<[RegExp, number, number]> = [
   [/yakkasaroy|яккасарай/i, 41.2775, 69.2554],
   [/mirobod|мирабад|gospital/i, 41.2921, 69.2775],
   [/eshonguzar|эшонгузар|zangiota/i, 41.2428, 69.1408],
-  [/chirchiq|чирчик/i, 41.4689, 69.5822],
-  [/chinoz|чиназ/i, 40.9364, 68.7586],
-  [/yangiyo‘l|yangiyol|янгиюль/i, 41.1167, 69.0472],
-  [/buka|bo‘ka|бука/i, 40.8119, 69.1986],
-  [/begobod|bekobod|бекабад/i, 40.2208, 69.2697],
-  [/olmaliq|алмалык/i, 40.8447, 69.5983],
-  [/angren|ангрен/i, 41.0167, 70.1436],
-  [/parkent|паркент/i, 41.2944, 69.6764],
-  [/g‘azalkent|gazalkent/i, 41.5581, 69.7708],
-  [/jizzax|джизак/i, 40.1158, 67.8422],
-  [/sirdaryo|guliston|гулистан/i, 40.4897, 68.7842],
-  [/samarqand|самарканд/i, 39.6542, 66.9597],
-  [/buxoro|бухара/i, 39.7747, 64.4286],
-  [/navoiy|навои/i, 40.0844, 65.3792],
-  [/qarshi|карши|qashqadaryo/i, 38.8606, 65.7891],
-  [/g‘uzor|guzor|гузар/i, 38.6208, 66.2481],
-  [/muborak|мубарек/i, 39.2553, 65.1528],
-  [/termiz|термез|surxondaryo/i, 37.2242, 67.2783],
-  [/andijon|андижан/i, 40.7821, 72.3442],
-  [/farg‘ona|fargona|фергана/i, 40.3842, 71.7843],
-  [/marg‘ilon|margilon|маргилан/i, 40.4711, 71.7247],
-  [/qo‘qon|qoqon|коканд/i, 40.5286, 70.9425],
-  [/namangan|наманган/i, 40.9983, 71.6726],
-  [/xorazm|urganch|хорезм|ургенч/i, 41.55, 60.6333],
-  [/nukus|нукус|qoraqalpoq/i, 42.4619, 59.6166],
+  [/nks|nukus\s*k|next/i, 41.2986, 69.2492],
+  [/giper|samarqand\s*darvoza|darvoza/i, 41.3164, 69.2311],
+  [/chirchiq|чирчик/i, 41.3689, 69.3822],
+  [/chinoz|чиназ/i, 41.2164, 69.1386],
+  [/yangiyo‘l|yangiyol|янгиюль/i, 41.1967, 69.1472],
+  [/buka|bo‘ka|бука/i, 41.2019, 69.2686],
+  [/begobod|bekobod|бекабад/i, 41.2208, 69.3397],
+  [/parkent|паркент/i, 41.2944, 69.3764],
 ];
 
 function hashOffset(seed: string): [number, number] {
@@ -86,8 +69,8 @@ export function inferCoordinates(
   }
   // Default spread around Tashkent trade rings
   return {
-    lat: Number((41.295 + dLat * 2.4).toFixed(6)),
-    lng: Number((69.24 + dLng * 2.8).toFixed(6)),
+    lat: Number((41.295 + dLat * 2.2).toFixed(6)),
+    lng: Number((69.235 + dLng * 2.5).toFixed(6)),
     exact: false,
   };
 }
@@ -102,11 +85,6 @@ export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
   return Math.round(2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
-/**
- * Orders stops into a smooth 1 -> 2 -> 3 -> 4 -> 5 sequence:
- * - Already visited stops today keep their chronological order first (1 ✓, 2 ✓...)
- * - Remaining unvisited stops are ordered by nearest-neighbor starting from agent's current position (or last visited stop), prioritizing debtors.
- */
 export function orderRouteStops<
   T extends {
     id: string;

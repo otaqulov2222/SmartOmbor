@@ -1,5 +1,5 @@
-import { CheckCircle2, ExternalLink, MapPin, Navigation } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { CheckCircle2, ExternalLink, Lock, MapPin, Navigation, Unlock } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 export type RouteStop = {
   id: string;
@@ -27,7 +27,7 @@ export type AgentMarker = {
   debtorsCount?: number;
 };
 
-let leafletPromise: Promise<unknown> | null = null;
+let leafletPromise: Promise<any> | null = null;
 
 function ensureLeaflet(): Promise<any> {
   const w = window as unknown as { L?: any };
@@ -51,6 +51,30 @@ function ensureLeaflet(): Promise<any> {
   return leafletPromise;
 }
 
+/**
+ * Fetches real street-following driving geometry from OSRM public router
+ * so lines follow actual roads instead of straight air lines.
+ */
+async function fetchRoadGeometry(points: Array<[number, number]>): Promise<Array<[number, number]>> {
+  if (points.length < 2) return points;
+  try {
+    const coords = points.slice(0, 15).map(([lat, lng]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join(';');
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    if (!res.ok) return points;
+    const data = (await res.json()) as {
+      routes?: Array<{ geometry?: { coordinates?: Array<[number, number]> } }>;
+    };
+    const geom = data.routes?.[0]?.geometry?.coordinates;
+    if (geom && geom.length > 1) {
+      return geom.map(([lng, lat]) => [lat, lng]);
+    }
+  } catch {
+    /* fallback to direct points if offline */
+  }
+  return points;
+}
+
 export function RouteMap({
   stops,
   agents = [],
@@ -71,20 +95,40 @@ export function RouteMap({
   const boxRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
+  const [interactive, setInteractive] = useState(false);
+
+  // Toggle map pan/scroll lock so page scrolling never gets hijacked until user double-clicks
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (interactive) {
+      map.dragging?.enable();
+      map.scrollWheelZoom?.enable();
+      map.touchZoom?.enable();
+    } else {
+      map.dragging?.disable();
+      map.scrollWheelZoom?.disable();
+      map.touchZoom?.disable();
+    }
+  }, [interactive]);
 
   useEffect(() => {
     let alive = true;
-    void ensureLeaflet().then((L) => {
+    void ensureLeaflet().then(async (L) => {
       if (!alive || !boxRef.current || !L) return;
       if (!mapRef.current) {
         mapRef.current = L.map(boxRef.current, {
           center: [41.2995, 69.2401],
           zoom: 12,
           zoomControl: true,
+          attributionControl: false, // Removes bottom-right "Leaflet | OpenStreetMap" text & flag
+          scrollWheelZoom: false,
+          dragging: false,
+          touchZoom: false,
+          doubleClickZoom: false,
         });
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
-          attribution: '© OpenStreetMap',
         }).addTo(mapRef.current);
         layerRef.current = L.layerGroup().addTo(mapRef.current);
       }
@@ -93,43 +137,9 @@ export function RouteMap({
       group.clearLayers();
       const bounds: Array<[number, number]> = [];
 
-      // 1 -> 2 -> 3 -> 4 -> 5 polyline
       const validStops = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-      if (validStops.length > 1) {
-        const doneCoords: Array<[number, number]> = [];
-        const pendingCoords: Array<[number, number]> = [];
-        for (const s of validStops) {
-          if (s.visitedToday) {
-            doneCoords.push([s.lat, s.lng]);
-          } else {
-            if (pendingCoords.length === 0 && doneCoords.length > 0) {
-              pendingCoords.push(doneCoords[doneCoords.length - 1]);
-            }
-            pendingCoords.push([s.lat, s.lng]);
-          }
-        }
-        if (doneCoords.length > 1) {
-          L.polyline(doneCoords, { color: '#10b981', weight: 4, opacity: 0.9 }).addTo(group);
-        }
-        if (pendingCoords.length > 1) {
-          L.polyline(pendingCoords, {
-            color: '#2563eb',
-            weight: 3.5,
-            dashArray: '8, 8',
-            opacity: 0.85,
-          }).addTo(group);
-        }
-      }
 
-      // GPS breadcrumb track
-      if (track.length > 1) {
-        L.polyline(
-          track.map((t) => [t.lat, t.lng]),
-          { color: '#0ea5e9', weight: 3, opacity: 0.7 },
-        ).addTo(group);
-      }
-
-      // Numbered stop pins: 1 ✓ (green), 2 (blue pulse), 3, 4, 5
+      // Draw pins first so map is responsive immediately
       for (const s of validStops) {
         bounds.push([s.lat, s.lng]);
         const cls = s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : 'is-wait';
@@ -168,7 +178,36 @@ export function RouteMap({
       } else if (bounds.length === 1) {
         mapRef.current.setView(bounds[0], 14);
       } else if (bounds.length > 1) {
-        mapRef.current.fitBounds(bounds, { padding: [38, 38], maxZoom: 14 });
+        mapRef.current.fitBounds(bounds, { padding: [46, 46], maxZoom: 14 });
+      }
+
+      // Road-following route lines (1 -> 2 -> 3 -> 4 -> 5 along real streets)
+      if (validStops.length > 1) {
+        const doneStops = validStops.filter((s) => s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
+        const pendingStops = validStops.filter((s) => !s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
+        if (doneStops.length > 0 && pendingStops.length > 0) {
+          pendingStops.unshift(doneStops[doneStops.length - 1]);
+        }
+
+        if (doneStops.length > 1) {
+          const roadDone = await fetchRoadGeometry(doneStops);
+          if (!alive) return;
+          L.polyline(roadDone, { color: '#059669', weight: 6, opacity: 0.92, lineCap: 'round' }).addTo(group);
+        }
+        if (pendingStops.length > 1) {
+          const roadPending = await fetchRoadGeometry(pendingStops);
+          if (!alive) return;
+          // Outer glow + inner road line
+          L.polyline(roadPending, { color: '#1e40af', weight: 7, opacity: 0.25, lineCap: 'round' }).addTo(group);
+          L.polyline(roadPending, { color: '#2563eb', weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(group);
+        }
+      }
+
+      if (track.length > 1) {
+        L.polyline(
+          track.map((t) => [t.lat, t.lng]),
+          { color: '#0ea5e9', weight: 3.5, opacity: 0.75 },
+        ).addTo(group);
       }
     });
     return () => {
@@ -194,16 +233,25 @@ export function RouteMap({
             <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
           ) : null}
         </div>
-        {nextStop ? (
-          <a
-            className="btn btn-primary"
-            href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}`}
-            target="_blank"
-            rel="noreferrer"
+        <div className="kpi-actions">
+          <button
+            type="button"
+            className={`btn ${interactive ? 'btn-primary' : ''}`}
+            onClick={() => setInteractive((v) => !v)}
           >
-            <Navigation size={14} /> #{nextStop.step} ga yo‘l ({nextStop.name.slice(0, 16)}) <ExternalLink size={13} />
-          </a>
-        ) : null}
+            {interactive ? <><Unlock size={14} /> Xarita faol (qulflash)</> : <><Lock size={14} /> Xaritani surish</>}
+          </button>
+          {nextStop ? (
+            <a
+              className="btn btn-primary"
+              href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Navigation size={14} /> #{nextStop.step} ga yo‘l <ExternalLink size={13} />
+            </a>
+          ) : null}
+        </div>
       </div>
 
       {stops.length > 0 ? (
@@ -229,14 +277,28 @@ export function RouteMap({
         </div>
       ) : null}
 
-      <div ref={boxRef} className="rm-canvas" />
+      <div
+        className="rm-canvas-wrap"
+        onDoubleClick={() => setInteractive((v) => !v)}
+      >
+        <div ref={boxRef} className="rm-canvas" />
+        {!interactive ? (
+          <button
+            type="button"
+            className="rm-lock-badge"
+            onClick={() => setInteractive(true)}
+          >
+            <Lock size={13} /> Xaritani surish/yaqinlashtirish uchun 2 marta bosing
+          </button>
+        ) : null}
+      </div>
 
       <div className="rm-legend">
         <span><i className="rm-dot is-done" /> Borildi (1 ✓)</span>
         <span><i className="rm-dot is-next" /> Navbatdagi nuqta (2)</span>
         <span><i className="rm-dot is-wait" /> Rejadagi nuqtalar (3, 4, 5)</span>
         <span><i className="rm-dot is-agent" /> Agent GPS joylashuvi</span>
-        <span className="kpi-muted"><MapPin size={12} /> Nuqtani bossangiz xarita yaqinlashtiradi</span>
+        <span className="kpi-muted"><MapPin size={12} /> Avtomobil yo‘llari bo‘yicha eng yaqin marshrut</span>
       </div>
     </div>
   );
