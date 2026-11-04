@@ -58,20 +58,20 @@ function read(): Store {
   return memory;
 }
 
-const SEED_AGENTS: Array<[string, string]> = [
-  ["Oysha", "oysha"],
-  ["Shaxzod", "shaxzod"],
-  ["Farzona", "farzona"],
-  ["Elyor", "elyor"],
-  ["Abbos", "abbos"],
-  ["Baxodir", "baxodir"],
-  ["Muzaffar", "muzaffar"],
-  ["Avliyo", "avliyo"],
-  ["Gulzoda", "gulzoda"],
-  ["Nafisa", "nafisa"],
-  ["Abdug'ani", "abdugani"],
-  ["Nozim", "nozim"],
-  ["Farxod aka", "farxodaka"],
+const SEED_AGENTS: Array<[string, string, string]> = [
+  ["Oysha", "oysha", "Oysha@7492"],
+  ["Shaxzod", "shaxzod", "Shaxzod@3816"],
+  ["Farzona", "farzona", "Farzona@5924"],
+  ["Elyor", "elyor", "Elyor@6183"],
+  ["Abbos", "abbos", "Abbos@4729"],
+  ["Baxodir", "baxodir", "Baxodir@8351"],
+  ["Muzaffar", "muzaffar", "Muzaffar@2947"],
+  ["Avliyo", "avliyo", "Avliyo@9164"],
+  ["Gulzoda", "gulzoda", "Gulzoda@5382"],
+  ["Nafisa", "nafisa", "Nafisa@6719"],
+  ["Abdug'ani", "abdugani", "Abdugani@4268"],
+  ["Nozim", "nozim", "Nozim@7835"],
+  ["Farxod aka", "farxodaka", "Farxod@3591"],
 ];
 
 /** Returns true when admin or default MoySklad agents were created or corrected. */
@@ -95,9 +95,13 @@ function ensureAdmin(store: Store): boolean {
     store.accounts.unshift({ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" });
     changed = true;
   }
-  for (const [name, login] of SEED_AGENTS) {
-    if (!store.accounts.some((a) => a.login.toLowerCase() === login)) {
-      store.accounts.push({ id: `agent-${login}`, name, login, password: "1234", role: "agent", phone: "" });
+  for (const [name, login, defaultPassword] of SEED_AGENTS) {
+    const existing = store.accounts.find((a) => a.login.toLowerCase() === login);
+    if (!existing) {
+      store.accounts.push({ id: `agent-${login}`, name, login, password: defaultPassword, role: "agent", phone: "" });
+      changed = true;
+    } else if (existing.password === "1234") {
+      existing.password = defaultPassword;
       changed = true;
     }
   }

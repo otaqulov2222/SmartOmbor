@@ -191,7 +191,7 @@ function AgentsSection() {
           {(list.data || []).map((a) => (
             <tr key={a.id}>
               <td><b>{a.fullName}</b></td>
-              <td><code>{a.login}</code> <span className="kpi-muted">(st. parol: 1234)</span></td>
+              <td><code>{a.login}</code></td>
               <td>{a.customers}</td>
               <td>{uzs(a.salesTotal)}</td>
               <td><b>{uzs(a.kpiTotal)}</b></td>
