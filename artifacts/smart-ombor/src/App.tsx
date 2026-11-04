@@ -324,8 +324,9 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const director = isDirector(role);
   const warehouse = isWarehouse(role);
   const agent = isAgentRole(role);
-  const visiblePrimary = agent ? agentPrimaryHrefs : warehouse ? warehousePrimaryHrefs : primaryHrefs;
-  const visibleMoreGroups = agent ? [] : warehouse ? warehouseMoreGroups : moreGroups;
+  const officeOnly = isEmployeeCabinet(role);
+  const visiblePrimary = agent ? agentPrimaryHrefs : officeOnly ? ['/office'] : warehouse ? warehousePrimaryHrefs : primaryHrefs;
+  const visibleMoreGroups = agent || officeOnly ? [] : warehouse ? warehouseMoreGroups : moreGroups;
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
   const inMore = visibleMoreHrefs.includes(path);
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
@@ -369,6 +370,8 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
         <div className="nav-primary">
           {agent ? <>
             {navItem('/my-kpi')}
+            {navItem('/office')}
+          </> : officeOnly ? <>
             {navItem('/office')}
           </> : <>
             {navItem('/dashboard')}
@@ -1591,7 +1594,7 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
     }
     if (isEmployeeCabinet(localRole)) {
       if (location !== '/office') return <Redirect to="/office"/>;
-      return body;
+      return <LocalShell title={title}>{body}</LocalShell>;
     }
     if (!pathAllowedForRole(location, localRole)) {
       return <Redirect to={homeForRole(localRole)}/>;

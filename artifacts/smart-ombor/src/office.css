@@ -1,20 +1,11 @@
 .office-shell {
-  min-height: 100vh;
-  background: #050b14;
+  padding: 4px 0 24px;
+  background: transparent;
   display: flex;
   justify-content: center;
 }
 .office-ambient {
-  position: fixed; inset: 0;
-  background: url('/office-hero.jpg') center 18% / cover no-repeat;
-  filter: blur(48px) saturate(1.15) brightness(.28);
-  transform: scale(1.12);
-  pointer-events: none;
-  transition: filter .8s ease;
-}
-.office-shell.is-night .office-ambient {
-  background-image: url('/office-hero-night.jpg');
-  filter: blur(48px) saturate(1.05) brightness(.2);
+  display: none;
 }
 .office {
   --o-bg: #07111f;
@@ -25,12 +16,13 @@
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 430px;
-  min-height: 100vh;
+  max-width: 520px;
   margin: 0 auto;
   background: var(--o-bg);
   color: var(--o-ink);
   padding: 0 0 28px;
+  border-radius: 24px;
+  box-shadow: 0 20px 50px rgb(15 23 42 / .18);
   overflow: hidden;
 }
 .office * { box-sizing: border-box; }
@@ -82,6 +74,18 @@
 .office-clocks {
   display: grid; grid-template-columns: 1.38fr .92fr; gap: 10px;
   margin: -58px 0 12px; position: relative; z-index: 3;
+}
+.office-view-switch {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  background: rgb(255 255 255 / .06); border: 1px solid rgb(255 255 255 / .1);
+  border-radius: 14px; padding: 4px; margin-bottom: 12px;
+}
+.office-view-switch button {
+  border: 0; background: transparent; color: #94a3b8; font-weight: 700; font-size: .88rem;
+  padding: 9px 10px; border-radius: 10px; cursor: pointer;
+}
+.office-view-switch button.is-on {
+  background: #2563eb; color: #fff; box-shadow: 0 6px 18px rgb(37 99 235 / .35);
 }
 .office-clock, .office-hours {
   border-radius: 20px; padding: 12px 14px 14px; color: #fff;

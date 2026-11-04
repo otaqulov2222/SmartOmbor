@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Clock, Fingerprint, LogOut, MapPin, Phone, RefreshCw, Wallet } from 'lucide-react';
+import {
+  CheckCircle2, Clock, Compass, Fingerprint, LogOut, MapPin, Phone, RefreshCw,
+  Sparkles, TrendingUp, Users, Wallet,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
@@ -135,163 +138,263 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
   const d = q.data;
   const s = d?.summary;
   const debtors = (d?.customers || []).filter((c) => Number(c.debt) > 0);
-  const openDeals = (d?.deals || []).filter((x) => Number(x.dueAmount) > 0);
+  const targetCount = s ? (s.debtorsCount || s.customersCount || 1) : 1;
+  const visitPct = s ? Math.min(100, Math.round((s.visitedToday / targetCount) * 100)) : 0;
 
   return (
-    <div className={standalone ? 'kpi-agent' : 'kpi-page'} data-testid="page-agent-portal">
-      {standalone ? (
-        <header className="kpi-agent-top">
+    <div className="ag-wrap" data-testid="page-agent-portal">
+      {/* Hero Banner */}
+      <section className="ag-hero">
+        <div className="ag-hero-main">
+          <div className="ag-avatar">{(d?.agent.fullName || 'A').slice(0, 1).toUpperCase()}</div>
           <div>
-            <strong>{d?.agent.fullName || 'Agent'}</strong>
-            <span>Login: {d?.agent.login}</span>
+            <span className="ag-badge"><Sparkles size={13} /> Savdo agenti kabineti</span>
+            <h1>{d?.agent.fullName || 'Agent'}</h1>
+            <p>Bugungi yo‘nalish, mijozlar qarzdorligi va shaxsiy KPI daromadingiz</p>
           </div>
-          <div className="kpi-actions">
-            <Link href="/office" className="btn"><Fingerprint size={15} /> Davomat</Link>
-            <button type="button" className="btn" onClick={() => void q.refetch()}><RefreshCw size={15} /></button>
-            {onLogout ? <button type="button" className="btn" onClick={onLogout}><LogOut size={15} /> Chiqish</button> : null}
-          </div>
-        </header>
-      ) : (
-        <header className="kpi-head">
-          <div>
-            <h1>{d?.agent.fullName || 'Agent'} — Shaxsiy kabinet</h1>
-            <p>Bugungi nuqtalar, olinishi kerak bo‘lgan pullar va 3 bosqichli KPI hisobingiz</p>
-          </div>
-          <div className="kpi-actions">
-            <Link href="/office" className="btn"><Fingerprint size={15} /> Davomat</Link>
-            <button type="button" className="btn" onClick={() => void q.refetch()}><RefreshCw size={15} /> Yangilash</button>
-          </div>
-        </header>
-      )}
-
-      <div className={standalone ? 'kpi-agent-body' : ''}>
-        {q.isLoading ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
-        {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-
-        {s ? (
-          <div className="kpi-grid" style={{ marginBottom: '1rem' }}>
-            <article className="kpi-card"><span>Jami mijozlarim</span><strong>{s.customersCount} ta</strong></article>
-            <article className="kpi-card warn"><span>Pul olinadigan nuqtalar</span><strong>{s.debtorsCount} ta mijoz</strong></article>
-            <article className="kpi-card ok"><span>Bugun borildi / gaplashildi</span><strong>{s.visitedToday} / {s.debtorsCount || s.customersCount}</strong></article>
-            <article className="kpi-card warn"><span>Mijozlarda turgan pul (Qarz)</span><strong>{uzs(s.totalDue)}</strong></article>
-            <article className="kpi-card ok"><span>Olingan pul (To‘langan)</span><strong>{uzs(s.totalPaid)}</strong></article>
-            <article className="kpi-card ok"><span>Tasdiqlangan KPI bonusim</span><strong>{uzs(s.kpiEarned)}</strong></article>
-            <article className="kpi-card"><span>Qarz olinsa qo‘shiladigan KPI (1-bosqichda)</span><strong>+{uzs(s.kpiPotential)}</strong></article>
-          </div>
-        ) : null}
-
-        <div className="kpi-seg" style={{ marginBottom: '1rem' }}>
-          <button type="button" className={tab === 'today' ? 'active' : ''} onClick={() => setTab('today')}>
-            Bugungi vazifa ({debtors.length} nuqta)
-          </button>
-          <button type="button" className={tab === 'kpi' ? 'active' : ''} onClick={() => setTab('kpi')}>
-            Qachon olinsa qancha KPI ({d?.deals.length || 0})
-          </button>
-          <button type="button" className={tab === 'customers' ? 'active' : ''} onClick={() => setTab('customers')}>
-            Barcha mijozlarim ({d?.customers.length || 0})
-          </button>
         </div>
+        <div className="ag-hero-actions">
+          <Link href="/office" className="ag-btn ag-btn-glass">
+            <Fingerprint size={16} /> Davomat va hisobot
+          </Link>
+          <button type="button" className="ag-btn ag-btn-glass" onClick={() => void q.refetch()}>
+            <RefreshCw size={16} /> Yangilash
+          </button>
+          {standalone && onLogout ? (
+            <button type="button" className="ag-btn ag-btn-glass" onClick={onLogout}>
+              <LogOut size={16} /> Chiqish
+            </button>
+          ) : null}
+        </div>
+      </section>
 
-        {tab === 'today' ? (
-          <section className="kpi-panel">
-            <h2>Bugun borish va gaplashish kerak bo‘lgan nuqtalar</h2>
-            <p className="kpi-muted">Qarzdorligi bor mijozlar birinchi chiqadi. Borib gaplashgach «Bordim / Gaplashdim» tugmasini bosing.</p>
-            <div className="kpi-list">
-              {(debtors.length ? debtors : d?.customers || []).map((c, idx) => (
-                <article key={c.id} className="kpi-list-item">
-                  <div>
-                    <b>{idx + 1}. {c.name}</b>
-                    <div className="kpi-muted">
-                      {c.phone ? <><Phone size={12} /> {c.phone} · </> : null}
-                      <MapPin size={12} /> {c.address || 'Manzil ko‘rsatilmagan'}
+      {q.isLoading ? <p className="kpi-muted">Ma’lumotlar yuklanmoqda…</p> : null}
+      {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
+
+      {/* 4 Primary Stat Cards */}
+      {s ? (
+        <section className="ag-stats">
+          <article className="ag-stat is-green">
+            <div className="ag-stat-head">
+              <span>Tasdiqlangan KPI bonusim</span>
+              <span className="ag-stat-ico"><Wallet size={18} /></span>
+            </div>
+            <strong>{uzs(s.kpiEarned)}</strong>
+            <small>Olingan to‘lovlardan: {uzs(s.totalPaid)}</small>
+          </article>
+
+          <article className="ag-stat is-blue">
+            <div className="ag-stat-head">
+              <span>Qarz olinsa qo‘shiladigan KPI</span>
+              <span className="ag-stat-ico"><TrendingUp size={18} /></span>
+            </div>
+            <strong>+{uzs(s.kpiPotential)}</strong>
+            <small>1-bosqich muddatida to‘liq olinsa</small>
+          </article>
+
+          <article className="ag-stat is-amber">
+            <div className="ag-stat-head">
+              <span>Mijozlarda turgan pul (Qarz)</span>
+              <span className="ag-stat-ico"><Clock size={18} /></span>
+            </div>
+            <strong>{uzs(s.totalDue)}</strong>
+            <small>{s.debtorsCount} ta qarzdor mijozda</small>
+          </article>
+
+          <article className="ag-stat">
+            <div className="ag-stat-head">
+              <span>Bugungi tashrif rejasi</span>
+              <span className="ag-stat-ico"><Users size={18} /></span>
+            </div>
+            <strong>{s.visitedToday} / {s.debtorsCount || s.customersCount} nuqta</strong>
+            <div className="ag-bar"><i style={{ width: `${visitPct}%` }} /></div>
+            <small>Jami biriktirilgan mijozlar: {s.customersCount} ta</small>
+          </article>
+        </section>
+      ) : null}
+
+      {/* Navigation Switch */}
+      <nav className="ag-nav">
+        <button type="button" className={tab === 'today' ? 'is-active' : ''} onClick={() => setTab('today')}>
+          <Compass size={16} />
+          <span>Bugungi nuqtalar</span>
+          <em>{debtors.length || d?.customers.length || 0}</em>
+        </button>
+        <button type="button" className={tab === 'kpi' ? 'is-active' : ''} onClick={() => setTab('kpi')}>
+          <Wallet size={16} />
+          <span>KPI muddatlar va foizlar</span>
+          <em>{d?.deals.length || 0}</em>
+        </button>
+        <button type="button" className={tab === 'customers' ? 'is-active' : ''} onClick={() => setTab('customers')}>
+          <Users size={16} />
+          <span>Barcha mijozlarim</span>
+          <em>{d?.customers.length || 0}</em>
+        </button>
+      </nav>
+
+      {/* TAB 1: Today's Route & Stops */}
+      {tab === 'today' ? (
+        <section className="ag-section">
+          <div className="ag-section-head">
+            <div>
+              <h2>Bugun borish va gaplashish kerak bo‘lgan nuqtalar</h2>
+              <p>Qarzdorligi bor mijozlar birinchi chiqadi. Borib gaplashgach «Bordim / Gaplashdim» tugmasini bosing.</p>
+            </div>
+          </div>
+          <div className="ag-stops">
+            {(debtors.length ? debtors : d?.customers || []).map((c, idx) => {
+              const hasDebt = Number(c.debt) > 0;
+              return (
+                <article key={c.id} className={`ag-stop ${c.visitedToday ? 'is-done' : hasDebt ? 'is-due' : ''}`}>
+                  <div className="ag-stop-num">{idx + 1}</div>
+                  <div className="ag-stop-info">
+                    <div className="ag-stop-title">
+                      <b>{c.name}</b>
+                      {c.visitedToday ? <span className="kpi-chip ok">Bugun borildi</span> : hasDebt ? <span className="kpi-chip pending">Pul olish kerak</span> : null}
+                    </div>
+                    <div className="ag-stop-meta">
+                      {c.phone ? (
+                        <a href={`tel:${c.phone}`} className="ag-meta-link">
+                          <Phone size={13} /> {c.phone}
+                        </a>
+                      ) : null}
+                      <span><MapPin size={13} /> {c.address || 'Manzil kiritilmagan'}</span>
                     </div>
                   </div>
-                  <div>
-                    <div className="kpi-muted">Olinishi kerak:</div>
-                    <strong style={{ color: Number(c.debt) > 0 ? '#b45309' : '#15803d' }}>{uzs(c.debt)}</strong>
+                  <div className="ag-stop-amount">
+                    <span>Olinishi kerak</span>
+                    <strong className={hasDebt ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                   </div>
-                  <div className="kpi-row-actions">
+                  <div className="ag-stop-actions">
                     <a
                       className="btn"
                       href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address || c.name)}`}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      <MapPin size={14} /> Xarita
+                      <MapPin size={15} /> Xarita
                     </a>
                     {c.visitedToday ? (
-                      <span className="kpi-chip ok"><CheckCircle2 size={14} /> Bugun borildi</span>
+                      <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi</span>
                     ) : (
-                      <button type="button" className="btn btn-primary" onClick={() => markVisit.mutate(c.id)}>
-                        Bordim / Gaplashdim
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={markVisit.isPending}
+                        onClick={() => markVisit.mutate(c.id)}
+                      >
+                        <CheckCircle2 size={15} /> Bordim / Gaplashdim
                       </button>
                     )}
                   </div>
                 </article>
-              ))}
-              {!d?.customers.length ? <p className="kpi-muted">Sizga hali mijoz biriktirilmagan.</p> : null}
-            </div>
-          </section>
-        ) : null}
+              );
+            })}
+            {!d?.customers.length && !q.isLoading ? (
+              <div className="ag-empty">Hozircha sizga biriktirilgan mijoz topilmadi.</div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
-        {tab === 'kpi' ? (
-          <section className="kpi-list">
-            {(openDeals.length ? openDeals : d?.deals || []).map((deal) => (
-              <article key={deal.id} className="kpi-panel">
-                <div className="kpi-panel-head">
-                  <div>
-                    <h3>Отгрузка №{deal.number} — {deal.customerName}</h3>
-                    <div className="kpi-muted">Sana: {deal.orderDate} · Hozirgi bosqich: <b>{deal.currentStage} ({deal.currentPercent}%)</b> {deal.daysRemaining != null ? `· ${deal.daysRemaining} kun qoldi` : ''}</div>
+      {/* TAB 2: 3-Stage KPI Deadlines */}
+      {tab === 'kpi' ? (
+        <section className="ag-section">
+          <div className="ag-section-head">
+            <div>
+              <h2>Har bir savdo bo‘yicha KPI muddatlari</h2>
+              <p>Qaysi sanagacha pul olinsa necha foiz va qancha so‘m KPI chiqishi aniq ko‘rsatilgan.</p>
+            </div>
+          </div>
+          <div className="ag-deals">
+            {(d?.deals || []).map((deal) => {
+              const hasDue = Number(deal.dueAmount) > 0;
+              return (
+                <article key={deal.id} className="ag-deal">
+                  <div className="ag-deal-top">
+                    <div>
+                      <span className="ag-deal-no">Отгрузка №{deal.number}</span>
+                      <h3>{deal.customerName}</h3>
+                      <p>
+                        Sana: <b>{deal.orderDate}</b> · Joriy bosqich: <b>{deal.currentStage} ({deal.currentPercent}%)</b>
+                        {deal.daysRemaining != null ? ` · ${deal.daysRemaining} kun qoldi` : ''}
+                      </p>
+                    </div>
+                    <div className="ag-deal-sums">
+                      <div><span>Savdo summasi</span><b>{uzs(deal.total)}</b></div>
+                      <div><span>To‘langan</span><b className="is-ok">{uzs(deal.paidAmount)}</b></div>
+                      <div><span>Qolgan qarz</span><b className={hasDue ? 'is-warn' : 'is-ok'}>{uzs(deal.dueAmount)}</b></div>
+                      <div><span>Yozilgan KPI</span><b className="is-blue">{uzs(deal.earnedKpi)}</b></div>
+                    </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div>Jami savdo: <b>{uzs(deal.total)}</b></div>
-                    <div className="kpi-muted">To‘langan: {uzs(deal.paidAmount)} · <b style={{ color: '#b45309' }}>Qolgan qarz: {uzs(deal.dueAmount)}</b></div>
+                  <div className="ag-stages">
+                    {deal.stages.map((st, i) => (
+                      <div key={i} className={`ag-stage s-${i + 1}`}>
+                        <div className="ag-stage-top">
+                          <b>{st.name}</b>
+                          <em>{st.percent}%</em>
+                        </div>
+                        <div className="ag-stage-date">
+                          <Clock size={13} /> <b>{st.untilDate}</b> gacha olinsa
+                        </div>
+                        <strong className="ag-stage-kpi">
+                          +{uzs(hasDue ? st.onRemainingDebtKpi : st.ifFullPaidKpi)}
+                        </strong>
+                      </div>
+                    ))}
+                    <div className="ag-stage s-expired">
+                      <div className="ag-stage-top">
+                        <b>Muddat o‘tsa</b>
+                        <em>0%</em>
+                      </div>
+                      <div className="ag-stage-date">Oxirgi sanadan keyin</div>
+                      <strong className="ag-stage-kpi">0 so‘m</strong>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+            {!d?.deals.length ? <div className="ag-empty">Savdolar topilmadi.</div> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* TAB 3: All Customers */}
+      {tab === 'customers' ? (
+        <section className="ag-section">
+          <div className="ag-stops">
+            {(d?.customers || []).map((c, idx) => (
+              <article key={c.id} className="ag-stop">
+                <div className="ag-stop-num">{idx + 1}</div>
+                <div className="ag-stop-info">
+                  <div className="ag-stop-title">
+                    <b>{c.name}</b>
+                    {c.visitedToday ? <span className="kpi-chip ok">Bugun borildi</span> : null}
+                  </div>
+                  <div className="ag-stop-meta">
+                    {c.phone ? <a href={`tel:${c.phone}`} className="ag-meta-link"><Phone size={13} /> {c.phone}</a> : null}
+                    <span><MapPin size={13} /> {c.address || 'Manzil kiritilmagan'}</span>
                   </div>
                 </div>
-                <div className="kpi-grid">
-                  {deal.stages.map((st, i) => (
-                    <div key={i} className={`kpi-card ${i === 0 ? 'ok' : i === 1 ? 'warn' : ''}`}>
-                      <span><Clock size={12} /> {st.name}: <b>{st.untilDate} gacha</b> olinsa ({st.percent}%)</span>
-                      <strong>
-                        <Wallet size={14} /> {uzs(Number(deal.dueAmount) > 0 ? st.onRemainingDebtKpi : st.ifFullPaidKpi)}
-                      </strong>
-                      <small className="kpi-muted">
-                        {Number(deal.dueAmount) > 0
-                          ? `Qolgan ${uzs(deal.dueAmount)} shu sanagacha tushsa`
-                          : `To‘liq savdodan (${st.percent}%)`}
-                      </small>
-                    </div>
-                  ))}
-                  <div className="kpi-card bad">
-                    <span>Muddat o‘tib ketsa</span>
-                    <strong>0 so‘m (0%)</strong>
-                    <small className="kpi-muted">Oxirgi bosqichdan keyin bonus kuyadi</small>
-                  </div>
+                <div className="ag-stop-amount">
+                  <span>Joriy qarz</span>
+                  <strong className={Number(c.debt) > 0 ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
+                </div>
+                <div className="ag-stop-actions">
+                  <a
+                    className="btn"
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address || c.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <MapPin size={15} /> Xarita
+                  </a>
                 </div>
               </article>
             ))}
-            {!d?.deals.length ? <p className="kpi-muted">Savdolar topilmadi.</p> : null}
-          </section>
-        ) : null}
-
-        {tab === 'customers' ? (
-          <div className="kpi-table-wrap">
-            <table className="kpi-table">
-              <thead><tr><th>Mijoz</th><th>Telefon / Manzil</th><th>Joriy qarz</th><th>Bugungi holat</th></tr></thead>
-              <tbody>
-                {(d?.customers || []).map((c) => (
-                  <tr key={c.id}>
-                    <td><b>{c.name}</b></td>
-                    <td className="kpi-muted">{c.phone} {c.address}</td>
-                    <td><b>{uzs(c.debt)}</b></td>
-                    <td>{c.visitedToday ? <span className="kpi-chip ok">Borildi</span> : <span className="kpi-chip">Rejada</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
-        ) : null}
-      </div>
+        </section>
+      ) : null}
     </div>
   );
 }
