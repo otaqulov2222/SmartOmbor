@@ -92,14 +92,14 @@ export function KpiDashboardPage() {
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
       {d ? (
         <div className="kpi-grid">
-          <Card label="Agentlar (MoySklad)" value={d.agentsActive} tone="ok" />
-          <Card label="Mijozlar (MoySklad)" value={d.customersTotal} />
-          <Card label="Jami savdo" value={uzs(d.salesTotal)} />
+          <Card label="Agentlar (MoySklad)" value={d.agentsActive} tone="blue" />
+          <Card label="Mijozlar (MoySklad)" value={d.customersTotal} tone="slate" />
+          <Card label="Jami savdo" value={uzs(d.salesTotal)} tone="blue" />
           <Card label="To‘langan" value={uzs(d.paidTotal)} tone="ok" />
-          <Card label="Qarzdorlik" value={uzs(d.dueTotal)} tone="warn" />
+          <Card label="Qarzdorlik" value={uzs(d.dueTotal)} tone="bad" />
           <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} tone="ok" />
-          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} />
-          <Card label="KPI jami hisob" value={uzs(d.kpiAccrued)} />
+          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} tone="warn" />
+          <Card label="KPI jami hisob" value={uzs(d.kpiAccrued)} tone="purple" />
         </div>
       ) : null}
       <div className="kpi-table-wrap">
