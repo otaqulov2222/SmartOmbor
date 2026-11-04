@@ -1073,7 +1073,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
                 <tbody>{(shipment.lines ?? []).map(line => {
                   const colors = mergeColors(line.colors ?? []);
                   const colored = colors.length > 0;
-                  const locked = Boolean(shipment.moyskladId);
+                  // Faqat MoySkladga yozilgan yukxati qulflanadi — admin/ombor bir xil: aks holda inputlar.
+                  const locked = Boolean(String(shipment.moyskladId || '').trim());
                   const editingColors = colorFor === line.id;
                   return <Fragment key={line.id}>
                     <tr className={colored ? 'has-colors' : undefined}>

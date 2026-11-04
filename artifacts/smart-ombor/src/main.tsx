@@ -5,6 +5,23 @@ import { ErrorBoundary } from '@/components/error-boundary';
 
 import './index.css';
 
+// Yangi UI chiqqanda eski cache (guruh/pachka "—") qolmasin — bir marta hard reload.
+const UI_BUILD = '2026-11-04-waybill-inline-v2';
+const UI_BUILD_KEY = 'smart-ombor-ui-build';
+try {
+  const prev = localStorage.getItem(UI_BUILD_KEY);
+  if (prev !== UI_BUILD) {
+    localStorage.setItem(UI_BUILD_KEY, UI_BUILD);
+    if (prev) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('_ui', UI_BUILD);
+      window.location.replace(url.toString());
+    }
+  }
+} catch {
+  /* ignore */
+}
+
 createRoot(document.getElementById('root')!, {
   // Keeps caught errors off reportError(), which would raise the dev overlay.
   onCaughtError: (error, errorInfo) => {
