@@ -92,7 +92,6 @@ export function EmployeesPage() {
       <header className="kpi-head">
         <div>
           <h1>Xodimlar va ruxsatlar</h1>
-          <p>Ofis, Sklad, Agentlar va Rahbariyat — yagona kirish (login/parol) va shaxsiy kabinetlar</p>
         </div>
         <div className="kpi-seg">
           <button type="button" className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>Barchasi ({staff.data?.length || 0})</button>

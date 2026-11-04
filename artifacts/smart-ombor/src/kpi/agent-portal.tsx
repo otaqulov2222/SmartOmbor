@@ -202,9 +202,8 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         <div className="ag-hero-main">
           <div className="ag-avatar">{(d?.agent.fullName || 'A').slice(0, 1).toUpperCase()}</div>
           <div>
-            <span className="ag-badge"><Sparkles size={13} /> Savdo agenti kabineti</span>
+            <span className="ag-badge"><Sparkles size={13} /> Savdo agenti</span>
             <h1>{d?.agent.fullName || 'Agent'}</h1>
-            <p>Bugungi yo‘nalish, mijozlar qarzdorligi va shaxsiy KPI daromadingiz</p>
           </div>
         </div>
         <div className="ag-hero-actions">
@@ -308,10 +307,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           />
 
           <div className="ag-section-head">
-            <div>
-              <h2>Bugungi marshrut nuqtalari (1 → {(debtors.length ? debtors : d?.customers || []).length})</h2>
-              <p>Nuqtaga borgach «Bordim / Gaplashdim» tugmasini bosing — <b>✓ pitichka</b> tushadi va navbat keyingi nuqtaga o‘tadi.</p>
-            </div>
+            <h2>Bugungi marshrut nuqtalari (1 → {(debtors.length ? debtors : d?.customers || []).length})</h2>
           </div>
           <div className="ag-stops">
             {(debtors.length ? debtors : d?.customers || []).map((c, idx) => {
@@ -390,12 +386,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       {/* TAB 2: 3-Stage KPI Deadlines */}
       {tab === 'kpi' ? (
         <section className="ag-section">
-          <div className="ag-section-head">
-            <div>
-              <h2>Har bir savdo bo‘yicha KPI muddatlari</h2>
-              <p>Qaysi sanagacha pul olinsa necha foiz va qancha so‘m KPI chiqishi aniq ko‘rsatilgan.</p>
-            </div>
-          </div>
+        <div className="ag-section-head">
+          <h2>KPI muddatlari</h2>
+        </div>
           <div className="ag-deals">
             {(d?.deals || []).map((deal) => {
               const hasDue = Number(deal.dueAmount) > 0;

@@ -115,7 +115,6 @@ export function GpsPage() {
       <header className="kpi-head">
         <div>
           <h1>GPS va marshrut {selectedAgent ? `— ${selectedAgent.fullName}` : ''}</h1>
-          <p>Agentni bosing — faqat shu agentning <b>1 ✓ → 2 → 3 → 4 → 5</b> marshruti va borgan nuqtalari ko‘rinadi</p>
         </div>
         <div className="kpi-actions">
           <button type="button" className="btn" onClick={() => void q.refetch()}>

@@ -338,11 +338,10 @@ export function RouteMap({
       </div>
 
       <div className="rm-legend">
-        <span><i className="rm-dot is-agent" /> Agent yo‘nalishi (➤)</span>
-        <span><i className="rm-dot is-done" /> Borildi (1 ✓)</span>
-        <span><i className="rm-dot is-next" /> Navbatdagi nuqta</span>
-        <span><i className="rm-dot is-wait" /> Keyingi nuqtalar</span>
-        <span className="kpi-muted"><MapPin size={12} /> Xarita ustiga 1 marta bosib suring</span>
+        <span><i className="rm-dot is-agent" /> Agent (➤)</span>
+        <span><i className="rm-dot is-done" /> Borildi (✓)</span>
+        <span><i className="rm-dot is-next" /> Navbatdagi</span>
+        <span><i className="rm-dot is-wait" /> Rejada</span>
       </div>
     </div>
   );

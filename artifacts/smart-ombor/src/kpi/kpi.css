@@ -210,12 +210,18 @@
 
 /* ---------- Agent Strip & Interactive 1✓ -> 2 -> 3 -> 4 -> 5 RouteMap ---------- */
 .gps-agent-strip {
-  display: flex; gap: .5rem; overflow-x: auto; padding-bottom: .25rem;
+  display: flex; gap: .45rem; flex-wrap: wrap;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.gps-agent-strip::-webkit-scrollbar,
+.rm-steps::-webkit-scrollbar,
+.kpi-table-wrap::-webkit-scrollbar {
+  display: none; width: 0; height: 0;
 }
 .gps-agent-pill {
-  border: 1px solid #e2e8f0; background: #fff; border-radius: 14px;
-  padding: .6rem .9rem; display: grid; gap: .15rem; text-align: left;
-  cursor: pointer; min-width: 135px; flex: none;
+  border: 1px solid #e2e8f0; background: #fff; border-radius: 12px;
+  padding: .5rem .8rem; display: grid; gap: .1rem; text-align: left;
+  cursor: pointer; flex: 0 1 auto;
   box-shadow: 0 2px 6px rgba(15, 27, 45, .03);
 }
 .gps-agent-pill.is-active {
@@ -243,7 +249,8 @@
 
 .rm-steps {
   display: flex; align-items: center; gap: 0; overflow-x: auto;
-  padding: .75rem 1.1rem; background: #f8fafc; border-bottom: 1px solid #eef2f6;
+  padding: .65rem 1rem; background: #f8fafc; border-bottom: 1px solid #eef2f6;
+  scrollbar-width: none; -ms-overflow-style: none;
 }
 .rm-step-item { display: flex; align-items: center; flex: none; }
 .rm-node {
