@@ -4,7 +4,7 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 import { parseMarkups, parsePct, type SaleMarkup } from "./markup";
-import { canonicalFactoryCode, normalizeBordoCode, normalizeBordoColor, normalizeBordoSize } from "./catalog";
+import { canonicalFactoryCode, compactCode, normalizeBordoCode, normalizeBordoColor, normalizeBordoSize, sameProductCode } from "./catalog";
 import { logger } from "./logger";
 
 export type ColorLine = { name: string; quantity: number };
@@ -412,6 +412,36 @@ export function listShipments(factoryId?: string) {
     .shipments.filter((shipment) => !factoryId || shipment.factoryId === factoryId)
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .map(shipmentView);
+}
+
+/** Oxirgi yuk xati qatori — passport bo‘sh maydonlarni (narx, foiz, pachka, guruh) to‘ldirish uchun. */
+export function findLastWaybillLine(input: {
+  factoryCode?: string;
+  productCode: string;
+  size?: string;
+  groupCode?: string;
+}): ShipmentLine | null {
+  const code = normalizeBordoCode(String(input.productCode || ""));
+  if (!code) return null;
+  const size = normalizeBordoSize(String(input.size || ""));
+  const group = normalizeBordoCode(String(input.groupCode || ""));
+  const factory = canonicalFactoryCode(String(input.factoryCode || ""));
+  let best: { line: ShipmentLine; at: number } | null = null;
+  for (const shipment of load().shipments) {
+    if (shipment.status === "declined") continue;
+    const at = Date.parse(shipment.createdAt || shipment.date) || 0;
+    for (const line of shipment.lines ?? []) {
+      if (!sameProductCode(line.productCode, code) && normalizeBordoCode(line.productCode) !== code) continue;
+      if (size && compactCode(normalizeBordoSize(line.size)) !== compactCode(size)) continue;
+      if (group && compactCode(line.sectionCode) !== compactCode(group)) continue;
+      if (factory) {
+        const lineFactory = canonicalFactoryCode(line.factoryCode || "");
+        if (lineFactory && lineFactory !== factory) continue;
+      }
+      if (!best || at >= best.at) best = { line, at };
+    }
+  }
+  return best?.line ?? null;
 }
 
 function cleanLine(raw: Partial<ShipmentLine>, factoryCode: string): ShipmentLine {

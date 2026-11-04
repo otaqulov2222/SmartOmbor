@@ -1091,7 +1091,12 @@ export async function findExistingBordoProduct(
   if (name.length < 2) return null;
   const named = acceptFactoryProduct(await productByExactName(name), scope, line);
   if (named) return rememberProduct(named, [name]);
-  // Fuzzy search=code olib tashlandi: 277/106 ni eski kartochkaga yopishtirib yuborardi.
+  // Alias aniq nomlar (guruhli/guruhsiz) — fuzzy search YO‘Q, faqat exact name + acceptFactoryProduct.
+  for (const alias of nameAliases(name)) {
+    if (alias === name) continue;
+    const hit = acceptFactoryProduct(await productByExactName(alias), scope, line);
+    if (hit) return rememberProduct(hit, [name, alias]);
+  }
   return null;
 }
 

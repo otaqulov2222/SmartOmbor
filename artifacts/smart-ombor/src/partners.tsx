@@ -168,6 +168,7 @@ type Passport = {
   priceType?: string;
   markupPct?: number | null;
   markups?: Partial<SaleMarkup>;
+  fromWaybill?: boolean;
 };
 
 async function loadPassport(input: { factory: string; code: string; size?: string; group?: string }): Promise<Passport | null> {
@@ -182,16 +183,15 @@ async function loadPassport(input: { factory: string; code: string; size?: strin
 
 function fromPassport(current: { group: string; size: string; pack: string; price: string; pachka?: string; markup?: PctMap }, data: Passport): Partial<Line> {
   const patch: Partial<Line> = {};
-  if (data.found) {
-    if (!current.group && data.groupCode) patch.sectionCode = data.groupCode;
-    if (!current.size && data.size) patch.size = data.size;
-    if (!(Number(current.pachka) > 1) && data.packSize && data.packSize > 1) patch.pachka = data.packSize;
-    const amount = data.cost || data.salePrice || 0;
-    if (!current.price && amount > 0) patch.price = amount;
-    if (data.productId) {
-      patch.productId = data.productId;
-      patch.productName = data.name || null;
-    }
+  // Bo‘sh maydonlarni katalog yoki oxirgi yuk xatidan to‘ldiramiz — yozilgan qiymatni ustiga yozmaymiz.
+  if (!current.group && data.groupCode) patch.sectionCode = data.groupCode;
+  if (!current.size && data.size) patch.size = data.size;
+  if (!(Number(current.pachka) > 1) && data.packSize && data.packSize > 1) patch.pachka = data.packSize;
+  const amount = data.cost || data.salePrice || 0;
+  if (!current.price && amount > 0) patch.price = amount;
+  if (data.found && data.productId) {
+    patch.productId = data.productId;
+    patch.productName = data.name || null;
   }
   const inherited: Partial<SaleMarkup> = { ...(data.markups ?? {}) };
   if (!PRICE_TYPES.some(type => inherited[type] != null) && data.priceType && data.priceType in DEFAULT_MARKUP && data.markupPct != null) {
@@ -387,7 +387,7 @@ function WaybillCells({ line, locked, markup, onSave, onEditFocus }: { line: Lin
     <td className="waybill-pachka" data-label={t('zavod.pachka')}><input className="input" aria-label={t('zavod.pachka')} inputMode="numeric" value={pachka} onChange={event => setPachka(event.target.value.replace(/[^\d]/g, ''))} onFocus={() => markFocus(true)} onBlur={() => { markFocus(false); commit(); }}/></td>
     <td data-label={t('zavod.boxes')}><input className="input" aria-label={t('zavod.boxes')} inputMode="decimal" value={boxes} onChange={event => setBoxes(event.target.value)} onFocus={() => markFocus(true)} onBlur={() => { markFocus(false); commit(); }}/></td>
     <td data-label={t('zavod.price')}><input className="input" aria-label={t('zavod.price')} inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} onFocus={() => markFocus(true)} onBlur={() => { markFocus(false); applyPassport(); }}/></td>
-    <td className="waybill-type" data-label={t('zavod.priceType')}><MarkupTriple compact values={pctMap} locked={kept} onChange={setPctMap} onBlur={next => { setPctMap(next); commit({ markup: parsePctMap(next) }); }}/></td>
+    <td className="waybill-type" data-label={t('zavod.priceType')}><MarkupTriple compact values={pctMap} onChange={setPctMap} onBlur={next => { setPctMap(next); setKept({}); commit({ markup: parsePctMap(next) }); }}/></td>
     <td className="waybill-colors-cell" data-label={t('zavod.colors')}><ColorCount colors={colors} fmt={fmt}/></td>
     <td className="num" data-label={t('zavod.sum')}>{money(preview * asNumber(price))}</td>
   </>;

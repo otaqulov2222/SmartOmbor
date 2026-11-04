@@ -32,7 +32,7 @@ import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribe
 import { orderRecommendations } from "../lib/recommendations";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { listAccounts } from "../lib/partners";
+import { findLastWaybillLine, listAccounts } from "../lib/partners";
 import { moysklad, moyskladAll, moyskladBinary, moyskladConfigured, moyskladSend, money, MoySkladError } from "../lib/moysklad";
 
 function sameFactoryCode(left: string, right: string) {
@@ -939,6 +939,12 @@ router.get("/products/passport", async (req, res, next) => {
     const product = matched ? catalog.products.find((item) => item.id === matched.id) : null;
     const sizes = new Set(options.map((item) => item.size).filter(Boolean));
     const groups = new Set(options.map((item) => item.groupCode).filter(Boolean));
+    const prior = findLastWaybillLine({ factoryCode: factory, productCode: code, size, groupCode: group });
+    const priorMarkups = prior?.markup && typeof prior.markup === "object" ? prior.markup : {};
+    const priorHasMarkup = SALE_TYPES.some((type) => priorMarkups[type] != null);
+    const priorPack = prior && prior.pachka > 1 ? prior.pachka : null;
+    const priorCost = prior && prior.price > 0 ? prior.price : null;
+    const priorGroup = prior?.sectionCode?.trim() || "";
     if (!matched || !product || (!size && sizes.size > 1) || (!group && groups.size > 1)) {
       let priceType = "";
       let markupPct: number | null = null;
@@ -956,7 +962,25 @@ router.get("/products/passport", async (req, res, next) => {
           sales = inherited.sales;
         }
       }
-      res.json({ found: false, priceType, markupPct, markups, sales, options });
+      // Katalog topmasa — oxirgi yuk xatidan narx/foiz/pachka/guruh (bo‘sh maydonlar uchun).
+      if (!SALE_TYPES.some((type) => markups[type] != null) && priorHasMarkup) {
+        markups = { ...priorMarkups };
+        if (prior?.priceType) priceType = prior.priceType;
+        if (prior?.markupPct != null) markupPct = prior.markupPct;
+      }
+      res.json({
+        found: false,
+        priceType,
+        markupPct,
+        markups,
+        sales,
+        options,
+        groupCode: priorGroup || "",
+        packSize: priorPack,
+        cost: priorCost,
+        salePrice: null,
+        fromWaybill: Boolean(prior),
+      });
       return;
     }
     const parts = parseBordoName(product.name);
@@ -974,20 +998,26 @@ router.get("/products/passport", async (req, res, next) => {
     } catch (error) {
       logger.warn({ productId: matched.id, err: error instanceof Error ? error.message : error }, "MoySklad passport pack skipped");
     }
+    const markups = SALE_TYPES.some((type) => inherited.markups?.[type] != null)
+      ? inherited.markups
+      : (priorHasMarkup ? priorMarkups : inherited.markups);
+    const cost = inherited.cost && inherited.cost > 0 ? inherited.cost : priorCost;
+    const pack = packSize > 1 ? packSize : priorPack;
     res.json({
       found: true,
       productId: matched.id,
       name: matched.name,
-      groupCode: parts?.groupCode || "",
+      groupCode: parts?.groupCode || priorGroup || "",
       size: parts?.size || size,
-      packSize: packSize > 1 ? packSize : null,
-      cost: inherited.cost,
+      packSize: pack && pack > 1 ? pack : null,
+      cost,
       salePrice: inherited.salePrice,
-      priceType: inherited.priceType,
-      markupPct: inherited.markupPct,
-      markups: inherited.markups,
+      priceType: inherited.priceType || prior?.priceType || "",
+      markupPct: inherited.markupPct ?? prior?.markupPct ?? null,
+      markups,
       sales: inherited.sales,
       options,
+      fromWaybill: Boolean(prior) && !(inherited.cost && inherited.cost > 0 && SALE_TYPES.some((type) => inherited.markups?.[type] != null)),
     });
   } catch (error) {
     next(error);
