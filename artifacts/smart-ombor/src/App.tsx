@@ -325,6 +325,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const warehouse = isWarehouse(role);
   const agent = isAgentRole(role);
   const officeOnly = isEmployeeCabinet(role);
+  const effectiveRail = !agent && !officeOnly && rail;
   const visiblePrimary = agent ? agentPrimaryHrefs : officeOnly ? ['/office'] : warehouse ? warehousePrimaryHrefs : primaryHrefs;
   const visibleMoreGroups = agent || officeOnly ? [] : warehouse ? warehouseMoreGroups : moreGroups;
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
@@ -362,10 +363,10 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   };
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => { document.body.classList.toggle('nav-open', open); return () => document.body.classList.remove('nav-open'); }, [open]);
-  return <div className={`app ${rail ? 'is-rail' : ''}`}>
+  return <div className={`app ${effectiveRail ? 'is-rail' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-      <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
+      <div className="sidebar-top"><BrandMark light/>{!agent && !officeOnly && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
           {agent ? <>

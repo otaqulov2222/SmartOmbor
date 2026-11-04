@@ -42,8 +42,8 @@
 .kpi-agent-card h1 { margin: 0; }
 .kpi-agent-card p { margin: 0; color: #64748b; }
 
-/* ---------- Agent Cabinet (Modern Desktop + Mobile) ---------- */
-.ag-wrap { display: grid; gap: 1rem; max-width: 1180px; margin: 0 auto; padding-bottom: 2rem; }
+/* ---------- Agent Cabinet (Full-width Desktop + Mobile) ---------- */
+.ag-wrap { display: grid; gap: 1rem; width: 100%; padding-bottom: 1.5rem; }
 .ag-hero {
   background: linear-gradient(135deg, #0f1b2d 0%, #1e3a8a 58%, #2563eb 100%);
   color: #fff;
