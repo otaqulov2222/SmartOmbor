@@ -164,7 +164,6 @@ export function OfficePage() {
   const [ok, setOk] = useState('');
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<'day' | 'week' | 'month'>('week');
-  const [viewTab, setViewTab] = useState<'punch' | 'report'>('punch');
   const [history, setHistory] = useState<Punch[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
@@ -421,15 +420,6 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className="office-view-switch">
-        <button type="button" className={viewTab === 'punch' ? 'is-on' : ''} onClick={() => setViewTab('punch')}>
-          Davomat belgilash
-        </button>
-        <button type="button" className={viewTab === 'report' ? 'is-on' : ''} onClick={() => { setViewTab('report'); void loadHistory(range); }}>
-          Davomat hisobot
-        </button>
-      </div>
-      {viewTab === 'punch' ? <>
       <div className="office-pair">
         <button type="button" className="office-go is-in" disabled={busy} onClick={() => void openStage('in', method)}>
           <span>
@@ -470,7 +460,6 @@ export function OfficePage() {
         <b>→ {ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
         <small>{ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
       </button>
-      </> : <>
       <div className="office-card">
         <div className="office-card-top">
           <div className="office-card-title">
@@ -481,7 +470,7 @@ export function OfficePage() {
             {ranges.map(item => <button key={item.id} type="button" className={range === item.id ? 'is-on' : ''} onClick={() => { setRange(item.id); void loadHistory(item.id); }}>{t(item.key)}</button>)}
           </div>
         </div>
-        {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'} ({hhmmss(row.workedMs || 0)})</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
+        {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
       </div>
       <div className="office-card">
         <div className="office-card-top">
@@ -501,7 +490,6 @@ export function OfficePage() {
         </div>
         {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
       </div>
-      </>}
       {!me?.director && <>
         <h2>{t('office.myTasks')}</h2>
         <p className="lead">{t('office.tasksBody')}</p>
