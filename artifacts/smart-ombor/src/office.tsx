@@ -391,11 +391,11 @@ export function OfficePage() {
       <div className="office-hero-fade"/>
       <div className="office-hero-bar">
         {me?.director
-          ? <Link href="/office/report" className="office-back"><ChevronLeft size={16}/> {t('office.report')}</Link>
+          ? <Link href="/dashboard" className="office-back"><ChevronLeft size={16}/> {t('common.back')}</Link>
           : me?.role === 'agent'
-            ? <Link href="/my-kpi" className="office-back"><ChevronLeft size={16}/> Kabinetga qaytish</Link>
+            ? <Link href="/my-kpi" className="office-back"><ChevronLeft size={16}/> {t('common.back')}</Link>
             : (me?.role === 'warehouse_staff' || me?.role === 'warehouse_manager')
-              ? <Link href="/partners" className="office-back"><ChevronLeft size={16}/> Kabinetga qaytish</Link>
+              ? <Link href="/partners" className="office-back"><ChevronLeft size={16}/> {t('common.back')}</Link>
               : <span className="office-back">{t('office.cabinet')}</span>}
         <div className="office-day">
           <b>{night ? <Moon size={13}/> : <Sun size={13}/>} {day.weekday}</b>
