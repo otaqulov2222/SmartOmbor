@@ -90,22 +90,21 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
+const primaryHrefs = ['/dashboard', '/products', '/partners'];
 const officeHrefs = ['/office', '/office/report', '/office/tasks'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
-  { key: 'nav.group.kpi', hrefs: kpiHrefs },
-  { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const warehouseAllowedHrefs = new Set([
   '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
   '/scanner', '/recommendations', '/office', '/tasks', '/partners',
 ]);
-const warehousePrimaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
+const warehousePrimaryHrefs = ['/dashboard', '/products', '/partners'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/recommendations', '/receipts', '/transfers', '/inventory', '/tasks'] },
 ];
 const roleOptions: Array<AppUserRole | 'sales_admin'> = ['super_admin', 'manager', 'sales_admin', 'warehouse_manager', 'warehouse_staff', 'analyst'];
 
@@ -319,11 +318,14 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
   const inMore = visibleMoreHrefs.includes(path);
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
+  const inKpiNav = kpiHrefs.includes(path);
   const [moreOpen, setMoreOpen] = useState(inMore);
   const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
+  const [kpiOpen, setKpiOpen] = useState(inKpiNav);
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
   useEffect(() => { setMoreOpen(inMore); }, [inMore]);
   useEffect(() => { if (inOfficeNav) setOfficeOpen(true); }, [inOfficeNav]);
+  useEffect(() => { if (inKpiNav) setKpiOpen(true); }, [inKpiNav]);
   const current = navigation.find(x => x.href === path);
   const alerts = useQuery<{ pending: number; revision?: number }>({
     queryKey: ['partner-alerts'],
@@ -355,7 +357,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
           {navItem('/dashboard')}
-          <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setMoreOpen(false); }} data-testid="button-navigation-office">
+          <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
             <Fingerprint size={18} strokeWidth={1.9}/>
             <span>{t('nav.office')}</span>
             <ChevronDown size={16} className="nav-more-chevron"/>
@@ -365,8 +367,18 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {director && navItem('/office/report')}
             {director && navItem('/office/tasks')}
           </div>}
+          {director && <>
+            <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
+              <Gauge size={18} strokeWidth={1.9}/>
+              <span>{t('nav.group.kpi')}</span>
+              <ChevronDown size={16} className="nav-more-chevron"/>
+            </button>
+            {kpiOpen && <div className="nav-office-sub">
+              {kpiHrefs.map(href => navItem(href))}
+            </div>}
+          </>}
           {visiblePrimary.filter(href => href !== '/dashboard').map(href => navItem(href))}
-          <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => setMoreOpen(value => !value)} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
+          <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
         </div>
         {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
