@@ -7,7 +7,7 @@ import './index.css';
 
 // Yangi UI chiqqanda eski cache (guruh/pachka "—") qolmasin — bir marta hard reload.
 // index.html dagi inline BUILD bilan bir xil — eski cache qolsa yana bir marta yangilanadi.
-const UI_BUILD = '2026-11-04-waybill-inline-v3';
+const UI_BUILD = '2026-11-04-kpi-gps-v4';
 const UI_BUILD_KEY = 'smart-ombor-ui-build';
 try {
   const prev = localStorage.getItem(UI_BUILD_KEY);
