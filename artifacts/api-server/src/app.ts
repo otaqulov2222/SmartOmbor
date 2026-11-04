@@ -57,15 +57,20 @@ const webRoot = path.resolve(process.cwd(), "artifacts/smart-ombor/dist/public")
 if (existsSync(webRoot)) {
   app.use(express.static(webRoot, {
     index: false,
+    // Hashlangan assetlar uzoqroq; HTML hech qachon eski UI qoldirmasin (Bordo kompyuterlari).
     maxAge: "1h",
     setHeaders(res, filePath) {
-      if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
+      if (filePath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        res.setHeader("Pragma", "no-cache");
+      }
     },
   }));
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.path.startsWith("/api")) return next();
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.sendFile(path.join(webRoot, "index.html"), (error) => {
       if (error) next(error);
     });
