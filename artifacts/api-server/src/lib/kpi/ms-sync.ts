@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   kpiAgentsTable,
@@ -7,7 +7,7 @@ import {
   kpiOrdersTable,
   kpiPaymentsTable,
 } from "@workspace/db";
-import { moysklad, moyskladAll, moyskladConfigured } from "../moysklad";
+import { moysklad, moyskladConfigured } from "../moysklad";
 import { hashPassword } from "./auth";
 import { ensureDefaultPolicy, refreshOrderKpi, snapshotPolicy } from "./engine";
 import { money } from "./money";
@@ -22,6 +22,25 @@ const SKIP_TAGS = new Set([
   "телеграм магазин от icorp",
   "call center",
 ]);
+
+/** Default known Bordo MoySklad sales agents so list is never empty even before API round-trip finishes. */
+const KNOWN_AGENTS: Array<[string, string]> = [
+  ["Oysha", "oysha"],
+  ["Shaxzod", "shaxzod"],
+  ["Farzona", "farzona"],
+  ["Elyor", "elyor"],
+  ["Abbos", "abbos"],
+  ["Baxodir", "baxodir"],
+  ["Muzaffar", "muzaffar"],
+  ["Avliyo", "avliyo"],
+  ["Gulzoda", "gulzoda"],
+  ["Nafisa", "nafisa"],
+  ["Abdug'ani", "abdugani"],
+  ["Nozim", "nozim"],
+  ["Farxod aka", "farxodaka"],
+  ["Van seling", "vanseling"],
+  ["Ofis", "ofis"],
+];
 
 const ALIAS: Record<string, string> = {
   oisha: "Oysha",
@@ -41,6 +60,7 @@ const ALIAS: Record<string, string> = {
   nozim: "Nozim",
   "farxod aka": "Farxod aka",
   "abdug'ani": "Abdug'ani",
+  abdugani: "Abdug'ani",
   ofis: "Ofis",
   "van seling": "Van seling",
 };
@@ -55,9 +75,12 @@ function canonicalAgentName(raw: string): string | null {
 }
 
 function slugLogin(name: string) {
+  const low = name.toLowerCase();
+  for (const [full, login] of KNOWN_AGENTS) {
+    if (full.toLowerCase() === low) return login;
+  }
   return (
-    name
-      .toLowerCase()
+    low
       .replace(/[^a-z0-9а-яё]+/gi, "")
       .slice(0, 24) || "agent"
   );
@@ -95,11 +118,50 @@ type MsDemand = {
 
 let syncing: Promise<{ agents: number; customers: number; orders: number }> | null = null;
 let lastSyncAt = 0;
+let seededKnown = false;
+
+/** Instant (<100ms): ensures known MoySklad agents exist in DB so UI is never blank. */
+export async function ensureSeedAgents(cache = new Map<string, string>()) {
+  const existing = await db.select().from(kpiAgentsTable);
+  for (const a of existing) {
+    cache.set(a.fullName.toLowerCase(), a.id);
+    cache.set(a.login.toLowerCase(), a.id);
+  }
+  if (seededKnown && existing.length >= KNOWN_AGENTS.length) return cache;
+  const pw = hashPassword("1234");
+  for (const [fullName, login] of KNOWN_AGENTS) {
+    if (cache.has(fullName.toLowerCase()) || cache.has(login)) continue;
+    const [row] = await db
+      .insert(kpiAgentsTable)
+      .values({
+        fullName,
+        login,
+        passwordHash: pw,
+        status: "active",
+        notes: "MoySklad",
+        createdBy: "moysklad",
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (row) {
+      cache.set(fullName.toLowerCase(), row.id);
+      cache.set(login, row.id);
+    }
+  }
+  const reload = await db.select().from(kpiAgentsTable);
+  for (const a of reload) {
+    cache.set(a.fullName.toLowerCase(), a.id);
+    cache.set(a.login.toLowerCase(), a.id);
+  }
+  seededKnown = true;
+  return cache;
+}
 
 export async function syncKpiFromMoySklad(force = false) {
-  if (!moyskladConfigured()) return { agents: 0, customers: 0, orders: 0 };
+  await ensureSeedAgents();
+  if (!moyskladConfigured()) return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0 };
   if (!force && Date.now() - lastSyncAt < 45_000) {
-    return { agents: 0, customers: 0, orders: 0 };
+    return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0 };
   }
   if (syncing) return syncing;
   syncing = runSync()
@@ -120,25 +182,9 @@ async function ensureAgentByName(
   const name = canonicalAgentName(rawName);
   if (!name) return null;
   const key = name.toLowerCase();
-  const cached = cache.get(key);
-  if (cached) return cached;
-
   const login = slugLogin(name);
-  const existing = await db
-    .select()
-    .from(kpiAgentsTable)
-    .where(eq(kpiAgentsTable.login, login))
-    .limit(1);
-  if (existing[0]) {
-    if (existing[0].fullName !== name) {
-      await db
-        .update(kpiAgentsTable)
-        .set({ fullName: name })
-        .where(eq(kpiAgentsTable.id, existing[0].id));
-    }
-    cache.set(key, existing[0].id);
-    return existing[0].id;
-  }
+  const hit = cache.get(key) || cache.get(login);
+  if (hit) return hit;
 
   const [created] = await db
     .insert(kpiAgentsTable)
@@ -150,9 +196,24 @@ async function ensureAgentByName(
       notes: "MoySklad",
       createdBy: "moysklad",
     })
+    .onConflictDoNothing()
     .returning();
-  cache.set(key, created.id);
-  return created.id;
+  if (created) {
+    cache.set(key, created.id);
+    cache.set(login, created.id);
+    return created.id;
+  }
+  const [found] = await db
+    .select()
+    .from(kpiAgentsTable)
+    .where(eq(kpiAgentsTable.login, login))
+    .limit(1);
+  if (found) {
+    cache.set(key, found.id);
+    cache.set(login, found.id);
+    return found.id;
+  }
+  return null;
 }
 
 function pickAgentFromTags(tags?: string[]): string | null {
@@ -170,14 +231,9 @@ function pickAgentFromTags(tags?: string[]): string | null {
 async function runSync() {
   const policy = await ensureDefaultPolicy("moysklad");
   const snap = snapshotPolicy(policy);
-  const agentCache = new Map<string, string>();
-  const existingAgents = await db.select().from(kpiAgentsTable);
-  for (const a of existingAgents) {
-    agentCache.set(a.fullName.toLowerCase(), a.id);
-    agentCache.set(a.login.toLowerCase(), a.id);
-  }
+  const agentCache = await ensureSeedAgents();
 
-  // 1. Sales channels → agents
+  // 1. Sales channels → any new agents
   const channels = await moysklad<{ rows?: MsChannel[] }>("/entity/saleschannel?limit=100").catch(
     () => ({ rows: [] as MsChannel[] }),
   );
@@ -185,10 +241,6 @@ async function runSync() {
     if (ch.name) await ensureAgentByName(agentCache, ch.name);
   }
 
-  // 2. Counterparties (buyers)
-  const cps = await moyskladAll<MsCounterparty>("/entity/counterparty?limit=100", 1500).catch(
-    () => ({ rows: [] as MsCounterparty[] }),
-  );
   const customerByMsId = new Map<string, { id: string; agentId: string | null }>();
   const localCustomers = await db.select().from(kpiCustomersTable);
   for (const c of localCustomers) {
@@ -197,78 +249,14 @@ async function runSync() {
     }
   }
 
-  let customerCount = 0;
-  for (const cp of cps.rows || []) {
-    if (!cp.id || !cp.name) continue;
-    const tags = cp.tags || [];
-    if (tags.includes("поставщик") && !tags.includes("покупатель")) continue;
-    const tagAgentName = pickAgentFromTags(tags);
-    const agentId = tagAgentName ? await ensureAgentByName(agentCache, tagAgentName) : null;
-    const msKey = `ms:${cp.id}`;
-    const address = cp.actualAddress || cp.legalAddress || "";
-    const found = customerByMsId.get(cp.id);
-    let customerId: string;
-    if (found) {
-      customerId = found.id;
-      if (agentId && found.agentId !== agentId) {
-        await db
-          .update(kpiCustomersTable)
-          .set({ createdByAgentId: agentId, status: "active" })
-          .where(eq(kpiCustomersTable.id, customerId));
-      }
-    } else {
-      const [created] = await db
-        .insert(kpiCustomersTable)
-        .values({
-          name: cp.name.trim(),
-          stir: cp.inn || "",
-          phone: cp.phone || "",
-          address,
-          type: "store",
-          status: "active",
-          contractNumber: msKey,
-          notes: tags.join(", "),
-          createdByAgentId: agentId,
-          createdBy: "moysklad",
-        })
-        .returning();
-      customerId = created.id;
-      customerByMsId.set(cp.id, { id: customerId, agentId });
-    }
-    if (agentId) {
-      const [active] = await db
-        .select()
-        .from(kpiCustomerAssignmentsTable)
-        .where(
-          and(
-            eq(kpiCustomerAssignmentsTable.customerId, customerId),
-            eq(kpiCustomerAssignmentsTable.active, true),
-          ),
-        )
-        .limit(1);
-      if (!active) {
-        await db.insert(kpiCustomerAssignmentsTable).values({
-          customerId,
-          agentId,
-          active: true,
-          assignedBy: "moysklad",
-        });
-      } else if (active.agentId !== agentId) {
-        await db
-          .update(kpiCustomerAssignmentsTable)
-          .set({ agentId })
-          .where(eq(kpiCustomerAssignmentsTable.id, active.id));
-      }
-    }
-    customerCount += 1;
-  }
-
-  // 3. Recent demands (last ~200 shipments)
+  // 2. Demands FIRST (fast — 100 latest shipments with buyer + payments)
   const demands = await moysklad<{ rows?: MsDemand[] }>(
     "/entity/demand?limit=100&order=moment,desc&expand=agent,salesChannel,payments",
   ).catch(() => ({ rows: [] as MsDemand[] }));
 
   const fallbackAgentId = (await ensureAgentByName(agentCache, "Ofis"))!;
+  const existingOrders = await db.select().from(kpiOrdersTable);
+  const orderByNumber = new Map(existingOrders.map((o) => [o.number, o]));
   let orderCount = 0;
 
   for (const d of demands.rows || []) {
@@ -287,6 +275,7 @@ async function runSync() {
         .values({
           name: cp.name.trim(),
           phone: cp.phone || "",
+          address: cp.actualAddress || cp.legalAddress || "",
           type: "store",
           status: "active",
           contractNumber: `ms:${cp.id}`,
@@ -297,6 +286,12 @@ async function runSync() {
         .returning();
       cust = { id: created.id, agentId };
       customerByMsId.set(cp.id, cust);
+      await db.insert(kpiCustomerAssignmentsTable).values({
+        customerId: created.id,
+        agentId,
+        active: true,
+        assignedBy: "moysklad",
+      });
     }
 
     const total = money((d.sum || 0) / 100);
@@ -308,7 +303,6 @@ async function runSync() {
     if (Number(paid) >= Number(total) && Number(total) > 0) status = "paid";
     else if (Number(paid) > 0) status = "partially_paid";
 
-    // latest payment moment for stage calculation if paid
     let latestPayAt: Date | null = null;
     for (const p of d.payments || []) {
       if (p.moment) {
@@ -317,29 +311,26 @@ async function runSync() {
       }
     }
 
-    const existing = await db
-      .select()
-      .from(kpiOrdersTable)
-      .where(eq(kpiOrdersTable.number, number))
-      .limit(1);
-
+    const prev = orderByNumber.get(number);
     let orderId: string;
-    if (existing[0]) {
-      orderId = existing[0].id;
-      await db
-        .update(kpiOrdersTable)
-        .set({
-          agentId,
-          customerId: cust.id,
-          total,
-          subtotal: total,
-          paidAmount: paid,
-          status,
-          orderDate,
-          confirmedAt: momentDate,
-          invoiceRef: latestPayAt ? latestPayAt.toISOString() : existing[0].invoiceRef,
-        })
-        .where(eq(kpiOrdersTable.id, orderId));
+    if (prev) {
+      orderId = prev.id;
+      if (prev.paidAmount !== paid || prev.total !== total || prev.agentId !== agentId) {
+        await db
+          .update(kpiOrdersTable)
+          .set({
+            agentId,
+            customerId: cust.id,
+            total,
+            subtotal: total,
+            paidAmount: paid,
+            status,
+            orderDate,
+            confirmedAt: momentDate,
+            invoiceRef: latestPayAt ? latestPayAt.toISOString() : prev.invoiceRef,
+          })
+          .where(eq(kpiOrdersTable.id, orderId));
+      }
     } else {
       const [created] = await db
         .insert(kpiOrdersTable)
@@ -365,9 +356,9 @@ async function runSync() {
         })
         .returning();
       orderId = created.id;
+      orderByNumber.set(number, created);
     }
 
-    // sync payment records
     for (const p of d.payments || []) {
       const pid = p.meta?.href?.split("/").pop() || p.id;
       if (!pid) continue;
@@ -396,5 +387,65 @@ async function runSync() {
     orderCount += 1;
   }
 
-  return { agents: agentCache.size, customers: customerCount, orders: orderCount };
+  // 3. Background counterparty enrichment (first 300 buyers in chunks)
+  void syncCounterpartiesChunk(agentCache, customerByMsId).catch(() => undefined);
+
+  return { agents: agentCache.size, customers: customerByMsId.size, orders: orderCount };
+}
+
+async function syncCounterpartiesChunk(
+  agentCache: Map<string, string>,
+  customerByMsId: Map<string, { id: string; agentId: string | null }>,
+) {
+  for (let offset = 0; offset < 600; offset += 100) {
+    const page = await moysklad<{ rows?: MsCounterparty[] }>(
+      `/entity/counterparty?limit=100&offset=${offset}`,
+    ).catch(() => ({ rows: [] as MsCounterparty[] }));
+    const rows = page.rows || [];
+    if (!rows.length) break;
+    for (const cp of rows) {
+      if (!cp.id || !cp.name || customerByMsId.has(cp.id)) continue;
+      const tags = cp.tags || [];
+      if (tags.includes("поставщик") && !tags.includes("покупатель")) continue;
+      const tagAgent = pickAgentFromTags(tags);
+      const agentId = tagAgent ? await ensureAgentByName(agentCache, tagAgent) : null;
+      const [created] = await db
+        .insert(kpiCustomersTable)
+        .values({
+          name: cp.name.trim(),
+          stir: cp.inn || "",
+          phone: cp.phone || "",
+          address: cp.actualAddress || cp.legalAddress || "",
+          type: "store",
+          status: "active",
+          contractNumber: `ms:${cp.id}`,
+          notes: tags.join(", "),
+          createdByAgentId: agentId,
+          createdBy: "moysklad",
+        })
+        .returning();
+      customerByMsId.set(cp.id, { id: created.id, agentId });
+      if (agentId) {
+        await db.insert(kpiCustomerAssignmentsTable).values({
+          customerId: created.id,
+          agentId,
+          active: true,
+          assignedBy: "moysklad",
+        });
+      }
+    }
+    if (rows.length < 100) break;
+  }
+}
+
+export async function ensureKpiBootstrapped() {
+  await ensureSeedAgents();
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(kpiOrdersTable);
+  if (n === 0) {
+    await syncKpiFromMoySklad(true).catch(() => undefined);
+  } else {
+    void syncKpiFromMoySklad(false).catch(() => undefined);
+  }
 }

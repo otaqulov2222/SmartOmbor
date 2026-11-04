@@ -34,7 +34,7 @@ import {
   snapshotPolicy,
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
-import { syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
+import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneySub } from "../lib/kpi/money";
 
 const router: IRouter = Router();
@@ -135,11 +135,7 @@ router.get("/kpi/agent/me", requireKpiAgent(), async (_req, res, next) => {
 router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
   try {
     await ensureDefaultPolicy();
-    void syncKpiFromMoySklad(false).catch(() => undefined);
-    const [agents] = await db.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active')::int` }).from(kpiAgentsTable);
-    if ((agents?.total ?? 0) === 0) {
-      await syncKpiFromMoySklad(true).catch(() => undefined);
-    }
+    await ensureKpiBootstrapped();
     const [agentsAfter] = await db.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active')::int` }).from(kpiAgentsTable);
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
@@ -248,7 +244,8 @@ router.post("/kpi/territories", requireKpiAdmin(), async (req, res, next) => {
 /* ---------- Agents ---------- */
 router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
   try {
-    const agents = await db.select().from(kpiAgentsTable).orderBy(desc(kpiAgentsTable.createdAt));
+    await ensureKpiBootstrapped();
+    const agents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const out = [];
     for (const agent of agents) {
       const [cust] = await db.select({ n: sql<number>`count(*)::int` }).from(kpiCustomerAssignmentsTable)
@@ -342,6 +339,7 @@ router.patch("/kpi/agents/:id", requireKpiAdmin(), async (req, res, next) => {
 /* ---------- Customers + assignments ---------- */
 router.get("/kpi/customers", requireKpiAdmin(), async (req, res, next) => {
   try {
+    await ensureKpiBootstrapped();
     const q = String(req.query.q ?? "").trim();
     const rows = await db.select().from(kpiCustomersTable)
       .where(q ? or(ilike(kpiCustomersTable.name, `%${q}%`), ilike(kpiCustomersTable.phone, `%${q}%`)) : undefined)
@@ -626,6 +624,7 @@ async function createOrder(input: {
 
 router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
   try {
+    await ensureKpiBootstrapped();
     const status = String(req.query.status ?? "").trim();
     const rows = await db.select().from(kpiOrdersTable)
       .where(status ? eq(kpiOrdersTable.status, status) : undefined)
