@@ -1288,12 +1288,18 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       };
     });
 
-    const selectedAgentLoc = agentFilter ? lastLocByAgent.get(agentFilter) : null;
+    const activeAgentId =
+      agentFilter ||
+      agentPins.find((a) => a.debtorsCount > 0)?.id ||
+      agentPins.find((a) => a.customersCount > 0)?.id ||
+      agentPins[0]?.id ||
+      "";
+
+    const selectedAgentLoc = activeAgentId ? lastLocByAgent.get(activeAgentId) : null;
     const rawPoints = customers
       .filter((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
-        if (agentFilter) return owner === agentFilter;
-        return Boolean(c.lat && c.lng) || Number(debtByCustomer.get(c.id) || 0) > 0 || visitedByCustomer.has(c.id);
+        return owner === activeAgentId;
       })
       .slice(0, 200)
       .map((c) => {
@@ -1324,15 +1330,15 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       selectedAgentLoc ? Number(selectedAgentLoc.lng) : null,
     );
 
-    const agentTrack = agentFilter
+    const agentTrack = activeAgentId
       ? locEvents
-          .filter((e) => e.agentId === agentFilter && e.recordedAt.toISOString().slice(0, 10) === dateFilter)
+          .filter((e) => e.agentId === activeAgentId && e.recordedAt.toISOString().slice(0, 10) === dateFilter)
           .reverse()
           .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }))
       : [];
 
     const routeLog = todayVisits
-      .filter((v) => !agentFilter || v.agentId === agentFilter)
+      .filter((v) => !activeAgentId || v.agentId === activeAgentId)
       .map((v) => {
         const c = customers.find((x) => x.id === v.customerId);
         return {
@@ -1351,6 +1357,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
 
     res.json({
       date: dateFilter,
+      selectedAgentId: activeAgentId,
       agents: agentPins,
       points,
       routeLog,

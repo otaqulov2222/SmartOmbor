@@ -55,6 +55,7 @@ type RouteEntry = {
 
 type Overview = {
   date: string;
+  selectedAgentId?: string;
   agents: AgentPin[];
   points: GpsPoint[];
   routeLog: RouteEntry[];
@@ -104,16 +105,17 @@ export function GpsPage() {
   });
 
   const d = q.data;
+  const currentAgentId = agentId || d?.selectedAgentId || '';
   const liveAgents = (d?.agents || []).filter((a) => a.lat != null && a.lng != null);
   const visitedCount = (d?.points || []).filter((p) => p.visitedToday).length;
-  const selectedAgent = (d?.agents || []).find((a) => a.id === agentId);
+  const selectedAgent = (d?.agents || []).find((a) => a.id === currentAgentId);
 
   return (
     <div className="kpi-page" data-testid="page-gps">
       <header className="kpi-head">
         <div>
           <h1>GPS va marshrut {selectedAgent ? `— ${selectedAgent.fullName}` : ''}</h1>
-          <p>Agentni tanlang — uning <b>1 ✓ → 2 → 3 → 4 → 5</b> marshruti, borgan nuqtalari va real-vaqt GPS joylashuvi chiqadi</p>
+          <p>Agentni bosing — faqat shu agentning <b>1 ✓ → 2 → 3 → 4 → 5</b> marshruti va borgan nuqtalari ko‘rinadi</p>
         </div>
         <div className="kpi-actions">
           <button type="button" className="btn" onClick={() => void q.refetch()}>
@@ -122,23 +124,16 @@ export function GpsPage() {
         </div>
       </header>
 
-      {/* Clickable Agent Selector Pills */}
+      {/* Clickable Agent Selector Pills (one agent at a time) */}
       <div className="gps-agent-strip">
-        <button
-          type="button"
-          className={`gps-agent-pill ${!agentId ? 'is-active' : ''}`}
-          onClick={() => { setAgentId(''); setSelectedStopId(null); }}
-        >
-          <b>Barcha agentlar</b>
-          <small>{d?.points.length || 0} nuqta</small>
-        </button>
         {(d?.agents || []).map((a) => {
           const isOnline = a.lat != null && a.lng != null;
+          const isActive = currentAgentId === a.id;
           return (
             <button
               key={a.id}
               type="button"
-              className={`gps-agent-pill ${agentId === a.id ? 'is-active' : ''}`}
+              className={`gps-agent-pill ${isActive ? 'is-active' : ''}`}
               onClick={() => { setAgentId(a.id); setSelectedStopId(null); }}
             >
               <span className="gps-agent-pill-top">
@@ -146,7 +141,7 @@ export function GpsPage() {
                 <b>{a.fullName}</b>
               </span>
               <small>
-                ✓ {a.visitedToday} / {a.debtorsCount || a.customersCount} nuqta
+                ✓ {a.visitedToday} / {a.customersCount} nuqta
               </small>
             </button>
           );
@@ -188,10 +183,10 @@ export function GpsPage() {
         </article>
       </div>
 
-      {/* Interactive 1✓ -> 2 -> 3 -> 4 -> 5 Route Map */}
+      {/* Interactive 1✓ -> 2 -> 3 -> 4 -> 5 Route Map for the selected agent */}
       <RouteMap
         stops={(d?.points || []) as RouteStop[]}
-        agents={selectedAgent ? [selectedAgent] : d?.agents || []}
+        agents={selectedAgent ? [selectedAgent] : []}
         track={d?.agentTrack || []}
         selectedStopId={selectedStopId}
         onSelectStop={(st) => setSelectedStopId(st.id)}
