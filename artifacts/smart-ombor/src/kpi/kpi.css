@@ -306,6 +306,46 @@
   0% { transform: scale(.75); opacity: .9; }
   100% { transform: scale(1.45); opacity: 0; }
 }
+
+/* ---------- Employees Table & Copy Button ---------- */
+.emp-add-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 1fr 1.3fr auto;
+  gap: .55rem;
+  align-items: center;
+}
+.emp-role-custom { display: flex; gap: .35rem; align-items: center; }
+.emp-user-cell { display: flex; align-items: center; gap: .65rem; }
+.emp-avatar {
+  width: 36px; height: 36px; border-radius: 11px;
+  background: #f1f5f9; color: #334155; font-weight: 800; font-size: .92rem;
+  display: grid; place-items: center; flex: none;
+}
+.emp-avatar.is-green { background: #dcfce7; color: #15803d; }
+.emp-avatar.is-blue { background: #dbeafe; color: #1d4ed8; }
+.emp-avatar.is-amber { background: #fef3c7; color: #b45309; }
+
+.emp-role-badge {
+  display: inline-flex; align-items: center;
+  padding: .25rem .65rem; border-radius: 999px;
+  font-size: .78rem; font-weight: 700;
+  background: #f1f5f9; color: #334155;
+}
+.emp-role-badge.is-green { background: #dcfce7; color: #166534; }
+.emp-role-badge.is-blue { background: #dbeafe; color: #1e40af; }
+.emp-role-badge.is-amber { background: #fef3c7; color: #92400e; }
+
+.emp-code {
+  background: #f8fafc; border: 1px solid #e2e8f0;
+  padding: .2rem .5rem; border-radius: 7px;
+  font-size: .84rem; color: #0f1b2d;
+}
+.emp-pass-cell { display: inline-flex; align-items: center; gap: .35rem; }
+.emp-copied-btn { background: #dcfce7 !important; border-color: #86efac !important; color: #166534 !important; font-weight: 700; }
+
+@media (max-width: 960px) {
+  .emp-add-grid { grid-template-columns: 1fr 1fr; }
+}
 .rm-legend {
   display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
   padding: .65rem 1.1rem; font-size: .8rem; color: #475569; background: #fff; border-top: 1px solid #eef2f6;
