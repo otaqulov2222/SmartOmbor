@@ -368,7 +368,7 @@ export function OfficeReportPage() {
       </div>
     </div>
     {data?.stats && <div className="tabel-stats">
-      <article><span>{t('office.statTotal')}</span><b>{fmt(data.stats.total)}</b></article>
+      <button type="button" className={filter === 'all' ? 'is-on' : ''} onClick={() => setFilter('all')}><span>{t('office.statTotal')}</span><b>{fmt(data.stats.total)}</b></button>
       <button type="button" className={`is-ok ${filter === 'came' ? 'is-on' : ''}`} onClick={() => setFilter(filter === 'came' ? 'all' : 'came')}><span>{t('office.statCame')}</span><b>{fmt(data.stats.came)}</b></button>
       <button type="button" className={`is-bad ${filter === 'absent' ? 'is-on' : ''}`} onClick={() => setFilter(filter === 'absent' ? 'all' : 'absent')}><span>{t('office.statAbsent')}</span><b>{fmt(data.stats.absent)}</b></button>
       <button type="button" className={`is-warn ${filter === 'late' ? 'is-on' : ''}`} onClick={() => setFilter(filter === 'late' ? 'all' : 'late')}><span>{t('office.statLate')}</span><b>{fmt(data.stats.late)}</b></button>
@@ -381,11 +381,6 @@ export function OfficeReportPage() {
         <option value="">{t('office.allPeople')}</option>
         {people.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>
-      <div className="tabel-chips">
-        {filters.map(([id, label]) => (
-          <button type="button" key={id} className={filter === id ? 'is-on' : ''} onClick={() => setFilter(id)}>{label}</button>
-        ))}
-      </div>
       {ranged && <div className="tabel-day-modes">
         <button type="button" className={`btn btn-sm ${view === 'days' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView('days')}>{t('office.viewDays')}</button>
         <button type="button" className={`btn btn-sm ${view === 'people' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setView('people')}>{t('office.viewPeople')}</button>
