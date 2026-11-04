@@ -34,12 +34,22 @@ import {
   snapshotPolicy,
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
+import { syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneySub } from "../lib/kpi/money";
 
 const router: IRouter = Router();
 
 router.use("/kpi", (_req, _res, next) => {
   ensureKpiSchema().then(() => next()).catch(next);
+});
+
+router.post("/kpi/sync", requireKpiAdmin(), async (_req, res, next) => {
+  try {
+    const result = await syncKpiFromMoySklad(true);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
 });
 
 function tashkentDate(d = new Date()) {
@@ -125,7 +135,12 @@ router.get("/kpi/agent/me", requireKpiAgent(), async (_req, res, next) => {
 router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
   try {
     await ensureDefaultPolicy();
+    void syncKpiFromMoySklad(false).catch(() => undefined);
     const [agents] = await db.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active')::int` }).from(kpiAgentsTable);
+    if ((agents?.total ?? 0) === 0) {
+      await syncKpiFromMoySklad(true).catch(() => undefined);
+    }
+    const [agentsAfter] = await db.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active')::int` }).from(kpiAgentsTable);
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
       sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled')), 0)`,
@@ -141,8 +156,8 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
     }).from(kpiCalculationsTable);
     const due = moneySub(orders.sales, orders.paid);
     res.json({
-      agentsTotal: agents.total,
-      agentsActive: agents.active,
+      agentsTotal: agentsAfter.total,
+      agentsActive: agentsAfter.active,
       customersTotal: customers.total,
       customersPending: customers.pending,
       salesTotal: money(orders.sales),

@@ -126,7 +126,12 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
   if (!snap) return null;
 
   const anchor = order.confirmedAt ? new Date(order.confirmedAt) : new Date(order.orderDate);
-  const dayIndex = Math.max(0, daysBetween(anchor));
+  const settledAt =
+    moneyCmp(order.paidAmount, order.total) >= 0 && order.invoiceRef
+      ? new Date(order.invoiceRef)
+      : new Date();
+  const refDate = Number.isNaN(settledAt.getTime()) ? new Date() : settledAt;
+  const dayIndex = Math.max(0, daysBetween(anchor, refDate));
   const stage = resolveStage(snap.stages, dayIndex);
   const percent = stage ? money(stage.percent) : "0.00";
   const baseType = snap.baseType || "paid_amount";
