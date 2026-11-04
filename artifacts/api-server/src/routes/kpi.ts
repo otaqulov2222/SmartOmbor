@@ -33,9 +33,14 @@ import {
   refreshOrderKpi,
   snapshotPolicy,
 } from "../lib/kpi/engine";
+import { ensureKpiSchema } from "../lib/kpi/ddl";
 import { money, moneyAdd, moneyCmp, moneyMul, moneySub } from "../lib/kpi/money";
 
 const router: IRouter = Router();
+
+router.use("/kpi", (_req, _res, next) => {
+  ensureKpiSchema().then(() => next()).catch(next);
+});
 
 function tashkentDate(d = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {

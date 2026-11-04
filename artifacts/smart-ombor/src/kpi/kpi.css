@@ -28,6 +28,10 @@
 .kpi-error { color: #b91c1c; margin: 0; }
 .kpi-ok { color: #15803d; margin: 0; }
 .kpi-actions, .kpi-row-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.kpi-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.kpi-seg { display: inline-flex; background: #eef2f6; padding: .2rem; border-radius: 10px; gap: .2rem; }
+.kpi-seg button { border: 0; background: transparent; padding: .4rem .8rem; border-radius: 8px; font-weight: 600; color: #475569; cursor: pointer; }
+.kpi-seg button.active { background: #fff; color: #1d39c4; box-shadow: 0 1px 2px rgba(15, 27, 45, .08); }
 .kpi-split { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .kpi-stages { display: grid; gap: .5rem; }
 .kpi-stage { display: grid; grid-template-columns: 1.4fr repeat(3, .8fr); gap: .4rem; }

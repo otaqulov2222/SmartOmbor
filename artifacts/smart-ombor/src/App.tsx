@@ -92,7 +92,7 @@ const navigation: NavItem[] = [
 ];
 const primaryHrefs = ['/dashboard', '/products', '/partners'];
 const officeHrefs = ['/office', '/office/report', '/office/tasks'];
-const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'];
+const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory', '/tasks'] },
   { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
@@ -318,7 +318,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
   const inMore = visibleMoreHrefs.includes(path);
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
-  const inKpiNav = kpiHrefs.includes(path);
+  const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const [moreOpen, setMoreOpen] = useState(inMore);
   const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
   const [kpiOpen, setKpiOpen] = useState(inKpiNav);
