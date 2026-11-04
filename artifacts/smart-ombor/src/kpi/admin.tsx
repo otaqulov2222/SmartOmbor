@@ -123,11 +123,11 @@ export function KpiDashboardPage() {
           <tbody>
             {sorted.map((a) => (
               <tr key={a.id}>
-                <td><b>{a.fullName}</b></td>
-                <td className="kpi-muted">{a.login}</td>
-                <td>{a.customers}</td>
-                <td>{uzs(a.salesTotal)}</td>
-                <td><b>{uzs(a.kpiTotal)}</b></td>
+                <td data-label="Agent"><b>{a.fullName}</b></td>
+                <td data-label="Login" className="kpi-muted">{a.login}</td>
+                <td data-label="Mijozlari">{a.customers}</td>
+                <td data-label="Savdo">{uzs(a.salesTotal)}</td>
+                <td data-label="KPI daromad"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
               </tr>
             ))}
           </tbody>
@@ -190,12 +190,12 @@ function AgentsSection() {
         <tbody>
           {(list.data || []).map((a) => (
             <tr key={a.id}>
-              <td><b>{a.fullName}</b></td>
-              <td><code>{a.login}</code></td>
-              <td>{a.customers}</td>
-              <td>{uzs(a.salesTotal)}</td>
-              <td><b>{uzs(a.kpiTotal)}</b></td>
-              <td>
+              <td data-label="Agent"><b>{a.fullName}</b></td>
+              <td data-label="Portal login"><code>{a.login}</code></td>
+              <td data-label="Mijozlar">{a.customers}</td>
+              <td data-label="Savdo">{uzs(a.salesTotal)}</td>
+              <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+              <td data-label="">
                 {editing?.id === a.id ? (
                   <div className="kpi-row-actions">
                     <input className="input" style={{ width: 120 }} placeholder="Yangi parol" value={editing.password} onChange={(e) => setEditing({ ...editing, password: e.target.value })} />
@@ -240,9 +240,9 @@ function CustomersSection() {
           <tbody>
             {(list.data || []).map((c) => (
               <tr key={c.id}>
-                <td><b>{c.name}</b><div className="kpi-muted">{c.phone} {c.address}</div></td>
-                <td className="kpi-muted">{c.notes || '—'}</td>
-                <td>
+                <td data-label="Mijoz"><b>{c.name}</b><div className="kpi-muted">{c.phone} {c.address}</div></td>
+                <td data-label="Teglar" className="kpi-muted">{c.notes || '—'}</td>
+                <td data-label="Mas’ul agent">
                   <select className="input" value={c.agentId || ''} onChange={(e) => assign.mutate({ id: c.id, agentId: e.target.value })}>
                     <option value="">— biriktirilmagan —</option>
                     {(agents.data || []).map((a) => <option key={a.id} value={a.id}>{a.fullName}</option>)}
@@ -326,14 +326,14 @@ function OrdersAndKpiSection() {
               const k = maps.k.get(o.id);
               return (
                 <tr key={o.id}>
-                  <td><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
-                  <td>{o.customerName || maps.c.get(o.customerId) || '—'}</td>
-                  <td><b>{o.agentName || maps.a.get(o.agentId) || '—'}</b></td>
-                  <td>{uzs(o.total)}</td>
-                  <td>{uzs(o.paidAmount)}</td>
-                  <td>{k ? `${k.stageName} (${Number(k.stagePercent)}%)` : '—'}<div className="kpi-muted">{k?.daysRemaining != null ? `${k.daysRemaining} kun qoldi` : ''}</div></td>
-                  <td><b>{k ? uzs(k.kpiAmount) : '0 so‘m'}</b></td>
-                  <td><span className={`kpi-chip ${o.status}`}>{o.status}</span></td>
+                  <td data-label="Отгрузка"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
+                  <td data-label="Mijoz">{o.customerName || maps.c.get(o.customerId) || '—'}</td>
+                  <td data-label="Agent"><b>{o.agentName || maps.a.get(o.agentId) || '—'}</b></td>
+                  <td data-label="Savdo">{uzs(o.total)}</td>
+                  <td data-label="To‘langan">{uzs(o.paidAmount)}</td>
+                  <td data-label="Bosqich">{k ? `${k.stageName} (${Number(k.stagePercent)}%)` : '—'}<div className="kpi-muted">{k?.daysRemaining != null ? `${k.daysRemaining} kun qoldi` : ''}</div></td>
+                  <td data-label="KPI"><b className="is-ok">{k ? uzs(k.kpiAmount) : '0 so‘m'}</b></td>
+                  <td data-label="Holat"><span className={`kpi-chip ${o.status}`}>{o.status}</span></td>
                 </tr>
               );
             })}

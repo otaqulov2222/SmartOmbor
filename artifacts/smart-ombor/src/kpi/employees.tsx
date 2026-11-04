@@ -239,9 +239,9 @@ export function EmployeesPage() {
               const isCopied = copiedId === s.id;
               return (
                 <tr key={s.id}>
-                  <td>
+                  <td data-label="Xodim">
                     {isEdit ? (
-                      <div style={{ display: 'grid', gap: '.3rem' }}>
+                      <div style={{ display: 'grid', gap: '.3rem', width: '100%' }}>
                         <input className="input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
                         <input className="input" placeholder="Telefon" value={editing.phone} onChange={(e) => setEditing({ ...editing, phone: e.target.value })} />
                       </div>
@@ -255,7 +255,7 @@ export function EmployeesPage() {
                       </div>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Lavozim">
                     {isEdit && s.login !== 'bordouzadmin' ? (
                       <>
                         <input
@@ -278,14 +278,14 @@ export function EmployeesPage() {
                       <span className={`emp-role-badge ${info.tone}`}>{info.label}</span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Login">
                     {isEdit && s.login !== 'bordouzadmin' ? (
                       <input className="input" value={editing.login} onChange={(e) => setEditing({ ...editing, login: e.target.value })} />
                     ) : (
                       <code className="emp-code">{s.login}</code>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Parol">
                     {isEdit && s.login !== 'bordouzadmin' ? (
                       <input className="input" value={editing.password} onChange={(e) => setEditing({ ...editing, password: e.target.value })} />
                     ) : (
@@ -302,7 +302,7 @@ export function EmployeesPage() {
                       </span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Ko‘rsatkich">
                     {ag ? (
                       <div>
                         <div><b>{ag.customers} mijoz</b> · {uzs(ag.salesTotal)}</div>
@@ -312,7 +312,7 @@ export function EmployeesPage() {
                       <span className="kpi-muted">—</span>
                     )}
                   </td>
-                  <td className="emp-td-actions">
+                  <td className="emp-td-actions" data-label="">
                     {isEdit ? (
                       <div className="emp-edit-actions">
                         <button type="button" className="btn btn-primary" onClick={() => update.mutate(editing)}>Saqlash</button>

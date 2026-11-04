@@ -224,15 +224,15 @@ export function GpsPage() {
                 const isEd = coordEdit?.id === p.id;
                 return (
                   <tr key={p.id} onClick={() => setSelectedStopId(p.id)} style={{ cursor: 'pointer' }}>
-                    <td>
+                    <td data-label="#">
                       <span className={`ag-stop-num ${p.visitedToday ? 'is-done' : p.isNext ? 'is-next' : ''}`}>
                         {p.visitedToday ? '✓' : p.step}
                       </span>
                     </td>
-                    <td><b>{p.name}</b><div className="kpi-muted">{p.phone}</div></td>
-                    <td><b>{p.agentName}</b></td>
-                    <td><b className={Number(p.debt) > 0 ? 'is-warn' : 'is-ok'}>{uzs(p.debt)}</b></td>
-                    <td>
+                    <td data-label="Savdo nuqtasi"><b>{p.name}</b><div className="kpi-muted">{p.phone}</div></td>
+                    <td data-label="Agent"><b>{p.agentName}</b></td>
+                    <td data-label="Qarzdorlik"><b className={Number(p.debt) > 0 ? 'is-warn' : 'is-ok'}>{uzs(p.debt)}</b></td>
+                    <td data-label="Holat">
                       {p.visitedToday ? (
                         <span className="kpi-chip ok">✓ Borildi · {fmtTime(p.visitedAt)}</span>
                       ) : p.isNext ? (
@@ -241,7 +241,7 @@ export function GpsPage() {
                         <span className="kpi-chip pending">Rejada (#{p.step})</span>
                       )}
                     </td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td data-label="Manzil / GPS" onClick={(e) => e.stopPropagation()}>
                       {isEd ? (
                         <div style={{ display: 'grid', gap: '.3rem' }}>
                           <input className="input" placeholder="Manzil" value={coordEdit.address} onChange={(e) => setCoordEdit({ ...coordEdit, address: e.target.value })} />
@@ -259,7 +259,7 @@ export function GpsPage() {
                         </>
                       )}
                     </td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td data-label="" onClick={(e) => e.stopPropagation()}>
                       <div className="kpi-row-actions">
                         {isEd ? (
                           <>
@@ -306,18 +306,18 @@ export function GpsPage() {
             <tbody>
               {(d?.agents || []).map((a) => (
                 <tr key={a.id}>
-                  <td><b>{a.fullName}</b></td>
-                  <td>
+                  <td data-label="Agent"><b>{a.fullName}</b></td>
+                  <td data-label="Oxirgi GPS">
                     {a.lat != null && a.lng != null ? (
                       <span className="kpi-chip ok">Faol · {fmtTime(a.lastSeenAt)}</span>
                     ) : (
                       <span className="kpi-chip">Telefon GPS kutilmoqda</span>
                     )}
                   </td>
-                  <td>{a.customersCount} ta</td>
-                  <td>{a.debtorsCount} ta</td>
-                  <td><b>✓ {a.visitedToday} ta</b></td>
-                  <td>
+                  <td data-label="Mijozlari">{a.customersCount} ta</td>
+                  <td data-label="Qarzdor nuqtalar">{a.debtorsCount} ta</td>
+                  <td data-label="Bugun bordi"><b>✓ {a.visitedToday} ta</b></td>
+                  <td data-label="">
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -348,17 +348,17 @@ export function GpsPage() {
             <tbody>
               {(d?.routeLog || []).map((r) => (
                 <tr key={r.id}>
-                  <td><b><Clock size={13} /> {fmtTime(r.at)}</b></td>
-                  <td><b>{r.agentName}</b></td>
-                  <td>✓ {r.customerName}<div className="kpi-muted">{r.address}</div></td>
-                  <td>
+                  <td data-label="Vaqt"><b><Clock size={13} /> {fmtTime(r.at)}</b></td>
+                  <td data-label="Agent"><b>{r.agentName}</b></td>
+                  <td data-label="Borilgan nuqta">✓ {r.customerName}<div className="kpi-muted">{r.address}</div></td>
+                  <td data-label="GPS dalil">
                     {r.lat != null && r.lng != null ? (
                       <span className="kpi-chip ok">{r.lat.toFixed(4)}, {r.lng.toFixed(4)}</span>
                     ) : (
                       <span className="kpi-muted">—</span>
                     )}
                   </td>
-                  <td>{r.notes || '—'}</td>
+                  <td data-label="Izoh">{r.notes || '—'}</td>
                 </tr>
               ))}
               {!d?.routeLog.length ? (
