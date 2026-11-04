@@ -1,4 +1,4 @@
-import { CheckCircle2, ExternalLink, Lock, MapPin, Navigation, Unlock } from 'lucide-react';
+import { CheckCircle2, ExternalLink, MapPin, Navigation } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 export type RouteStop = {
@@ -23,6 +23,7 @@ export type AgentMarker = {
   fullName: string;
   lat: number | null;
   lng: number | null;
+  heading?: number | null;
   visitedToday?: number;
   debtorsCount?: number;
 };
@@ -51,10 +52,18 @@ function ensureLeaflet(): Promise<any> {
   return leafletPromise;
 }
 
-/**
- * Fetches real street-following driving geometry from OSRM public router
- * so lines follow actual roads instead of straight air lines.
- */
+/** Bearing in degrees (0 = North, 90 = East) from point A to point B */
+function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const dLng = toRad(lng2 - lng1);
+  const y = Math.sin(dLng) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
 async function fetchRoadGeometry(points: Array<[number, number]>): Promise<Array<[number, number]>> {
   if (points.length < 2) return points;
   try {
@@ -80,6 +89,7 @@ export function RouteMap({
   agents = [],
   track = [],
   agentPos,
+  agentName,
   selectedStopId,
   onSelectStop,
   onSelectAgent,
@@ -87,30 +97,53 @@ export function RouteMap({
   stops: RouteStop[];
   agents?: AgentMarker[];
   track?: Array<{ lat: number; lng: number }>;
-  agentPos?: { lat: number; lng: number } | null;
+  agentPos?: { lat: number; lng: number; heading?: number | null } | null;
+  agentName?: string;
   selectedStopId?: string | null;
   onSelectStop?: (stop: RouteStop) => void;
   onSelectAgent?: (agentId: string) => void;
 }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
-  const [interactive, setInteractive] = useState(false);
+  const [active, setActive] = useState(false);
 
-  // Toggle map pan/scroll lock so page scrolling never gets hijacked until user double-clicks
+  // Click inside map -> enable interaction; click anywhere outside map -> disable so page scroll works smoothly
+  useEffect(() => {
+    const onDocDown = (e: MouseEvent | TouchEvent) => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const target = e.target as Node | null;
+      if (target && el.contains(target)) {
+        setActive(true);
+      } else {
+        setActive(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown, true);
+    document.addEventListener('touchstart', onDocDown, true);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown, true);
+      document.removeEventListener('touchstart', onDocDown, true);
+    };
+  }, []);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (interactive) {
+    if (active) {
       map.dragging?.enable();
       map.scrollWheelZoom?.enable();
       map.touchZoom?.enable();
+      map.doubleClickZoom?.enable();
     } else {
       map.dragging?.disable();
       map.scrollWheelZoom?.disable();
       map.touchZoom?.disable();
+      map.doubleClickZoom?.disable();
     }
-  }, [interactive]);
+  }, [active]);
 
   useEffect(() => {
     let alive = true;
@@ -121,7 +154,7 @@ export function RouteMap({
           center: [41.2995, 69.2401],
           zoom: 12,
           zoomControl: true,
-          attributionControl: false, // Removes bottom-right "Leaflet | OpenStreetMap" text & flag
+          attributionControl: false,
           scrollWheelZoom: false,
           dragging: false,
           touchZoom: false,
@@ -138,8 +171,31 @@ export function RouteMap({
       const bounds: Array<[number, number]> = [];
 
       const validStops = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+      const nextStop = validStops.find((s) => s.isNext) || validStops.find((s) => !s.visitedToday) || validStops[0];
 
-      // Draw pins first so map is responsive immediately
+      // Determine Agent's live position (or start anchor just before stop #1 so agent arrow is always visible)
+      const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
+      let navLat =
+        agentPos?.lat ??
+        primaryAgent?.lat ??
+        (nextStop ? Number((nextStop.lat - 0.0065).toFixed(6)) : null);
+      let navLng =
+        agentPos?.lng ??
+        primaryAgent?.lng ??
+        (nextStop ? Number((nextStop.lng - 0.0085).toFixed(6)) : null);
+
+      let navHeading = agentPos?.heading ?? primaryAgent?.heading ?? null;
+      if ((navHeading == null || !Number.isFinite(navHeading)) && navLat != null && navLng != null && nextStop) {
+        if (track.length >= 2) {
+          const prev = track[track.length - 2];
+          const curr = track[track.length - 1];
+          navHeading = bearingDeg(prev.lat, prev.lng, curr.lat, curr.lng);
+        } else {
+          navHeading = bearingDeg(navLat, navLng, nextStop.lat, nextStop.lng);
+        }
+      }
+
+      // Draw numbered customer stops: 1, 2, 3, 4, 5
       for (const s of validStops) {
         bounds.push([s.lat, s.lng]);
         const cls = s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : 'is-wait';
@@ -154,22 +210,30 @@ export function RouteMap({
         marker.on('click', () => onSelectStop?.(s));
       }
 
-      // Live agent markers
-      const liveList = [...agents.filter((a) => a.lat != null && a.lng != null)];
-      if (agentPos && Number.isFinite(agentPos.lat) && Number.isFinite(agentPos.lng)) {
-        liveList.push({ id: 'me', fullName: 'Men (Agent)', lat: agentPos.lat, lng: agentPos.lng });
-      }
-      for (const a of liveList) {
-        if (a.lat == null || a.lng == null) continue;
-        bounds.push([a.lat, a.lng]);
-        const icon = L.divIcon({
+      // Draw rotating Navigation Arrow for the Agent
+      if (navLat != null && navLng != null) {
+        bounds.push([navLat, navLng]);
+        const deg = Math.round(navHeading || 0);
+        const label = agentName || primaryAgent?.fullName || 'Agent';
+        const arrowIcon = L.divIcon({
           className: 'rm-pin-wrap',
-          html: `<div class="rm-agent-pin"><span>●</span></div><div class="rm-pin-tag is-agent">${a.fullName}</div>`,
-          iconSize: [38, 38],
-          iconAnchor: [19, 19],
+          html: `
+            <div class="rm-nav-arrow-wrap">
+              <div class="rm-nav-pulse"></div>
+              <div class="rm-nav-cone" style="transform: rotate(${deg}deg)"></div>
+              <div class="rm-nav-arrow" style="transform: rotate(${deg}deg)">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                  <path d="M12 2L19.5 20.5L12 16.8L4.5 20.5L12 2Z" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+            <div class="rm-pin-tag is-agent">${label}</div>
+          `,
+          iconSize: [48, 48],
+          iconAnchor: [24, 24],
         });
-        const m = L.marker([a.lat, a.lng], { icon }).addTo(group);
-        if (a.id !== 'me') m.on('click', () => onSelectAgent?.(a.id));
+        const m = L.marker([navLat, navLng], { icon: arrowIcon, zIndexOffset: 900 }).addTo(group);
+        if (primaryAgent) m.on('click', () => onSelectAgent?.(primaryAgent.id));
       }
 
       const sel = validStops.find((s) => s.id === selectedStopId);
@@ -181,11 +245,14 @@ export function RouteMap({
         mapRef.current.fitBounds(bounds, { padding: [46, 46], maxZoom: 14 });
       }
 
-      // Road-following route lines (1 -> 2 -> 3 -> 4 -> 5 along real streets)
-      if (validStops.length > 1) {
+      // Road-following route: Agent Arrow -> 1 -> 2 -> 3 -> 4 -> 5
+      if (validStops.length > 0) {
         const doneStops = validStops.filter((s) => s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
         const pendingStops = validStops.filter((s) => !s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
-        if (doneStops.length > 0 && pendingStops.length > 0) {
+
+        if (navLat != null && navLng != null && pendingStops.length > 0) {
+          pendingStops.unshift([navLat, navLng]);
+        } else if (doneStops.length > 0 && pendingStops.length > 0) {
           pendingStops.unshift(doneStops[doneStops.length - 1]);
         }
 
@@ -197,9 +264,8 @@ export function RouteMap({
         if (pendingStops.length > 1) {
           const roadPending = await fetchRoadGeometry(pendingStops);
           if (!alive) return;
-          // Outer glow + inner road line
-          L.polyline(roadPending, { color: '#1e40af', weight: 7, opacity: 0.25, lineCap: 'round' }).addTo(group);
-          L.polyline(roadPending, { color: '#2563eb', weight: 4.5, opacity: 0.95, lineCap: 'round' }).addTo(group);
+          L.polyline(roadPending, { color: '#1e40af', weight: 8, opacity: 0.22, lineCap: 'round' }).addTo(group);
+          L.polyline(roadPending, { color: '#2563eb', weight: 5, opacity: 0.96, lineCap: 'round' }).addTo(group);
         }
       }
 
@@ -213,14 +279,13 @@ export function RouteMap({
     return () => {
       alive = false;
     };
-  }, [stops, agents, track, agentPos, selectedStopId]);
+  }, [stops, agents, track, agentPos, agentName, selectedStopId]);
 
   const doneCount = stops.filter((s) => s.visitedToday).length;
   const nextStop = stops.find((s) => s.isNext) || stops.find((s) => !s.visitedToday);
 
   return (
     <div className="rm-card">
-      {/* Top 1✓ -> 2 -> 3 -> 4 -> 5 visual chain */}
       <div className="rm-chain-bar">
         <div className="rm-chain-meta">
           <b>Yo‘nalish: {doneCount} / {stops.length} bajarildi</b>
@@ -233,25 +298,16 @@ export function RouteMap({
             <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
           ) : null}
         </div>
-        <div className="kpi-actions">
-          <button
-            type="button"
-            className={`btn ${interactive ? 'btn-primary' : ''}`}
-            onClick={() => setInteractive((v) => !v)}
+        {nextStop ? (
+          <a
+            className="btn btn-primary"
+            href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}`}
+            target="_blank"
+            rel="noreferrer"
           >
-            {interactive ? <><Unlock size={14} /> Xarita faol (qulflash)</> : <><Lock size={14} /> Xaritani surish</>}
-          </button>
-          {nextStop ? (
-            <a
-              className="btn btn-primary"
-              href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Navigation size={14} /> #{nextStop.step} ga yo‘l <ExternalLink size={13} />
-            </a>
-          ) : null}
-        </div>
+            <Navigation size={14} /> #{nextStop.step} ga yo‘l <ExternalLink size={13} />
+          </a>
+        ) : null}
       </div>
 
       {stops.length > 0 ? (
@@ -277,28 +333,16 @@ export function RouteMap({
         </div>
       ) : null}
 
-      <div
-        className="rm-canvas-wrap"
-        onDoubleClick={() => setInteractive((v) => !v)}
-      >
+      <div ref={wrapRef} className={`rm-canvas-wrap ${active ? 'is-active' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
-        {!interactive ? (
-          <button
-            type="button"
-            className="rm-lock-badge"
-            onClick={() => setInteractive(true)}
-          >
-            <Lock size={13} /> Xaritani surish/yaqinlashtirish uchun 2 marta bosing
-          </button>
-        ) : null}
       </div>
 
       <div className="rm-legend">
+        <span><i className="rm-dot is-agent" /> Agent yo‘nalishi (➤)</span>
         <span><i className="rm-dot is-done" /> Borildi (1 ✓)</span>
-        <span><i className="rm-dot is-next" /> Navbatdagi nuqta (2)</span>
-        <span><i className="rm-dot is-wait" /> Rejadagi nuqtalar (3, 4, 5)</span>
-        <span><i className="rm-dot is-agent" /> Agent GPS joylashuvi</span>
-        <span className="kpi-muted"><MapPin size={12} /> Avtomobil yo‘llari bo‘yicha eng yaqin marshrut</span>
+        <span><i className="rm-dot is-next" /> Navbatdagi nuqta</span>
+        <span><i className="rm-dot is-wait" /> Keyingi nuqtalar</span>
+        <span className="kpi-muted"><MapPin size={12} /> Xarita ustiga 1 marta bosib suring</span>
       </div>
     </div>
   );

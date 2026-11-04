@@ -141,7 +141,7 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
 function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
   const [tab, setTab] = useState<Tab>('today');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
-  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
   const cache = useQueryClient();
   const mode = readAgentToken() ? 'agent' : 'admin';
   const q = useQuery({
@@ -152,14 +152,19 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
   useEffect(() => {
     if (!navigator.geolocation) return;
     const sendLoc = (pos: GeolocationPosition) => {
-      const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
+      const next = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy || 0,
+        heading: pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
+      };
       setCoords(next);
       void kpiFetch('/kpi/agent/location', { method: 'POST', body: JSON.stringify(next) }, mode).catch(() => undefined);
     };
     navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, { enableHighAccuracy: true, timeout: 10000 });
     const watchId = navigator.geolocation.watchPosition(sendLoc, () => undefined, {
       enableHighAccuracy: true,
-      maximumAge: 30000,
+      maximumAge: 10000,
       timeout: 15000,
     });
     return () => navigator.geolocation.clearWatch(watchId);
@@ -290,9 +295,10 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           <RouteMap
             stops={(debtors.length ? debtors : d?.customers || []) as RouteStop[]}
             track={d?.track || []}
+            agentName={d?.agent.fullName}
             agentPos={
               coords
-                ? { lat: coords.lat, lng: coords.lng }
+                ? { lat: coords.lat, lng: coords.lng, heading: coords.heading }
                 : d?.agent.lat != null && d?.agent.lng != null
                   ? { lat: d.agent.lat, lng: d.agent.lng }
                   : null

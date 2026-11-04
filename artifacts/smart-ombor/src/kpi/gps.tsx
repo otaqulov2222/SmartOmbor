@@ -187,6 +187,7 @@ export function GpsPage() {
       <RouteMap
         stops={(d?.points || []) as RouteStop[]}
         agents={selectedAgent ? [selectedAgent] : []}
+        agentName={selectedAgent?.fullName}
         track={d?.agentTrack || []}
         selectedStopId={selectedStopId}
         onSelectStop={(st) => setSelectedStopId(st.id)}
