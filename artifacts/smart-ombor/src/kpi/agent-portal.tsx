@@ -1,27 +1,84 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LogOut, MapPin, Plus, Wallet } from 'lucide-react';
+import { CheckCircle2, Clock, Fingerprint, LogOut, MapPin, Phone, RefreshCw, Wallet } from 'lucide-react';
 import { useState } from 'react';
-import { clearAgentToken, kpiFetch, readAgentToken, saveAgentToken, uzs } from './api';
+import { Link } from 'wouter';
+import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
 import './kpi.css';
 
-type Me = { id: string; fullName: string; login: string; phone: string; salesPlan: string };
-type Dash = {
-  customers: number; salesTotal: string; paidTotal: string; awaitingPayments: number;
-  kpiConfirmed: string; kpiPending: string; kpiAtRisk: string;
-  nearestDue: { number: string; due: string; total: string; paid: string } | null;
+type StageRow = {
+  name: string;
+  percent: number;
+  fromDate: string;
+  untilDate: string;
+  ifFullPaidKpi: string;
+  onRemainingDebtKpi: string;
 };
-type Customer = { id: string; name: string; phone: string; address: string; status: string; contactName: string };
-type Order = { id: string; number: string; status: string; total: string; paidAmount: string; orderDate: string };
-type Calc = { id: string; orderId: string; baseAmount: string; stagePercent: string; kpiAmount: string; status: string; stageName: string; daysRemaining: number | null };
-type Product = { id: string; name: string; code: string; price: string };
 
-type Tab = 'home' | 'customers' | 'orders' | 'kpi';
+type DealRow = {
+  id: string;
+  number: string;
+  orderDate: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  total: string;
+  paidAmount: string;
+  dueAmount: string;
+  status: string;
+  currentStage: string;
+  currentPercent: number;
+  daysRemaining: number | null;
+  earnedKpi: string;
+  stages: StageRow[];
+};
+
+type CustomerCard = {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+  debt: string;
+  visitedToday: boolean;
+};
+
+type CabinetData = {
+  agent: { id: string; fullName: string; login: string; phone: string; salesPlan: string };
+  summary: {
+    customersCount: number;
+    debtorsCount: number;
+    visitedToday: number;
+    totalSales: string;
+    totalPaid: string;
+    totalDue: string;
+    kpiEarned: string;
+    kpiPotential: string;
+  };
+  customers: CustomerCard[];
+  deals: DealRow[];
+};
+
+type Tab = 'today' | 'kpi' | 'customers';
 
 export function AgentPortal() {
   const [tokenTick, setTokenTick] = useState(0);
-  const token = readAgentToken();
-  if (!token) return <AgentLogin onOk={() => setTokenTick((n) => n + 1)} />;
-  return <AgentShell key={tokenTick} onLogout={() => { clearAgentToken(); setTokenTick((n) => n + 1); }} />;
+  const hasToken = Boolean(readAgentToken() || readStaffToken());
+  if (!hasToken) return <AgentLogin onOk={() => setTokenTick((n) => n + 1)} />;
+  return (
+    <AgentCabinetView
+      key={tokenTick}
+      standalone
+      onLogout={() => {
+        clearAgentToken();
+        sessionStorage.removeItem('smart-ombor-session');
+        setTokenTick((n) => n + 1);
+      }}
+    />
+  );
+}
+
+export function AgentCabinetPage() {
+  return <AgentCabinetView standalone={false} />;
 }
 
 function AgentLogin({ onOk }: { onOk: () => void }) {
@@ -34,10 +91,11 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
     setBusy(true);
     setError('');
     try {
-      const body = await kpiFetch<{ token: string }>('/kpi/agent/login', {
-        method: 'POST',
-        body: JSON.stringify({ login, password }),
-      }, 'admin');
+      const body = await kpiFetch<{ token: string }>(
+        '/kpi/agent/login',
+        { method: 'POST', body: JSON.stringify({ login, password }) },
+        'admin',
+      );
       saveAgentToken(body.token);
       onOk();
     } catch (err) {
@@ -49,8 +107,8 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
   return (
     <main className="kpi-agent-gate" data-testid="page-agent-login">
       <form className="kpi-agent-card" onSubmit={(e) => void submit(e)}>
-        <h1>Agent panel</h1>
-        <p>Savdo, mijozlar va KPI daromadingiz</p>
+        <h1>Agent kabineti</h1>
+        <p>Mijozlar, qarzdorlik, tashriflar va 3 bosqichli KPI</p>
         <label className="field"><span>Login</span><input className="input" value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" /></label>
         <label className="field"><span>Parol</span><input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>
         {error ? <p className="kpi-error">{error}</p> : null}
@@ -60,191 +118,180 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
   );
 }
 
-function AgentShell({ onLogout }: { onLogout: () => void }) {
-  const [tab, setTab] = useState<Tab>('home');
-  const me = useQuery({ queryKey: ['kpi-agent-me'], queryFn: () => kpiFetch<Me>('/kpi/agent/me', {}, 'agent') });
-  const logout = async () => {
-    try { await kpiFetch('/kpi/agent/logout', { method: 'POST', body: '{}' }, 'agent'); } catch { /* ignore */ }
-    onLogout();
-  };
+function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
+  const [tab, setTab] = useState<Tab>('today');
+  const cache = useQueryClient();
+  const mode = readAgentToken() ? 'agent' : 'admin';
+  const q = useQuery({
+    queryKey: ['kpi-agent-cabinet'],
+    queryFn: () => kpiFetch<CabinetData>('/kpi/agent/cabinet', {}, mode),
+  });
+  const markVisit = useMutation({
+    mutationFn: (customerId: string) =>
+      kpiFetch('/kpi/agent/visit', { method: 'POST', body: JSON.stringify({ customerId, notes: 'Borildi / gaplashildi' }) }, mode),
+    onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }),
+  });
+
+  const d = q.data;
+  const s = d?.summary;
+  const debtors = (d?.customers || []).filter((c) => Number(c.debt) > 0);
+  const openDeals = (d?.deals || []).filter((x) => Number(x.dueAmount) > 0);
+
   return (
-    <div className="kpi-agent" data-testid="page-agent-portal">
-      <header className="kpi-agent-top">
-        <div>
-          <strong>{me.data?.fullName || 'Agent'}</strong>
-          <span>{me.data?.login}</span>
+    <div className={standalone ? 'kpi-agent' : 'kpi-page'} data-testid="page-agent-portal">
+      {standalone ? (
+        <header className="kpi-agent-top">
+          <div>
+            <strong>{d?.agent.fullName || 'Agent'}</strong>
+            <span>Login: {d?.agent.login}</span>
+          </div>
+          <div className="kpi-actions">
+            <Link href="/office" className="btn"><Fingerprint size={15} /> Davomat</Link>
+            <button type="button" className="btn" onClick={() => void q.refetch()}><RefreshCw size={15} /></button>
+            {onLogout ? <button type="button" className="btn" onClick={onLogout}><LogOut size={15} /> Chiqish</button> : null}
+          </div>
+        </header>
+      ) : (
+        <header className="kpi-head">
+          <div>
+            <h1>{d?.agent.fullName || 'Agent'} — Shaxsiy kabinet</h1>
+            <p>Bugungi nuqtalar, olinishi kerak bo‘lgan pullar va 3 bosqichli KPI hisobingiz</p>
+          </div>
+          <div className="kpi-actions">
+            <Link href="/office" className="btn"><Fingerprint size={15} /> Davomat</Link>
+            <button type="button" className="btn" onClick={() => void q.refetch()}><RefreshCw size={15} /> Yangilash</button>
+          </div>
+        </header>
+      )}
+
+      <div className={standalone ? 'kpi-agent-body' : ''}>
+        {q.isLoading ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
+        {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
+
+        {s ? (
+          <div className="kpi-grid" style={{ marginBottom: '1rem' }}>
+            <article className="kpi-card"><span>Jami mijozlarim</span><strong>{s.customersCount} ta</strong></article>
+            <article className="kpi-card warn"><span>Pul olinadigan nuqtalar</span><strong>{s.debtorsCount} ta mijoz</strong></article>
+            <article className="kpi-card ok"><span>Bugun borildi / gaplashildi</span><strong>{s.visitedToday} / {s.debtorsCount || s.customersCount}</strong></article>
+            <article className="kpi-card warn"><span>Mijozlarda turgan pul (Qarz)</span><strong>{uzs(s.totalDue)}</strong></article>
+            <article className="kpi-card ok"><span>Olingan pul (To‘langan)</span><strong>{uzs(s.totalPaid)}</strong></article>
+            <article className="kpi-card ok"><span>Tasdiqlangan KPI bonusim</span><strong>{uzs(s.kpiEarned)}</strong></article>
+            <article className="kpi-card"><span>Qarz olinsa qo‘shiladigan KPI (1-bosqichda)</span><strong>+{uzs(s.kpiPotential)}</strong></article>
+          </div>
+        ) : null}
+
+        <div className="kpi-seg" style={{ marginBottom: '1rem' }}>
+          <button type="button" className={tab === 'today' ? 'active' : ''} onClick={() => setTab('today')}>
+            Bugungi vazifa ({debtors.length} nuqta)
+          </button>
+          <button type="button" className={tab === 'kpi' ? 'active' : ''} onClick={() => setTab('kpi')}>
+            Qachon olinsa qancha KPI ({d?.deals.length || 0})
+          </button>
+          <button type="button" className={tab === 'customers' ? 'active' : ''} onClick={() => setTab('customers')}>
+            Barcha mijozlarim ({d?.customers.length || 0})
+          </button>
         </div>
-        <button type="button" className="btn" onClick={() => void logout()}><LogOut size={16} /> Chiqish</button>
-      </header>
-      <div className="kpi-agent-body">
-        {tab === 'home' ? <AgentHome /> : null}
-        {tab === 'customers' ? <AgentCustomers /> : null}
-        {tab === 'orders' ? <AgentOrders /> : null}
-        {tab === 'kpi' ? <AgentKpi /> : null}
+
+        {tab === 'today' ? (
+          <section className="kpi-panel">
+            <h2>Bugun borish va gaplashish kerak bo‘lgan nuqtalar</h2>
+            <p className="kpi-muted">Qarzdorligi bor mijozlar birinchi chiqadi. Borib gaplashgach «Bordim / Gaplashdim» tugmasini bosing.</p>
+            <div className="kpi-list">
+              {(debtors.length ? debtors : d?.customers || []).map((c, idx) => (
+                <article key={c.id} className="kpi-list-item">
+                  <div>
+                    <b>{idx + 1}. {c.name}</b>
+                    <div className="kpi-muted">
+                      {c.phone ? <><Phone size={12} /> {c.phone} · </> : null}
+                      <MapPin size={12} /> {c.address || 'Manzil ko‘rsatilmagan'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="kpi-muted">Olinishi kerak:</div>
+                    <strong style={{ color: Number(c.debt) > 0 ? '#b45309' : '#15803d' }}>{uzs(c.debt)}</strong>
+                  </div>
+                  <div className="kpi-row-actions">
+                    <a
+                      className="btn"
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address || c.name)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <MapPin size={14} /> Xarita
+                    </a>
+                    {c.visitedToday ? (
+                      <span className="kpi-chip ok"><CheckCircle2 size={14} /> Bugun borildi</span>
+                    ) : (
+                      <button type="button" className="btn btn-primary" onClick={() => markVisit.mutate(c.id)}>
+                        Bordim / Gaplashdim
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {!d?.customers.length ? <p className="kpi-muted">Sizga hali mijoz biriktirilmagan.</p> : null}
+            </div>
+          </section>
+        ) : null}
+
+        {tab === 'kpi' ? (
+          <section className="kpi-list">
+            {(openDeals.length ? openDeals : d?.deals || []).map((deal) => (
+              <article key={deal.id} className="kpi-panel">
+                <div className="kpi-panel-head">
+                  <div>
+                    <h3>Отгрузка №{deal.number} — {deal.customerName}</h3>
+                    <div className="kpi-muted">Sana: {deal.orderDate} · Hozirgi bosqich: <b>{deal.currentStage} ({deal.currentPercent}%)</b> {deal.daysRemaining != null ? `· ${deal.daysRemaining} kun qoldi` : ''}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div>Jami savdo: <b>{uzs(deal.total)}</b></div>
+                    <div className="kpi-muted">To‘langan: {uzs(deal.paidAmount)} · <b style={{ color: '#b45309' }}>Qolgan qarz: {uzs(deal.dueAmount)}</b></div>
+                  </div>
+                </div>
+                <div className="kpi-grid">
+                  {deal.stages.map((st, i) => (
+                    <div key={i} className={`kpi-card ${i === 0 ? 'ok' : i === 1 ? 'warn' : ''}`}>
+                      <span><Clock size={12} /> {st.name}: <b>{st.untilDate} gacha</b> olinsa ({st.percent}%)</span>
+                      <strong>
+                        <Wallet size={14} /> {uzs(Number(deal.dueAmount) > 0 ? st.onRemainingDebtKpi : st.ifFullPaidKpi)}
+                      </strong>
+                      <small className="kpi-muted">
+                        {Number(deal.dueAmount) > 0
+                          ? `Qolgan ${uzs(deal.dueAmount)} shu sanagacha tushsa`
+                          : `To‘liq savdodan (${st.percent}%)`}
+                      </small>
+                    </div>
+                  ))}
+                  <div className="kpi-card bad">
+                    <span>Muddat o‘tib ketsa</span>
+                    <strong>0 so‘m (0%)</strong>
+                    <small className="kpi-muted">Oxirgi bosqichdan keyin bonus kuyadi</small>
+                  </div>
+                </div>
+              </article>
+            ))}
+            {!d?.deals.length ? <p className="kpi-muted">Savdolar topilmadi.</p> : null}
+          </section>
+        ) : null}
+
+        {tab === 'customers' ? (
+          <div className="kpi-table-wrap">
+            <table className="kpi-table">
+              <thead><tr><th>Mijoz</th><th>Telefon / Manzil</th><th>Joriy qarz</th><th>Bugungi holat</th></tr></thead>
+              <tbody>
+                {(d?.customers || []).map((c) => (
+                  <tr key={c.id}>
+                    <td><b>{c.name}</b></td>
+                    <td className="kpi-muted">{c.phone} {c.address}</td>
+                    <td><b>{uzs(c.debt)}</b></td>
+                    <td>{c.visitedToday ? <span className="kpi-chip ok">Borildi</span> : <span className="kpi-chip">Rejada</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </div>
-      <nav className="kpi-agent-nav">
-        <button type="button" className={tab === 'home' ? 'active' : ''} onClick={() => setTab('home')}>Bosh</button>
-        <button type="button" className={tab === 'customers' ? 'active' : ''} onClick={() => setTab('customers')}>Mijozlar</button>
-        <button type="button" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Savdo</button>
-        <button type="button" className={tab === 'kpi' ? 'active' : ''} onClick={() => setTab('kpi')}>KPI</button>
-      </nav>
     </div>
-  );
-}
-
-function AgentHome() {
-  const dash = useQuery({ queryKey: ['kpi-agent-dash'], queryFn: () => kpiFetch<Dash>('/kpi/agent/dashboard', {}, 'agent') });
-  const d = dash.data;
-  return (
-    <section>
-      <h2>Bugungi holat</h2>
-      {dash.isLoading ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
-      {d ? (
-        <div className="kpi-grid">
-          <article className="kpi-card"><span>Mijozlar</span><strong>{d.customers}</strong></article>
-          <article className="kpi-card"><span>Jami savdo</span><strong>{uzs(d.salesTotal)}</strong></article>
-          <article className="kpi-card ok"><span>To‘langan</span><strong>{uzs(d.paidTotal)}</strong></article>
-          <article className="kpi-card"><span>To‘lov kutilmoqda</span><strong>{d.awaitingPayments}</strong></article>
-          <article className="kpi-card ok"><span>Tasdiqlangan KPI</span><strong>{uzs(d.kpiConfirmed)}</strong></article>
-          <article className="kpi-card warn"><span>Kutilayotgan KPI</span><strong>{uzs(d.kpiPending)}</strong></article>
-          <article className="kpi-card bad"><span>Xavf ostida KPI</span><strong>{uzs(d.kpiAtRisk)}</strong></article>
-        </div>
-      ) : null}
-      {d?.nearestDue ? (
-        <div className="kpi-panel">
-          <h3>Eng yaqin to‘lov</h3>
-          <p><b>{d.nearestDue.number}</b> — muddat {d.nearestDue.due}</p>
-          <p>{uzs(d.nearestDue.paid)} / {uzs(d.nearestDue.total)}</p>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function AgentCustomers() {
-  const cache = useQueryClient();
-  const list = useQuery({ queryKey: ['kpi-agent-customers'], queryFn: () => kpiFetch<Customer[]>('/kpi/agent/customers', {}, 'agent') });
-  const [form, setForm] = useState({ name: '', phone: '', address: '', contactName: '', notes: '' });
-  const create = useMutation({
-    mutationFn: () => kpiFetch('/kpi/agent/customers', { method: 'POST', body: JSON.stringify(form) }, 'agent'),
-    onSuccess: () => {
-      setForm({ name: '', phone: '', address: '', contactName: '', notes: '' });
-      void cache.invalidateQueries({ queryKey: ['kpi-agent-customers'] });
-    },
-  });
-  return (
-    <section>
-      <h2>Mening mijozlarim</h2>
-      <div className="kpi-panel">
-        <h3><Plus size={14} /> Yangi hamkorlik (admin tasdig‘iga)</h3>
-        <div className="kpi-form">
-          <input className="input" placeholder="Korxona" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <input className="input" placeholder="Telefon" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-          <input className="input" placeholder="Mas’ul" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-          <input className="input" placeholder="Manzil" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-          <button type="button" className="btn btn-primary" onClick={() => create.mutate()}>Yuborish</button>
-        </div>
-        {create.error ? <p className="kpi-error">{(create.error as Error).message}</p> : null}
-      </div>
-      <div className="kpi-list">
-        {(list.data || []).map((c) => (
-          <article key={c.id} className="kpi-list-item">
-            <div>
-              <b>{c.name}</b>
-              <div className="kpi-muted">{c.contactName} · {c.phone}</div>
-              <div className="kpi-muted"><MapPin size={12} /> {c.address || 'Manzil yo‘q'}</div>
-            </div>
-            <span className={`kpi-chip ${c.status}`}>{c.status}</span>
-            {c.address ? (
-              <a className="btn" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}`} target="_blank" rel="noreferrer">Xarita</a>
-            ) : null}
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function AgentOrders() {
-  const cache = useQueryClient();
-  const customers = useQuery({ queryKey: ['kpi-agent-customers'], queryFn: () => kpiFetch<Customer[]>('/kpi/agent/customers', {}, 'agent') });
-  const products = useQuery({ queryKey: ['kpi-agent-products'], queryFn: () => kpiFetch<Product[]>('/kpi/agent/products', {}, 'agent') });
-  const orders = useQuery({ queryKey: ['kpi-agent-orders'], queryFn: () => kpiFetch<Order[]>('/kpi/agent/orders', {}, 'agent') });
-  const [form, setForm] = useState({ customerId: '', productId: '', quantity: '1', unitPrice: '', paymentDueDays: '14' });
-  const create = useMutation({
-    mutationFn: async () => {
-      const product = (products.data || []).find((p) => p.id === form.productId);
-      return kpiFetch('/kpi/agent/orders', {
-        method: 'POST',
-        body: JSON.stringify({
-          customerId: form.customerId,
-          paymentDueDays: Number(form.paymentDueDays) || 14,
-          lines: [{
-            productId: form.productId || undefined,
-            productName: product?.name || 'Mahsulot',
-            productCode: product?.code || '',
-            quantity: form.quantity,
-            unitPrice: form.unitPrice || product?.price || 0,
-          }],
-        }),
-      }, 'agent');
-    },
-    onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-orders'] }),
-  });
-  return (
-    <section>
-      <h2>Savdo rasmiylashtirish</h2>
-      <div className="kpi-panel">
-        <div className="kpi-form">
-          <select className="input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}>
-            <option value="">Mijoz</option>
-            {(customers.data || []).filter((c) => c.status === 'active').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <select className="input" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
-            <option value="">Mahsulot</option>
-            {(products.data || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <input className="input" placeholder="Miqdor" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-          <input className="input" placeholder="Narx (bo‘sh = katalog)" value={form.unitPrice} onChange={(e) => setForm({ ...form, unitPrice: e.target.value })} />
-          <button type="button" className="btn btn-primary" onClick={() => create.mutate()}>Tasdiqqa yuborish</button>
-        </div>
-        {create.error ? <p className="kpi-error">{(create.error as Error).message}</p> : null}
-      </div>
-      <div className="kpi-list">
-        {(orders.data || []).map((o) => (
-          <article key={o.id} className="kpi-list-item">
-            <div>
-              <b>{o.number}</b>
-              <div className="kpi-muted">{o.orderDate}</div>
-            </div>
-            <div>{uzs(o.total)}</div>
-            <span className={`kpi-chip ${o.status}`}>{o.status}</span>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function AgentKpi() {
-  const list = useQuery({ queryKey: ['kpi-agent-kpi'], queryFn: () => kpiFetch<Calc[]>('/kpi/agent/kpi', {}, 'agent') });
-  return (
-    <section>
-      <h2><Wallet size={16} /> Mening KPI daromadim</h2>
-      <div className="kpi-list">
-        {(list.data || []).map((c) => (
-          <article key={c.id} className="kpi-list-item kpi-kpi-card">
-            <div>
-              <b>{c.stageName}</b>
-              <div className="kpi-muted">Baza {uzs(c.baseAmount)} · {c.stagePercent}%</div>
-              <div className="kpi-muted">Qolgan kun: {c.daysRemaining ?? '—'}</div>
-            </div>
-            <strong>{uzs(c.kpiAmount)}</strong>
-            <span className={`kpi-chip ${c.status}`}>{c.status}</span>
-          </article>
-        ))}
-        {!list.data?.length && !list.isLoading ? <p className="kpi-muted">Hali KPI hisobi yo‘q.</p> : null}
-      </div>
-    </section>
   );
 }

@@ -19,7 +19,7 @@ type Customer = {
 };
 type Order = {
   id: string; number: string; status: string; total: string; paidAmount: string; orderDate: string;
-  agentId: string; customerId: string;
+  agentId: string; customerId: string; agentName?: string; customerName?: string;
 };
 type Policy = {
   id: string; name: string; baseType: string; startAnchor: string; warningDays: number;
@@ -327,8 +327,8 @@ function OrdersAndKpiSection() {
               return (
                 <tr key={o.id}>
                   <td><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
-                  <td>{maps.c.get(o.customerId) || '—'}</td>
-                  <td><b>{maps.a.get(o.agentId) || '—'}</b></td>
+                  <td>{o.customerName || maps.c.get(o.customerId) || '—'}</td>
+                  <td><b>{o.agentName || maps.a.get(o.agentId) || '—'}</b></td>
                   <td>{uzs(o.total)}</td>
                   <td>{uzs(o.paidAmount)}</td>
                   <td>{k ? `${k.stageName} (${Number(k.stagePercent)}%)` : '—'}<div className="kpi-muted">{k?.daysRemaining != null ? `${k.daysRemaining} kun qoldi` : ''}</div></td>

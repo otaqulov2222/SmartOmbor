@@ -15,6 +15,7 @@ import {
   kpiProductsTable,
   kpiStagesTable,
   kpiTerritoriesTable,
+  kpiVisitsTable,
 } from "@workspace/db";
 import { recordAudit } from "../lib/audit";
 import {
@@ -35,7 +36,7 @@ import {
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
-import { money, moneyAdd, moneyCmp, moneyMul, moneySub } from "../lib/kpi/money";
+import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 
 const router: IRouter = Router();
 
@@ -628,9 +629,13 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
     const status = String(req.query.status ?? "").trim();
     const rows = await db.select().from(kpiOrdersTable)
       .where(status ? eq(kpiOrdersTable.status, status) : undefined)
-      .orderBy(desc(kpiOrdersTable.createdAt))
-      .limit(200);
-    res.json(rows);
+      .orderBy(desc(kpiOrdersTable.orderDate), desc(kpiOrdersTable.createdAt))
+      .limit(250);
+    const agents = await db.select({ id: kpiAgentsTable.id, fullName: kpiAgentsTable.fullName }).from(kpiAgentsTable);
+    const customers = await db.select({ id: kpiCustomersTable.id, name: kpiCustomersTable.name }).from(kpiCustomersTable);
+    const aMap = new Map(agents.map((a) => [a.id, a.fullName]));
+    const cMap = new Map(customers.map((c) => [c.id, c.name]));
+    res.json(rows.map((r) => ({ ...r, agentName: aMap.get(r.agentId) || "—", customerName: cMap.get(r.customerId) || "—" })));
   } catch (error) {
     next(error);
   }
@@ -960,6 +965,169 @@ router.get("/kpi/agent/kpi", requireKpiAgent(), async (_req, res, next) => {
     const agent = getKpiAgent(res);
     const rows = await db.select().from(kpiCalculationsTable).where(eq(kpiCalculationsTable.agentId, agent.id)).orderBy(desc(kpiCalculationsTable.updatedAt)).limit(200);
     res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
+  try {
+    await ensureKpiBootstrapped();
+    const agent = getKpiAgent(res);
+    const [agentRow] = await db.select().from(kpiAgentsTable).where(eq(kpiAgentsTable.id, agent.id)).limit(1);
+    const policy = await ensureDefaultPolicy();
+    const assigns = await db
+      .select()
+      .from(kpiCustomerAssignmentsTable)
+      .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
+    const custIds = new Set(assigns.map((a) => a.customerId));
+    const allCustomers = await db.select().from(kpiCustomersTable);
+    const myCustomers = allCustomers.filter((c) => custIds.has(c.id) || c.createdByAgentId === agent.id);
+    const cMap = new Map(allCustomers.map((c) => [c.id, c]));
+
+    const orders = await db
+      .select()
+      .from(kpiOrdersTable)
+      .where(eq(kpiOrdersTable.agentId, agent.id))
+      .orderBy(desc(kpiOrdersTable.orderDate), desc(kpiOrdersTable.createdAt))
+      .limit(200);
+    const calcs = await db
+      .select()
+      .from(kpiCalculationsTable)
+      .where(eq(kpiCalculationsTable.agentId, agent.id));
+    const calcByOrder = new Map(calcs.map((c) => [c.orderId, c]));
+
+    const today = tashkentDate();
+    const visits = await db
+      .select()
+      .from(kpiVisitsTable)
+      .where(eq(kpiVisitsTable.agentId, agent.id))
+      .orderBy(desc(kpiVisitsTable.createdAt))
+      .limit(100);
+    const todayDone = new Set(
+      visits
+        .filter((v) => v.createdAt.toISOString().slice(0, 10) === today && v.status === "done")
+        .map((v) => v.customerId),
+    );
+
+    const addDays = (base: Date, days: number) => {
+      const d = new Date(base);
+      d.setDate(d.getDate() + days);
+      return tashkentDate(d);
+    };
+
+    let totalSales = "0.00";
+    let totalPaid = "0.00";
+    let totalDue = "0.00";
+    let kpiEarned = "0.00";
+    let kpiPotential = "0.00";
+
+    const debtByCustomer = new Map<string, string>();
+    const orderDeals = orders.map((o) => {
+      const due = moneySub(o.total, o.paidAmount);
+      totalSales = moneyAdd(totalSales, o.total);
+      totalPaid = moneyAdd(totalPaid, o.paidAmount);
+      if (moneyCmp(due, 0) > 0) {
+        totalDue = moneyAdd(totalDue, due);
+        debtByCustomer.set(o.customerId, moneyAdd(debtByCustomer.get(o.customerId) || 0, due));
+      }
+      const anchor = o.confirmedAt ? new Date(o.confirmedAt) : new Date(`${o.orderDate}T09:00:00+05:00`);
+      const stages = (policy.stages || []).map((s) => ({
+        name: s.name,
+        percent: Number(s.percent),
+        fromDate: addDays(anchor, s.dayFrom),
+        untilDate: addDays(anchor, s.dayTo),
+        ifFullPaidKpi: moneyPct(o.total, s.percent),
+        onRemainingDebtKpi: moneyPct(due, s.percent),
+      }));
+      const k = calcByOrder.get(o.id);
+      if (k) kpiEarned = moneyAdd(kpiEarned, k.kpiAmount);
+      if (moneyCmp(due, 0) > 0 && stages[0]) {
+        kpiPotential = moneyAdd(kpiPotential, stages[0].onRemainingDebtKpi);
+      }
+      const cust = cMap.get(o.customerId);
+      return {
+        id: o.id,
+        number: o.number.replace(/^MS-/, ""),
+        orderDate: o.orderDate,
+        customerId: o.customerId,
+        customerName: cust?.name || "—",
+        customerPhone: cust?.phone || "",
+        customerAddress: cust?.address || "",
+        total: o.total,
+        paidAmount: o.paidAmount,
+        dueAmount: due,
+        status: o.status,
+        currentStage: k?.stageName || stages[0]?.name || "1-bosqich",
+        currentPercent: Number(k?.stagePercent ?? stages[0]?.percent ?? 0),
+        daysRemaining: k?.daysRemaining ?? null,
+        earnedKpi: k?.kpiAmount || "0.00",
+        stages,
+      };
+    });
+
+    const customerCards = myCustomers.map((c) => {
+      const debt = debtByCustomer.get(c.id) || "0.00";
+      return {
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        debt,
+        visitedToday: todayDone.has(c.id),
+      };
+    }).sort((a, b) => Number(b.debt) - Number(a.debt));
+
+    res.json({
+      agent: {
+        id: agent.id,
+        fullName: agentRow?.fullName || agent.fullName,
+        login: agent.login,
+        phone: agentRow?.phone || "",
+        salesPlan: agentRow?.salesPlan || "0.00",
+      },
+      summary: {
+        customersCount: myCustomers.length,
+        debtorsCount: customerCards.filter((c) => Number(c.debt) > 0).length,
+        visitedToday: todayDone.size,
+        totalSales,
+        totalPaid,
+        totalDue,
+        kpiEarned,
+        kpiPotential,
+      },
+      policyStages: policy.stages,
+      customers: customerCards,
+      deals: orderDeals,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
+  try {
+    const agent = getKpiAgent(res);
+    const customerId = String(req.body?.customerId ?? "");
+    const notes = String(req.body?.notes ?? "");
+    if (!customerId) {
+      res.status(400).json({ error: "customerId kerak." });
+      return;
+    }
+    const [row] = await db
+      .insert(kpiVisitsTable)
+      .values({
+        agentId: agent.id,
+        customerId,
+        status: "done",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        lat: req.body?.lat != null ? String(req.body.lat) : null,
+        lng: req.body?.lng != null ? String(req.body.lng) : null,
+        notes,
+      })
+      .returning();
+    res.status(201).json(row);
   } catch (error) {
     next(error);
   }

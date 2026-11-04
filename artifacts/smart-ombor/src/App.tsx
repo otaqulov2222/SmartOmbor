@@ -37,7 +37,8 @@ import { BORDO_SIZES } from '@/bordo-sizes';
 import {
   KpiAgentsPage, KpiCustomersPage, KpiDashboardPage, KpiOrdersPage, KpiPaymentsPage, KpiSettingsPage,
 } from '@/kpi/admin';
-import { AgentPortal } from '@/kpi/agent-portal';
+import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
+import { EmployeesPage } from '@/kpi/employees';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -79,6 +80,8 @@ const navigation: NavItem[] = [
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
   { key: 'nav.branches', href: '/branches', icon: Repeat, group: 'nav.group.analytics' },
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
+  { key: 'nav.employees', href: '/employees', icon: Users, group: 'nav.group.workspace' },
+  { key: 'nav.myAgent', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.kpi', href: '/kpi', icon: Gauge, group: 'nav.group.kpi' },
   { key: 'nav.kpiAgents', href: '/kpi/agents', icon: Users, group: 'nav.group.kpi' },
   { key: 'nav.kpiCustomers', href: '/kpi/customers', icon: Handshake, group: 'nav.group.kpi' },
@@ -90,7 +93,7 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/products', '/partners'];
+const primaryHrefs = ['/dashboard', '/employees', '/products', '/partners'];
 const officeHrefs = ['/office', '/office/report', '/office/tasks'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
@@ -102,11 +105,12 @@ const warehouseAllowedHrefs = new Set([
   '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
   '/scanner', '/recommendations', '/office', '/tasks', '/partners',
 ]);
-const warehousePrimaryHrefs = ['/dashboard', '/products', '/partners'];
+const warehousePrimaryHrefs = ['/dashboard', '/partners', '/products', '/stock'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/recommendations', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.warehouse', hrefs: ['/scanner', '/receipts', '/transfers', '/inventory', '/tasks', '/recommendations'] },
 ];
-const roleOptions: Array<AppUserRole | 'sales_admin'> = ['super_admin', 'manager', 'sales_admin', 'warehouse_manager', 'warehouse_staff', 'analyst'];
+const agentPrimaryHrefs = ['/my-kpi', '/office'];
+const roleOptions: Array<AppUserRole | 'sales_admin' | 'agent'> = ['super_admin', 'manager', 'sales_admin', 'agent', 'warehouse_manager', 'warehouse_staff', 'analyst'];
 
 /* ---------- role access ---------- */
 function isDirector(role?: string | null) {
@@ -115,15 +119,21 @@ function isDirector(role?: string | null) {
 function isWarehouse(role?: string | null) {
   return role === 'warehouse_manager' || role === 'warehouse_staff';
 }
+function isAgentRole(role?: string | null) {
+  return role === 'agent';
+}
 function isEmployeeCabinet(role?: string | null) {
-  return Boolean(role) && !isDirector(role) && !isWarehouse(role);
+  return Boolean(role) && !isDirector(role) && !isWarehouse(role) && !isAgentRole(role);
 }
 function homeForRole(role?: string | null) {
+  if (isAgentRole(role)) return '/my-kpi';
   if (isEmployeeCabinet(role)) return '/office';
+  if (isWarehouse(role)) return '/partners';
   return '/dashboard';
 }
 function pathAllowedForRole(path: string, role?: string | null) {
   if (isDirector(role)) return true;
+  if (isAgentRole(role)) return path === '/my-kpi' || path === '/office';
   if (isEmployeeCabinet(role)) return path === '/office';
   if (isWarehouse(role)) {
     if (path === '/office/report' || path === '/office/tasks') return false;
@@ -313,8 +323,9 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const role = readLocalSession()?.role || '';
   const director = isDirector(role);
   const warehouse = isWarehouse(role);
-  const visiblePrimary = warehouse ? warehousePrimaryHrefs : primaryHrefs;
-  const visibleMoreGroups = warehouse ? warehouseMoreGroups : moreGroups;
+  const agent = isAgentRole(role);
+  const visiblePrimary = agent ? agentPrimaryHrefs : warehouse ? warehousePrimaryHrefs : primaryHrefs;
+  const visibleMoreGroups = agent ? [] : warehouse ? warehouseMoreGroups : moreGroups;
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
   const inMore = visibleMoreHrefs.includes(path);
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
@@ -356,29 +367,34 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <div className="sidebar-top"><BrandMark light/><button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button><button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
-          {navItem('/dashboard')}
-          <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
-            <Fingerprint size={18} strokeWidth={1.9}/>
-            <span>{t('nav.office')}</span>
-            <ChevronDown size={16} className="nav-more-chevron"/>
-          </button>
-          {officeOpen && <div className="nav-office-sub">
+          {agent ? <>
+            {navItem('/my-kpi')}
             {navItem('/office')}
-            {director && navItem('/office/report')}
-            {director && navItem('/office/tasks')}
-          </div>}
-          {director && <>
-            <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
-              <Gauge size={18} strokeWidth={1.9}/>
-              <span>{t('nav.group.kpi')}</span>
+          </> : <>
+            {navItem('/dashboard')}
+            <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
+              <Fingerprint size={18} strokeWidth={1.9}/>
+              <span>{t('nav.office')}</span>
               <ChevronDown size={16} className="nav-more-chevron"/>
             </button>
-            {kpiOpen && <div className="nav-office-sub">
-              {kpiHrefs.map(href => navItem(href))}
+            {officeOpen && <div className="nav-office-sub">
+              {navItem('/office')}
+              {director && navItem('/office/report')}
+              {director && navItem('/office/tasks')}
             </div>}
+            {director && <>
+              <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
+                <Gauge size={18} strokeWidth={1.9}/>
+                <span>{t('nav.group.kpi')}</span>
+                <ChevronDown size={16} className="nav-more-chevron"/>
+              </button>
+              {kpiOpen && <div className="nav-office-sub">
+                {kpiHrefs.map(href => navItem(href))}
+              </div>}
+            </>}
+            {visiblePrimary.filter(href => href !== '/dashboard').map(href => navItem(href))}
+            <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </>}
-          {visiblePrimary.filter(href => href !== '/dashboard').map(href => navItem(href))}
-          <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
         </div>
         {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
@@ -1612,6 +1628,8 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/factories', titleKey: 'nav.factories', element: <FactoriesPage/> },
   { path: '/branches', titleKey: 'nav.branches', element: <BranchesPage/> },
   { path: '/partners', titleKey: 'nav.partners', element: <PartnersPage/> },
+  { path: '/employees', titleKey: 'nav.employees', element: <EmployeesPage/> },
+  { path: '/my-kpi', titleKey: 'nav.myAgent', element: <AgentCabinetPage/> },
   { path: '/kpi', titleKey: 'nav.kpi', element: <KpiDashboardPage/> },
   { path: '/kpi/agents', titleKey: 'nav.kpiAgents', element: <KpiAgentsPage/> },
   { path: '/kpi/customers', titleKey: 'nav.kpiCustomers', element: <KpiCustomersPage/> },

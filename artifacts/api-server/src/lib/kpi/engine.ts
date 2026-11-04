@@ -125,6 +125,16 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
   const snap = (order.policySnapshot as PolicySnap | null) || (await getActivePolicy());
   if (!snap) return null;
 
+  const [agentRow] = await db
+    .select({ login: kpiAgentsTable.login, fullName: kpiAgentsTable.fullName })
+    .from(kpiAgentsTable)
+    .where(eq(kpiAgentsTable.id, order.agentId))
+    .limit(1);
+  const isHouseAccount =
+    agentRow?.login === "ofis" ||
+    agentRow?.login === "vanseling" ||
+    agentRow?.fullName.toLowerCase() === "ofis";
+
   const anchor = order.confirmedAt ? new Date(order.confirmedAt) : new Date(order.orderDate);
   const settledAt =
     moneyCmp(order.paidAmount, order.total) >= 0 && order.invoiceRef
@@ -132,12 +142,12 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
       : new Date();
   const refDate = Number.isNaN(settledAt.getTime()) ? new Date() : settledAt;
   const dayIndex = Math.max(0, daysBetween(anchor, refDate));
-  const stage = resolveStage(snap.stages, dayIndex);
+  const stage = isHouseAccount ? null : resolveStage(snap.stages, dayIndex);
   const percent = stage ? money(stage.percent) : "0.00";
   const baseType = snap.baseType || "paid_amount";
   const baseAmount =
     baseType === "order_total" ? money(order.total) : money(order.paidAmount);
-  const kpiAmount = moneyPct(baseAmount, percent);
+  const kpiAmount = isHouseAccount ? "0.00" : moneyPct(baseAmount, percent);
   const ends = stageEndsAt(anchor, stage);
   const daysRemaining = stage ? Math.max(0, stage.dayTo - dayIndex) : 0;
 

@@ -8,7 +8,7 @@ const router: IRouter = Router();
 const FILE = dataFile("accounts.json");
 const KNOWN_ROLES = ["super_admin", "manager", "sales_admin", "agent", "warehouse_manager", "warehouse_staff", "analyst", "accountant", "worker"] as const;
 
-type Account = { id: string; name: string; login: string; password: string; role: string };
+type Account = { id: string; name: string; login: string; password: string; role: string; phone?: string };
 
 function normalizeRole(value: string) {
   const role = value.trim().replace(/\s+/g, " ").slice(0, 48);
@@ -58,11 +58,27 @@ function read(): Store {
   return memory;
 }
 
-/** Returns true when admin row was created or corrected. */
+const SEED_AGENTS: Array<[string, string]> = [
+  ["Oysha", "oysha"],
+  ["Shaxzod", "shaxzod"],
+  ["Farzona", "farzona"],
+  ["Elyor", "elyor"],
+  ["Abbos", "abbos"],
+  ["Baxodir", "baxodir"],
+  ["Muzaffar", "muzaffar"],
+  ["Avliyo", "avliyo"],
+  ["Gulzoda", "gulzoda"],
+  ["Nafisa", "nafisa"],
+  ["Abdug'ani", "abdugani"],
+  ["Nozim", "nozim"],
+  ["Farxod aka", "farxodaka"],
+];
+
+/** Returns true when admin or default MoySklad agents were created or corrected. */
 function ensureAdmin(store: Store): boolean {
+  let changed = false;
   const admin = store.accounts.find((account) => account.login === "bordouzadmin");
   if (admin) {
-    let changed = false;
     if (admin.password !== "2026@admin") {
       admin.password = "2026@admin";
       changed = true;
@@ -75,10 +91,17 @@ function ensureAdmin(store: Store): boolean {
       admin.name = "Administrator";
       changed = true;
     }
-    return changed;
+  } else {
+    store.accounts.unshift({ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" });
+    changed = true;
   }
-  store.accounts.unshift({ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" });
-  return true;
+  for (const [name, login] of SEED_AGENTS) {
+    if (!store.accounts.some((a) => a.login.toLowerCase() === login)) {
+      store.accounts.push({ id: `agent-${login}`, name, login, password: "1234", role: "agent", phone: "" });
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function remember(token: string, login: string) {
@@ -175,32 +198,70 @@ router.post("/local-login", (req, res) => {
 });
 
 router.get("/local-accounts", (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  res.json(read().accounts.map(({ id, name, login, password, role }) => ({ id, name, login, password, role })));
+  if (!requireOfficeDirector(req, res)) return;
+  const store = read();
+  if (ensureAdmin(store)) write(store);
+  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
 router.post("/local-accounts", (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const login = String(req.body?.login ?? "").trim();
+  if (!requireOfficeDirector(req, res)) return;
+  const login = String(req.body?.login ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
   const name = String(req.body?.name ?? "").trim() || login;
+  const phone = String(req.body?.phone ?? "").trim();
   const role = normalizeRole(String(req.body?.role ?? ""));
   if (!login || password.length < 4 || !role) {
     res.status(400).json({ error: "invalid" });
     return;
   }
   const store = read();
-  if (store.accounts.some((account) => account.login === login)) {
+  if (store.accounts.some((account) => account.login.toLowerCase() === login)) {
     res.status(409).json({ error: "exists" });
     return;
   }
-  store.accounts.push({ id: randomUUID(), name, login, password, role });
+  store.accounts.push({ id: randomUUID(), name, login, password, role, phone });
   write(store);
-  res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole })));
+  res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone || "" })));
+});
+
+router.patch("/local-accounts/:id", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  const store = read();
+  const target = store.accounts.find((account) => account.id === req.params.id);
+  if (!target) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (target.login === "bordouzadmin") {
+    if (req.body?.name) target.name = String(req.body.name).trim() || target.name;
+    write(store);
+    res.json(store.accounts);
+    return;
+  }
+  const nextLogin = req.body?.login ? String(req.body.login).trim().toLowerCase() : target.login;
+  if (nextLogin !== target.login && store.accounts.some((a) => a.id !== target.id && a.login.toLowerCase() === nextLogin)) {
+    res.status(409).json({ error: "exists" });
+    return;
+  }
+  const oldLogin = target.login;
+  target.login = nextLogin;
+  if (req.body?.name != null) target.name = String(req.body.name).trim() || target.login;
+  if (req.body?.phone != null) target.phone = String(req.body.phone).trim();
+  if (req.body?.role) {
+    const r = normalizeRole(String(req.body.role));
+    if (r) target.role = r;
+  }
+  if (req.body?.password && String(req.body.password).length >= 4) {
+    target.password = String(req.body.password);
+    forgetLogin(oldLogin);
+  }
+  write(store);
+  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
 router.delete("/local-accounts/:id", (req, res) => {
-  const current = requireAdmin(req, res);
+  const current = requireOfficeDirector(req, res);
   if (!current) return;
   const store = read();
   const target = store.accounts.find((account) => account.id === req.params.id);
@@ -211,7 +272,7 @@ router.delete("/local-accounts/:id", (req, res) => {
   store.accounts = store.accounts.filter((account) => account.id !== target.id);
   write(store);
   forgetLogin(target.login);
-  res.json(store.accounts.map(({ id, name, login, password, role }) => ({ id, name, login, password, role })));
+  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
 export default router;

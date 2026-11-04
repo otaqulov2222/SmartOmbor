@@ -127,13 +127,58 @@ export function requireKpiAgent() {
   return (req: Request, res: Response, next: NextFunction) => {
     void (async () => {
       try {
-        const agent = await resolveAgentToken(bearer(req));
-        if (!agent) {
-          res.status(401).json({ error: "Agent sessiyasi yo‘q yoki muddati tugagan." });
+        const token = bearer(req);
+        const agent = await resolveAgentToken(token);
+        if (agent) {
+          res.locals.kpiAgent = agent;
+          next();
           return;
         }
-        res.locals.kpiAgent = agent;
-        next();
+        // Also accept unified Bordo local-login token for role=agent (or admin preview)
+        const { localActor } = await import("../../routes/local-auth");
+        const local = localActor(req);
+        if (local) {
+          const loginKey = local.login.trim().toLowerCase();
+          const nameKey = local.name.trim().toLowerCase();
+          const all = await db.select().from(kpiAgentsTable);
+          const match =
+            all.find((a) => a.login.toLowerCase() === loginKey) ||
+            all.find((a) => a.fullName.toLowerCase() === nameKey);
+          if (match) {
+            res.locals.kpiAgent = {
+              id: match.id,
+              fullName: match.fullName,
+              login: match.login,
+              status: match.status,
+              territoryId: match.territoryId,
+            };
+            next();
+            return;
+          }
+          const [created] = await db
+            .insert(kpiAgentsTable)
+            .values({
+              fullName: local.name || local.login,
+              login: loginKey,
+              passwordHash: hashPassword("1234"),
+              status: "active",
+              createdBy: "local-auth",
+            })
+            .onConflictDoNothing()
+            .returning();
+          if (created) {
+            res.locals.kpiAgent = {
+              id: created.id,
+              fullName: created.fullName,
+              login: created.login,
+              status: created.status,
+              territoryId: created.territoryId,
+            };
+            next();
+            return;
+          }
+        }
+        res.status(401).json({ error: "Agent sessiyasi yo‘q yoki muddati tugagan." });
       } catch (error) {
         next(error);
       }
