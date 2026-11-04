@@ -75,7 +75,7 @@ const uz = {
   'nav.more': 'Boshqalar',
   'nav.more.warehouse': 'Ombor',
   'nav.more.accounts': 'Hisob',
-  'nav.dashboard': 'Boshqaruv',
+  'nav.dashboard': 'Dashboard',
   'nav.products': 'Mahsulotlar',
   'nav.stock': 'Ombor qoldig‘i',
   'nav.scanner': 'Shtrix-kod',

@@ -378,6 +378,8 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {navItem('/office')}
           </> : <>
             {navItem('/dashboard')}
+            {navItem('/products')}
+            {director && navItem('/employees')}
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
               <span>{t('nav.office')}</span>
@@ -398,7 +400,9 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
                 {kpiHrefs.map(href => navItem(href))}
               </div>}
             </>}
-            {visiblePrimary.filter(href => href !== '/dashboard').map(href => navItem(href))}
+            {director && navItem('/gps')}
+            {navItem('/partners')}
+            {warehouse && navItem('/stock')}
             <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </>}
         </div>
