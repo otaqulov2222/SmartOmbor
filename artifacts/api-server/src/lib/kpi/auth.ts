@@ -32,14 +32,36 @@ export type KpiAgentActor = {
 };
 
 export async function loginAgent(login: string, password: string): Promise<{ token: string; agent: KpiAgentActor } | null> {
+  const key = login.trim().toLowerCase();
   const rows = await db
     .select()
     .from(kpiAgentsTable)
-    .where(eq(kpiAgentsTable.login, login.trim().toLowerCase()))
+    .where(eq(kpiAgentsTable.login, key))
     .limit(1);
-  const agent = rows[0];
-  if (!agent || agent.status !== "active") return null;
-  if (!verifyPassword(password, agent.passwordHash)) return null;
+  let agent = rows[0];
+  let passwordOk = Boolean(agent && verifyPassword(password, agent.passwordHash));
+  if (!passwordOk) {
+    const { verifyLocalAgentCredentials } = await import("../../routes/local-auth");
+    const localAcc = verifyLocalAgentCredentials(key, password);
+    if (localAcc) {
+      passwordOk = true;
+      if (!agent) {
+        const [created] = await db
+          .insert(kpiAgentsTable)
+          .values({
+            fullName: localAcc.name || key,
+            login: key,
+            passwordHash: hashPassword(password),
+            status: "active",
+            createdBy: "local-auth",
+          })
+          .onConflictDoNothing()
+          .returning();
+        agent = created;
+      }
+    }
+  }
+  if (!agent || agent.status !== "active" || !passwordOk) return null;
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   await db.insert(kpiAgentSessionsTable).values({ agentId: agent.id, token, expiresAt });

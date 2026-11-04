@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 
 export const OFFICE_LAT = 41.258556;
@@ -117,6 +118,41 @@ function save(store: Store) {
   const tmp = `${FILE}.tmp`;
   writeFileSync(tmp, JSON.stringify(store));
   renameSync(tmp, FILE);
+  void pool
+    .query(
+      "insert into partner_store (id, document, updated_at) values ('office', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+      [JSON.stringify(store)],
+    )
+    .catch(() => undefined);
+}
+
+export async function hydrateOffice() {
+  try {
+    await pool.query(`
+      create table if not exists partner_store (
+        id text primary key,
+        document jsonb not null,
+        updated_at timestamptz not null default now()
+      )
+    `);
+    const res = await pool.query<{ document: Partial<Store> }>(
+      "select document from partner_store where id = 'office'",
+    );
+    const remote = res.rows[0]?.document;
+    if (remote && (Array.isArray(remote.punches) || Array.isArray(remote.tasks))) {
+      writeFileSync(FILE, JSON.stringify(remote));
+      memory = null;
+      load();
+      return;
+    }
+    const current = load();
+    await pool.query(
+      "insert into partner_store (id, document, updated_at) values ('office', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+      [JSON.stringify(current)],
+    );
+  } catch {
+    /* ignore */
+  }
 }
 
 export function tashkentParts(value = new Date()) {

@@ -1,7 +1,9 @@
 import app from "./app";
 import { ensureCatalogBootstrapped, startCatalogKeepalive } from "./lib/catalog";
 import { logger } from "./lib/logger";
+import { hydrateOffice } from "./lib/office";
 import { hydratePartners } from "./lib/partners";
+import { hydrateLocalAccounts } from "./routes/local-auth";
 import { resumePendingSupplies } from "./routes/partners";
 import { sendIdlePreview, sendPreview, startTelegramDigest } from "./lib/telegram";
 
@@ -38,6 +40,8 @@ app.listen(port, (err) => {
   // Listen dan keyin: disk katalog + partners parallel — UI bo‘sh qolmasin.
   void Promise.all([
     ensureCatalogBootstrapped(),
+    hydrateLocalAccounts(),
+    hydrateOffice(),
     hydratePartners()
       .then(() => {
         resumePendingSupplies();

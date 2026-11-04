@@ -440,6 +440,15 @@ async function syncCounterpartiesChunk(
 
 export async function ensureKpiBootstrapped() {
   await ensureSeedAgents();
+  // Ensure house accounts (Ofis / Van seling) never carry KPI commission
+  await db.execute(sql`
+    UPDATE kpi_calculations c
+    SET kpi_amount = 0, stage_percent = 0, stage_name = '0%'
+    FROM kpi_agents a
+    WHERE c.agent_id = a.id
+      AND lower(a.login) IN ('ofis', 'vanseling')
+      AND c.kpi_amount <> 0
+  `);
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(kpiOrdersTable);

@@ -139,7 +139,12 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
   try {
     await ensureDefaultPolicy();
     await ensureKpiBootstrapped();
-    const [agentsAfter] = await db.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active')::int` }).from(kpiAgentsTable);
+    const [agentsAfter] = await db
+      .select({
+        total: sql<number>`count(*) filter (where lower(${kpiAgentsTable.login}) not in ('ofis','vanseling'))::int`,
+        active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active' and lower(${kpiAgentsTable.login}) not in ('ofis','vanseling'))::int`,
+      })
+      .from(kpiAgentsTable);
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
       sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled')), 0)`,
@@ -248,7 +253,8 @@ router.post("/kpi/territories", requireKpiAdmin(), async (req, res, next) => {
 router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
   try {
     await ensureKpiBootstrapped();
-    const agents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
+    const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
+    const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
     const out = [];
     for (const agent of agents) {
       const [cust] = await db.select({ n: sql<number>`count(*)::int` }).from(kpiCustomerAssignmentsTable)

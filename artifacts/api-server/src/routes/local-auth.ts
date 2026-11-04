@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response } from "express";
+import { pool } from "@workspace/db";
 import { dataFile } from "../lib/data-dir";
 
 const router: IRouter = Router();
@@ -33,6 +34,57 @@ function write(store: Store) {
   const tmp = `${FILE}.tmp`;
   writeFileSync(tmp, JSON.stringify(store));
   renameSync(tmp, FILE);
+  void pool
+    .query(
+      "insert into partner_store (id, document, updated_at) values ('accounts', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+      [JSON.stringify(store)],
+    )
+    .catch(() => undefined);
+}
+
+export async function hydrateLocalAccounts() {
+  try {
+    await pool.query(`
+      create table if not exists partner_store (
+        id text primary key,
+        document jsonb not null,
+        updated_at timestamptz not null default now()
+      )
+    `);
+    const res = await pool.query<{ document: Partial<Store> }>(
+      "select document from partner_store where id = 'accounts'",
+    );
+    const remote = res.rows[0]?.document;
+    if (remote && remote.secret && Array.isArray(remote.accounts) && remote.accounts.length > 0) {
+      memory = {
+        secret: remote.secret,
+        accounts: remote.accounts,
+        sessions: remote.sessions && typeof remote.sessions === "object" ? remote.sessions : {},
+      };
+      ensureAdmin(memory);
+      for (const [token, login] of Object.entries(memory.sessions)) sessions.set(token, login);
+      write(memory);
+      return;
+    }
+    const current = read();
+    if (ensureAdmin(current)) write(current);
+    else {
+      await pool.query(
+        "insert into partner_store (id, document, updated_at) values ('accounts', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+        [JSON.stringify(current)],
+      );
+    }
+  } catch {
+    /* ignore db init error */
+  }
+}
+
+export function verifyLocalAgentCredentials(login: string, password: string): Account | null {
+  const store = read();
+  if (ensureAdmin(store)) write(store);
+  const key = login.trim().toLowerCase();
+  const account = store.accounts.find((a) => a.login.toLowerCase() === key && same(a.password, password));
+  return account || null;
 }
 
 function readDisk(): Store {
@@ -187,11 +239,11 @@ function requireAdmin(req: Request, res: Response): Account | null {
 }
 
 router.post("/local-login", (req, res) => {
-  const login = String(req.body?.login ?? "").trim();
+  const login = String(req.body?.login ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
   const store = read();
   if (ensureAdmin(store)) write(store);
-  const account = store.accounts.find((item) => item.login === login && same(item.password, password));
+  const account = store.accounts.find((item) => item.login.toLowerCase() === login && same(item.password, password));
   if (!account) {
     res.status(401).json({ error: "invalid" });
     return;
