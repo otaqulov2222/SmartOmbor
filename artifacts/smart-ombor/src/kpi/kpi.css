@@ -337,11 +337,45 @@
 
 .emp-code {
   background: #f8fafc; border: 1px solid #e2e8f0;
-  padding: .2rem .5rem; border-radius: 7px;
+  padding: .22rem .55rem; border-radius: 7px;
   font-size: .84rem; color: #0f1b2d;
 }
-.emp-pass-cell { display: inline-flex; align-items: center; gap: .35rem; }
+.emp-pass-cell { display: inline-flex; align-items: center; gap: .4rem; }
+.emp-eye-btn {
+  width: 28px; height: 28px; border-radius: 7px;
+  border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+  display: inline-grid; place-items: center; cursor: pointer;
+}
+.emp-eye-btn:hover { color: #0f1b2d; border-color: #cbd5e1; }
+
+.emp-table td, .emp-table th { vertical-align: middle !important; }
+.emp-th-actions { width: 210px; text-align: left !important; padding-left: .75rem !important; }
+.emp-td-actions { width: 210px; padding-left: .75rem !important; }
+.emp-actions-grid {
+  display: grid;
+  grid-template-columns: 118px 34px 34px;
+  gap: 6px;
+  align-items: center;
+}
+.emp-edit-actions { display: flex; gap: 6px; align-items: center; }
+.emp-copy-btn {
+  height: 34px; width: 118px;
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  border: 1px solid #dbe2ea; background: #f8fafc; color: #0f1b2d;
+  border-radius: 9px; font-size: .82rem; font-weight: 600; cursor: pointer;
+  transition: all .15s ease;
+}
+.emp-copy-btn:hover { background: #eef2ff; border-color: #bfd0ff; color: #1d39c4; }
 .emp-copied-btn { background: #dcfce7 !important; border-color: #86efac !important; color: #166534 !important; font-weight: 700; }
+.emp-icon-btn {
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 1px solid #dbe2ea; background: #fff; color: #475569;
+  display: inline-grid; place-items: center; cursor: pointer;
+  transition: all .15s ease;
+}
+.emp-icon-btn:hover { background: #f1f5f9; color: #0f1b2d; border-color: #cbd5e1; }
+.emp-icon-btn.is-danger:hover { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.emp-icon-slot { width: 34px; height: 34px; display: inline-block; }
 
 @media (max-width: 960px) {
   .emp-add-grid { grid-template-columns: 1fr 1fr; }

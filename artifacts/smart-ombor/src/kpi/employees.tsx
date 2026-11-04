@@ -228,7 +228,7 @@ export function EmployeesPage() {
               <th>Login</th>
               <th>Parol</th>
               <th>Ko‘rsatkich</th>
-              <th style={{ textAlign: 'right' }}>Amallar</th>
+              <th className="emp-th-actions">Amallar</th>
             </tr>
           </thead>
           <tbody>
@@ -293,7 +293,7 @@ export function EmployeesPage() {
                         <code className="emp-code">{showPass[s.id] ? s.password : '••••••••'}</code>
                         <button
                           type="button"
-                          className="icon-btn"
+                          className="emp-eye-btn"
                           onClick={() => setShowPass((p) => ({ ...p, [s.id]: !p[s.id] }))}
                           title="Parolni ko‘rsatish"
                         >
@@ -312,41 +312,46 @@ export function EmployeesPage() {
                       <span className="kpi-muted">—</span>
                     )}
                   </td>
-                  <td>
-                    <div className="kpi-row-actions" style={{ justifyContent: 'flex-end' }}>
-                      {isEdit ? (
-                        <>
-                          <button type="button" className="btn btn-primary" onClick={() => update.mutate(editing)}>Saqlash</button>
-                          <button type="button" className="btn" onClick={() => setEditing(null)}>Bekor</button>
-                        </>
-                      ) : (
-                        <>
+                  <td className="emp-td-actions">
+                    {isEdit ? (
+                      <div className="emp-edit-actions">
+                        <button type="button" className="btn btn-primary" onClick={() => update.mutate(editing)}>Saqlash</button>
+                        <button type="button" className="btn" onClick={() => setEditing(null)}>Bekor</button>
+                      </div>
+                    ) : (
+                      <div className="emp-actions-grid">
+                        <button
+                          type="button"
+                          className={`emp-copy-btn ${isCopied ? 'emp-copied-btn' : ''}`}
+                          onClick={() => void copyCredentials(s)}
+                          title="Login va parolni nusxalash"
+                        >
+                          {isCopied ? <><Check size={14} /> Nusxalandi</> : <><Copy size={14} /> Nusxalash</>}
+                        </button>
+                        <button
+                          type="button"
+                          className="emp-icon-btn"
+                          onClick={() => setEditing({ ...s })}
+                          title="Tahrirlash"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        {s.login !== 'bordouzadmin' ? (
                           <button
                             type="button"
-                            className={`btn ${isCopied ? 'emp-copied-btn' : ''}`}
-                            onClick={() => void copyCredentials(s)}
-                            title="Login va parolni nusxalash"
+                            className="emp-icon-btn is-danger"
+                            onClick={() => {
+                              if (confirm(`${s.name} o‘chirilsinmi?`)) remove.mutate(s.id);
+                            }}
+                            title="O‘chirish"
                           >
-                            {isCopied ? <><Check size={14} /> Nusxalandi</> : <><Copy size={14} /> Nusxalash</>}
+                            <Trash2 size={14} />
                           </button>
-                          <button type="button" className="btn" onClick={() => setEditing({ ...s })} title="Tahrirlash">
-                            <Pencil size={14} />
-                          </button>
-                          {s.login !== 'bordouzadmin' ? (
-                            <button
-                              type="button"
-                              className="btn"
-                              onClick={() => {
-                                if (confirm(`${s.name} o‘chirilsinmi?`)) remove.mutate(s.id);
-                              }}
-                              title="O‘chirish"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
+                        ) : (
+                          <span className="emp-icon-slot" aria-hidden="true" />
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
