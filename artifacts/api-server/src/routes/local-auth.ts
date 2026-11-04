@@ -6,7 +6,7 @@ import { dataFile } from "../lib/data-dir";
 
 const router: IRouter = Router();
 const FILE = dataFile("accounts.json");
-const KNOWN_ROLES = ["super_admin", "manager", "warehouse_manager", "warehouse_staff", "analyst", "accountant", "worker"] as const;
+const KNOWN_ROLES = ["super_admin", "manager", "sales_admin", "agent", "warehouse_manager", "warehouse_staff", "analyst", "accountant", "worker"] as const;
 
 type Account = { id: string; name: string; login: string; password: string; role: string };
 

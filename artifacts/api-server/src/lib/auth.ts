@@ -6,6 +6,8 @@ import { db, appUsersTable } from "@workspace/db";
 export const appRoles = [
   "super_admin",
   "manager",
+  "sales_admin",
+  "agent",
   "warehouse_manager",
   "warehouse_staff",
   "branch_manager",

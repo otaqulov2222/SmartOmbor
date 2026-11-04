@@ -23,3 +23,4 @@ export * from "./sync-runs";
 export * from "./synced-records";
 export * from "./tasks";
 export * from "./warehouse-documents";
+export * from "./kpi-core";

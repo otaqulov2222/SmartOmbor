@@ -544,14 +544,14 @@ components:
         email: { type: string }
         role:
           type: string
-          enum: [super_admin, manager, warehouse_manager, warehouse_staff, branch_manager, analyst]
+          enum: [super_admin, manager, sales_admin, agent, warehouse_manager, warehouse_staff, branch_manager, analyst]
     UserRoleUpdate:
       type: object
       required: [role]
       properties:
         role:
           type: string
-          enum: [super_admin, manager, warehouse_manager, warehouse_staff, branch_manager, analyst]
+          enum: [super_admin, manager, sales_admin, agent, warehouse_manager, warehouse_staff, branch_manager, analyst]
     IntegrationStatus:
       type: object
       required: [configured, connected, lastSync, error]

@@ -1,0 +1,245 @@
+import { asc, desc, eq, sql } from "drizzle-orm";
+import {
+  db,
+  kpiCalculationsTable,
+  kpiLedgerTable,
+  kpiOrdersTable,
+  kpiPoliciesTable,
+  kpiStagesTable,
+} from "@workspace/db";
+import { money, moneyCmp, moneyPct } from "./money";
+
+export type StageSnap = {
+  name: string;
+  sortOrder: number;
+  dayFrom: number;
+  dayTo: number;
+  percent: string;
+};
+
+export type PolicySnap = {
+  id: string;
+  name: string;
+  baseType: string;
+  startAnchor: string;
+  warningDays: number;
+  stages: StageSnap[];
+};
+
+export async function getActivePolicy(): Promise<PolicySnap | null> {
+  const policies = await db
+    .select()
+    .from(kpiPoliciesTable)
+    .where(eq(kpiPoliciesTable.active, true))
+    .orderBy(desc(kpiPoliciesTable.updatedAt))
+    .limit(1);
+  const policy = policies[0];
+  if (!policy) return null;
+  const stages = await db
+    .select()
+    .from(kpiStagesTable)
+    .where(eq(kpiStagesTable.policyId, policy.id))
+    .orderBy(asc(kpiStagesTable.sortOrder));
+  return {
+    id: policy.id,
+    name: policy.name,
+    baseType: policy.baseType,
+    startAnchor: policy.startAnchor,
+    warningDays: policy.warningDays,
+    stages: stages.map((s) => ({
+      name: s.name,
+      sortOrder: s.sortOrder,
+      dayFrom: s.dayFrom,
+      dayTo: s.dayTo,
+      percent: money(s.percent),
+    })),
+  };
+}
+
+export function snapshotPolicy(policy: PolicySnap): PolicySnap {
+  return structuredClone(policy);
+}
+
+function daysBetween(anchor: Date, now = new Date()): number {
+  const a = Date.UTC(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  const b = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.floor((b - a) / 86_400_000);
+}
+
+export function resolveStage(stages: StageSnap[], dayIndex: number): StageSnap | null {
+  const sorted = [...stages].sort((a, b) => a.sortOrder - b.sortOrder || a.dayFrom - b.dayFrom);
+  for (const stage of sorted) {
+    if (dayIndex >= stage.dayFrom && dayIndex <= stage.dayTo) return stage;
+  }
+  return null;
+}
+
+function stageEndsAt(anchor: Date, stage: StageSnap | null): Date | null {
+  if (!stage) return null;
+  const end = new Date(anchor);
+  end.setDate(end.getDate() + stage.dayTo);
+  end.setHours(23, 59, 59, 999);
+  return end;
+}
+
+export async function ensureDefaultPolicy(actorId?: string) {
+  const existing = await getActivePolicy();
+  if (existing) return existing;
+  const [policy] = await db
+    .insert(kpiPoliciesTable)
+    .values({
+      name: "Standart 3 bosqich",
+      active: true,
+      baseType: "paid_amount",
+      startAnchor: "order_confirmed",
+      warningDays: 2,
+      createdBy: actorId || "system",
+    })
+    .returning();
+  const defaults: StageSnap[] = [
+    { name: "1-bosqich", sortOrder: 1, dayFrom: 0, dayTo: 7, percent: "5.0000" },
+    { name: "2-bosqich", sortOrder: 2, dayFrom: 8, dayTo: 14, percent: "3.0000" },
+    { name: "3-bosqich", sortOrder: 3, dayFrom: 15, dayTo: 21, percent: "1.0000" },
+  ];
+  for (const stage of defaults) {
+    await db.insert(kpiStagesTable).values({
+      policyId: policy.id,
+      name: stage.name,
+      sortOrder: stage.sortOrder,
+      dayFrom: stage.dayFrom,
+      dayTo: stage.dayTo,
+      percent: stage.percent,
+    });
+  }
+  return (await getActivePolicy())!;
+}
+
+export async function refreshOrderKpi(orderId: string, actorId?: string) {
+  const orders = await db.select().from(kpiOrdersTable).where(eq(kpiOrdersTable.id, orderId)).limit(1);
+  const order = orders[0];
+  if (!order) return null;
+  if (order.status === "cancelled" || order.status === "draft") {
+    return null;
+  }
+
+  const snap = (order.policySnapshot as PolicySnap | null) || (await getActivePolicy());
+  if (!snap) return null;
+
+  const anchor = order.confirmedAt ? new Date(order.confirmedAt) : new Date(order.orderDate);
+  const dayIndex = Math.max(0, daysBetween(anchor));
+  const stage = resolveStage(snap.stages, dayIndex);
+  const percent = stage ? money(stage.percent) : "0.00";
+  const baseType = snap.baseType || "paid_amount";
+  const baseAmount =
+    baseType === "order_total" ? money(order.total) : money(order.paidAmount);
+  const kpiAmount = moneyPct(baseAmount, percent);
+  const ends = stageEndsAt(anchor, stage);
+  const daysRemaining = stage ? Math.max(0, stage.dayTo - dayIndex) : 0;
+
+  let status = "pending";
+  if (order.status === "cancelled") status = "cancelled";
+  else if (moneyCmp(order.paidAmount, 0) <= 0) status = "pending";
+  else if (moneyCmp(order.paidAmount, order.total) >= 0) status = "confirmed";
+  else status = "partial";
+  if (!stage && moneyCmp(baseAmount, 0) > 0) status = "expired";
+
+  const existing = await db
+    .select()
+    .from(kpiCalculationsTable)
+    .where(eq(kpiCalculationsTable.orderId, orderId))
+    .limit(1);
+
+  const payload = {
+    agentId: order.agentId,
+    baseType,
+    baseAmount,
+    stageName: stage?.name || "0%",
+    stagePercent: percent,
+    kpiAmount,
+    status,
+    stageDayFrom: stage?.dayFrom ?? 0,
+    stageDayTo: stage?.dayTo ?? 0,
+    anchorAt: anchor,
+    stageEndsAt: ends,
+    daysRemaining,
+    policySnapshot: snap as unknown as Record<string, unknown>,
+  };
+
+  let calcId: string;
+  if (existing[0]) {
+    const prev = existing[0];
+    await db
+      .update(kpiCalculationsTable)
+      .set(payload)
+      .where(eq(kpiCalculationsTable.id, prev.id));
+    calcId = prev.id;
+    if (moneyCmp(prev.kpiAmount, kpiAmount) !== 0 || prev.stagePercent !== percent) {
+      await db.insert(kpiLedgerTable).values({
+        orderId,
+        agentId: order.agentId,
+        calculationId: calcId,
+        entryType: "recalc",
+        amount: kpiAmount,
+        reason: `Bosqich: ${payload.stageName} (${percent}%)`,
+        percent,
+        actorId: actorId || "system",
+        meta: { previous: prev.kpiAmount, dayIndex },
+      });
+    }
+  } else {
+    const [row] = await db
+      .insert(kpiCalculationsTable)
+      .values({ orderId, ...payload })
+      .returning();
+    calcId = row.id;
+    await db.insert(kpiLedgerTable).values({
+      orderId,
+      agentId: order.agentId,
+      calculationId: calcId,
+      entryType: "accrual",
+      amount: kpiAmount,
+      reason: `KPI ochildi: ${payload.stageName}`,
+      percent,
+      actorId: actorId || "system",
+      meta: { dayIndex },
+    });
+  }
+
+  return db.select().from(kpiCalculationsTable).where(eq(kpiCalculationsTable.id, calcId)).limit(1).then((r) => r[0]);
+}
+
+export async function refreshAllOpenKpis(limit = 500) {
+  const rows = await db
+    .select({ id: kpiOrdersTable.id })
+    .from(kpiOrdersTable)
+    .where(sql`${kpiOrdersTable.status} NOT IN ('draft','cancelled')`)
+    .limit(limit);
+  for (const row of rows) {
+    await refreshOrderKpi(row.id);
+  }
+  return rows.length;
+}
+
+export async function cancelOrderKpi(orderId: string, actorId?: string) {
+  const calcs = await db
+    .select()
+    .from(kpiCalculationsTable)
+    .where(eq(kpiCalculationsTable.orderId, orderId))
+    .limit(1);
+  const calc = calcs[0];
+  if (!calc) return;
+  await db
+    .update(kpiCalculationsTable)
+    .set({ status: "cancelled", kpiAmount: "0.00", stagePercent: "0.00" })
+    .where(eq(kpiCalculationsTable.id, calc.id));
+  await db.insert(kpiLedgerTable).values({
+    orderId,
+    agentId: calc.agentId,
+    calculationId: calc.id,
+    entryType: "reversal",
+    amount: money(calc.kpiAmount),
+    reason: "Savdo bekor qilindi",
+    percent: "0",
+    actorId: actorId || "system",
+  });
+}

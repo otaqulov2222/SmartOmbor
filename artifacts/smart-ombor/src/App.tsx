@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
   CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck, ClipboardList,
-  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
+  Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Gauge, Handshake, LayoutDashboard, ListChecks, LogOut, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
   UserRound, Users, Wallet, Warehouse, X,
 } from 'lucide-react';
@@ -34,6 +34,10 @@ import { OfficeTasksPage } from '@/office-tasks';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
+import {
+  KpiAgentsPage, KpiCustomersPage, KpiDashboardPage, KpiOrdersPage, KpiPaymentsPage, KpiSettingsPage,
+} from '@/kpi/admin';
+import { AgentPortal } from '@/kpi/agent-portal';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -75,6 +79,12 @@ const navigation: NavItem[] = [
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
   { key: 'nav.branches', href: '/branches', icon: Repeat, group: 'nav.group.analytics' },
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
+  { key: 'nav.kpi', href: '/kpi', icon: Gauge, group: 'nav.group.kpi' },
+  { key: 'nav.kpiAgents', href: '/kpi/agents', icon: Users, group: 'nav.group.kpi' },
+  { key: 'nav.kpiCustomers', href: '/kpi/customers', icon: Handshake, group: 'nav.group.kpi' },
+  { key: 'nav.kpiOrders', href: '/kpi/orders', icon: FileText, group: 'nav.group.kpi' },
+  { key: 'nav.kpiPayments', href: '/kpi/payments', icon: Wallet, group: 'nav.group.kpi' },
+  { key: 'nav.kpiSettings', href: '/kpi/settings', icon: Settings2, group: 'nav.group.kpi' },
   { key: 'nav.recommendations', href: '/recommendations', icon: ListChecks, group: 'nav.group.analytics' },
   { key: 'nav.reports', href: '/reports', icon: FileBarChart, group: 'nav.group.analytics' },
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
@@ -82,8 +92,10 @@ const navigation: NavItem[] = [
 ];
 const primaryHrefs = ['/dashboard', '/recommendations', '/products', '/scanner', '/partners'];
 const officeHrefs = ['/office', '/office/report', '/office/tasks'];
+const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.group.kpi', hrefs: kpiHrefs },
   { key: 'nav.more.accounts', hrefs: ['/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
@@ -95,11 +107,11 @@ const warehousePrimaryHrefs = ['/dashboard', '/recommendations', '/products', '/
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/receipts', '/transfers', '/inventory', '/tasks'] },
 ];
-const roleOptions: AppUserRole[] = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'analyst'];
+const roleOptions: Array<AppUserRole | 'sales_admin'> = ['super_admin', 'manager', 'sales_admin', 'warehouse_manager', 'warehouse_staff', 'analyst'];
 
 /* ---------- role access ---------- */
 function isDirector(role?: string | null) {
-  return role === 'super_admin' || role === 'manager';
+  return role === 'super_admin' || role === 'manager' || role === 'sales_admin';
 }
 function isWarehouse(role?: string | null) {
   return role === 'warehouse_manager' || role === 'warehouse_staff';
@@ -210,7 +222,7 @@ function LocalSignInNotice() {
 /* ---------- entry ---------- */
 const LOCAL_SESSION = 'smart-ombor-session';
 const RETURN_PATH = 'smart-ombor-return';
-const accessRoles = ['super_admin', 'manager', 'warehouse_manager', 'warehouse_staff', 'analyst', 'accountant', 'worker'] as const;
+const accessRoles = ['super_admin', 'manager', 'sales_admin', 'warehouse_manager', 'warehouse_staff', 'analyst', 'accountant', 'worker'] as const;
 type LocalSession = { token: string; name: string; login: string; role: string };
 
 function readLocalSession(): LocalSession | null {
@@ -1588,6 +1600,12 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/factories', titleKey: 'nav.factories', element: <FactoriesPage/> },
   { path: '/branches', titleKey: 'nav.branches', element: <BranchesPage/> },
   { path: '/partners', titleKey: 'nav.partners', element: <PartnersPage/> },
+  { path: '/kpi', titleKey: 'nav.kpi', element: <KpiDashboardPage/> },
+  { path: '/kpi/agents', titleKey: 'nav.kpiAgents', element: <KpiAgentsPage/> },
+  { path: '/kpi/customers', titleKey: 'nav.kpiCustomers', element: <KpiCustomersPage/> },
+  { path: '/kpi/orders', titleKey: 'nav.kpiOrders', element: <KpiOrdersPage/> },
+  { path: '/kpi/payments', titleKey: 'nav.kpiPayments', element: <KpiPaymentsPage/> },
+  { path: '/kpi/settings', titleKey: 'nav.kpiSettings', element: <KpiSettingsPage/> },
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
@@ -1607,6 +1625,7 @@ function LocalRoutes() {
     <Route path="/sign-in/*?" component={LocalSignInNotice}/>
     <Route path="/sign-up/*?" component={LocalSignInNotice}/>
     <Route path="/zavod" component={FactoryPortal}/>
+    <Route path="/agent" component={AgentPortal}/>
     {appRoutes}
   </Switch>;
 }
@@ -1620,6 +1639,7 @@ function ClerkRoutes() {
       <Route path="/sign-in/*?" component={SignInPage}/>
       <Route path="/sign-up/*?" component={SignUpPage}/>
       <Route path="/zavod" component={FactoryPortal}/>
+      <Route path="/agent" component={AgentPortal}/>
       {appRoutes}
     </Switch>
   </ClerkProvider>;
