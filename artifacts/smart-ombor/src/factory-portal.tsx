@@ -233,33 +233,32 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
 
   const patch = (key: string, next: Partial<Draft>) => setLines(rows => withBlank(rows.map(row => row.key === key ? { ...row, ...next } : row)));
   const fillPassport = (key: string, next?: Partial<Draft>) => {
+    const current = lines.find(row => row.key === key);
+    if (!current) return;
+    const merged: Draft = { ...current, ...next };
+    setLines(rows => withBlank(rows.map(row => row.key === key ? merged : row)));
+    const code = codeValue(merged.productCode);
+    if (!code) return;
     const seq = (passportSeq.current.get(key) || 0) + 1;
     passportSeq.current.set(key, seq);
-    let merged: Draft | null = null;
-    setLines(rows => {
-      const current = rows.find(row => row.key === key);
-      if (!current) return rows;
-      merged = { ...current, ...next };
-      return withBlank(rows.map(row => row.key === key ? merged! : row));
-    });
-    const code = merged?.productCode.trim() || '';
-    if (!code || !merged) return;
     const qs = new URLSearchParams({ code, factory: factoryCode });
     if (merged.size.trim()) qs.set('size', merged.size.trim());
-    if (merged.groupCode.trim()) qs.set('group', merged.groupCode.trim());
-    void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; groupCode?: string; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
-      if (passportSeq.current.get(key) !== seq || !data?.found) return;
+    if (merged.groupCode.trim()) qs.set('group', codeValue(merged.groupCode));
+    const refreshValues = Boolean(next && ('size' in next || 'productCode' in next));
+    void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; fromWaybill?: boolean; groupCode?: string; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
+      if (passportSeq.current.get(key) !== seq || !data) return;
       const pack = data.packSize && data.packSize > 1 ? String(Math.round(data.packSize)) : '';
       const cost = Number(data.cost || data.salePrice || 0);
       const price = cost > 0 ? String(Math.round(cost)) : '';
+      if (!data.found && !data.fromWaybill && !price && !data.groupCode && !pack) return;
       setLines(rows => withBlank(rows.map(row => {
         if (row.key !== key) return row;
         return {
           ...row,
-          ...(!row.groupCode.trim() && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
+          ...((!row.groupCode.trim() || refreshValues) && data.groupCode ? { groupCode: codeInput(data.groupCode) } : {}),
           ...(!row.size.trim() && data.size ? { size: data.size } : {}),
-          ...(!row.pairs.trim() && pack ? { pairs: pack } : {}),
-          ...(!row.price.trim() && price ? { price } : {}),
+          ...((!row.pairs.trim() || refreshValues) && pack ? { pairs: pack } : {}),
+          ...((!row.price.trim() || refreshValues) && price ? { price } : {}),
           ...(!row.priceType && data.priceType ? { priceType: data.priceType } : {}),
         };
       })));

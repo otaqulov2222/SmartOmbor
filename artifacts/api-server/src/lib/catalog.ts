@@ -1082,9 +1082,31 @@ export function listWaybillProducts(
 }
 
 export function pickPassport(rows: CatalogProduct[]): { id: string; name: string } | null {
-  // Faqat bitta aniq kartochka — bir nechtadan taxminiy tanlash eski/noto‘g‘ri kartaga yopishtirardi.
-  if (rows.length !== 1) return null;
-  return { id: rows[0].id, name: rows[0].name };
+  if (!rows.length) return null;
+  if (rows.length === 1) return { id: rows[0].id, name: rows[0].name };
+  // Agar barcha topilgan kartochkalar aynan bitta (factory + group + code + size) bo‘lsa (tarixiy dublikatlar),
+  // yangi dublikat ochmaslik va passport/narx ishlashi uchun asosiy kartochkani tanlaymiz.
+  const keys = new Set(
+    rows.map((row) => {
+      const p = parseBordoName(row.name);
+      if (!p) return foldProductName(row.name);
+      return [
+        canonicalFactoryCode(p.factoryCode),
+        compactCode(p.groupCode),
+        compactCode(p.productCode),
+        compactCode(p.size),
+      ].join("|");
+    }),
+  );
+  if (keys.size !== 1) return null;
+  const best = [...rows].sort((a, b) => {
+    const aCost = Number(Boolean(a.cost && a.cost > 0));
+    const bCost = Number(Boolean(b.cost && b.cost > 0));
+    if (bCost !== aCost) return bCost - aCost;
+    if ((b.stock || 0) !== (a.stock || 0)) return (b.stock || 0) - (a.stock || 0);
+    return a.name.length - b.name.length;
+  })[0];
+  return best ? { id: best.id, name: best.name } : null;
 }
 
 /** Markup meros uchun: identity bog‘lamaydi, faqat foizlarni olish. */

@@ -314,7 +314,7 @@ function sameListedName(left: string, right: string) {
 }
 
 function quoteFilterValue(value: string) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return value.trim().replace(/;/g, "\\;");
 }
 
 function rowMatchesName(rowName: string, wanted: string) {

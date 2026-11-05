@@ -942,9 +942,12 @@ router.get("/products/passport", async (req, res, next) => {
     const prior = findLastWaybillLine({ factoryCode: factory, productCode: code, size, groupCode: group });
     const priorMarkups = prior?.markup && typeof prior.markup === "object" ? prior.markup : {};
     const priorHasMarkup = SALE_TYPES.some((type) => priorMarkups[type] != null);
-    const priorPack = prior && prior.pachka > 1 ? prior.pachka : null;
+    const priorPack = prior && (prior.pachka > 1 ? prior.pachka : prior.pairs > 1 ? prior.pairs : 0) ? (prior.pachka > 1 ? prior.pachka : prior.pairs) : null;
     const priorCost = prior && prior.price > 0 ? prior.price : null;
     const priorGroup = prior?.sectionCode?.trim() || "";
+    const optionCost = options.find((item) => item.cost && item.cost > 0)?.cost ?? null;
+    const optionPack = options.find((item) => item.packSize && item.packSize > 1)?.packSize ?? null;
+    const optionGroup = groups.size === 1 ? [...groups][0] || "" : "";
     if (!matched || !product || (!size && sizes.size > 1) || (!group && groups.size > 1)) {
       let priceType = "";
       let markupPct: number | null = null;
@@ -975,11 +978,11 @@ router.get("/products/passport", async (req, res, next) => {
         markups,
         sales,
         options,
-        groupCode: priorGroup || "",
-        packSize: priorPack,
-        cost: priorCost,
+        groupCode: priorGroup || optionGroup || "",
+        packSize: priorPack ?? optionPack,
+        cost: priorCost ?? optionCost,
         salePrice: null,
-        fromWaybill: Boolean(prior),
+        fromWaybill: Boolean(prior || optionCost || optionPack || optionGroup),
       });
       return;
     }
@@ -1001,8 +1004,11 @@ router.get("/products/passport", async (req, res, next) => {
     const markups = SALE_TYPES.some((type) => inherited.markups?.[type] != null)
       ? inherited.markups
       : (priorHasMarkup ? priorMarkups : inherited.markups);
-    const cost = inherited.cost && inherited.cost > 0 ? inherited.cost : priorCost;
-    const pack = packSize > 1 ? packSize : priorPack;
+    const cost = (priorCost && priorCost > 0 ? priorCost : null)
+      ?? (inherited.cost && inherited.cost > 0 ? inherited.cost : null)
+      ?? (product.cost && product.cost > 0 ? product.cost : null)
+      ?? optionCost;
+    const pack = packSize > 1 ? packSize : (priorPack ?? optionPack);
     res.json({
       found: true,
       productId: matched.id,
