@@ -595,6 +595,8 @@ export function linkExactShipmentLines(factoryId: string, match: (line: Shipment
     if (shipment.factoryId !== factoryId || shipment.moyskladId) continue;
     for (const line of shipment.lines) {
       if (!line.productCode.trim()) continue;
+      // Allaqachon bog‘langan qator — qayta katalog skaneri GET ni o‘ldirmasin.
+      if (line.productId && line.sectionCode.trim() && line.pachka > 1) continue;
       const product = match(line);
       if (!product) continue;
       if (line.productId !== product.id) {

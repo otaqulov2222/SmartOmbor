@@ -86,13 +86,23 @@ function todayKey() {
   return tashkentDay();
 }
 
+/** "Arfa 00007" ≈ "Arfa 0007" — raqamlardagi yetakchi nol farqini yutadi. */
+function foldPartnerKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ').replace(/\d+/g, digit => String(Number(digit)));
+}
+
 function matchPartnerRow(items: Row[], selected: string) {
   const needle = selected.trim().toLowerCase();
   if (!needle) return null;
+  const folded = foldPartnerKey(selected);
   return items.find(row => row.name.toLowerCase() === needle)
     || items.find(row => (row.account?.name || '').toLowerCase() === needle)
     || items.find(row => (row.account?.catalogName || '').toLowerCase() === needle)
     || items.find(row => (row.account?.code || '').toLowerCase() === needle)
+    || items.find(row => foldPartnerKey(row.name) === folded)
+    || items.find(row => foldPartnerKey(row.account?.name || '') === folded)
+    || items.find(row => foldPartnerKey(row.account?.catalogName || '') === folded)
+    || items.find(row => foldPartnerKey(row.account?.code || '') === folded)
     || null;
 }
 

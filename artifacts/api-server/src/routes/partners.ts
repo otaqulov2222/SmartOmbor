@@ -234,11 +234,19 @@ router.get("/partner-factories/:id", async (req, res, next) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    // Faqat xotiradagi katalog (sync) — GET bloklanmasin. Bo‘sh guruhni faqat aniq (bitta) kartochkadan to‘ldiramiz.
-    const catalog = peekCatalog();
-    if (catalog) linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
+    // Avval javob — keyin fon bog‘lash. Sync match nginx 504 va bo‘sh UI berardi.
     const { passwordHash: _hash, salt: _salt, passwordPlain, ...safe } = account;
     res.json({ account: { ...safe, password: passwordPlain || null }, shipments: listShipments(account.id) });
+    const catalog = peekCatalog();
+    if (catalog) {
+      setImmediate(() => {
+        try {
+          linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
+        } catch (error) {
+          logger.warn({ err: error instanceof Error ? error.message : error }, "Background waybill link failed");
+        }
+      });
+    }
   } catch (error) {
     next(error);
   }

@@ -1070,6 +1070,31 @@ function isParentCard(product: { name: string }) {
   return !/\([^)]*\)\s*$/.test(product.name);
 }
 
+/** Parent-kartochkalar: asosiy kod bo‘yicha indeks — har safar to‘liq katalog filterlamaslik (GET 504). */
+let waybillIndexCatalog: Catalog | null = null;
+let waybillByCore = new Map<string, CatalogProduct[]>();
+
+function waybillIndexFor(catalog: Catalog) {
+  if (waybillIndexCatalog === catalog) return waybillByCore;
+  const next = new Map<string, CatalogProduct[]>();
+  const add = (key: string, product: CatalogProduct) => {
+    if (!key) return;
+    const bucket = next.get(key);
+    if (bucket) bucket.push(product);
+    else next.set(key, [product]);
+  };
+  for (const product of catalog.products) {
+    if (!isParentCard(product)) continue;
+    const parts = parseBordoName(product.name);
+    if (parts?.productCode) add(coreProductCode(parts.productCode), product);
+    if (product.code) add(coreProductCode(product.code), product);
+    if (product.article) add(coreProductCode(product.article), product);
+  }
+  waybillIndexCatalog = catalog;
+  waybillByCore = next;
+  return next;
+}
+
 export function listWaybillProducts(
   catalog: Catalog,
   input: { factoryCode: string; factoryName: string; productCode: string; size?: string; groupCode?: string },
@@ -1078,31 +1103,39 @@ export function listWaybillProducts(
   const size = input.size?.trim() || "";
   const group = input.groupCode?.trim() || "";
   if (!code) return [];
-  const rows = catalog.products.filter((product) => {
-    if (!isParentCard(product)) return false;
-    if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) return false;
+  const core = coreProductCode(code);
+  const indexed = waybillIndexFor(catalog).get(core) ?? [];
+  // Indeks bo‘sh/eski bo‘lsa fallback — lekin odatda kandidatlar kam.
+  const pool = indexed.length ? indexed : catalog.products;
+  const seen = new Set<string>();
+  const rows: CatalogProduct[] = [];
+  for (const product of pool) {
+    if (seen.has(product.id)) continue;
+    seen.add(product.id);
+    if (!isParentCard(product)) continue;
+    if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) continue;
     const parts = parseBordoName(product.name);
     if (parts) {
-      if (!productCodeMatches(parts.productCode, code)) return false;
-      if (size && compactCode(parts.size) !== compactCode(size)) return false;
+      if (!productCodeMatches(parts.productCode, code)) continue;
+      if (size && compactCode(parts.size) !== compactCode(size)) continue;
       if (group) {
-        if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
+        if (!parts.groupCode || !sameToken(parts.groupCode, group)) continue;
       }
-      return true;
+      rows.push(product);
+      continue;
     }
     // Parse bo‘lmasa faqat code/article aniq tengligi — wholeToken bilan 277→eski tovar xatosi bo‘lmasin.
     const byIdentity = sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code);
-    if (!byIdentity) return false;
-    if (size && !nameHasSize(product.name, size)) return false;
-    if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group) return false;
-    return true;
-  });
+    if (!byIdentity) continue;
+    if (size && !nameHasSize(product.name, size)) continue;
+    if (group && lastNumericToken(product.name) !== group && lastNumericToken(product.category || "") !== group) continue;
+    rows.push(product);
+  }
   if (!group) return rows;
-  const exact = rows.filter((product) => {
+  return rows.filter((product) => {
     const parts = parseBordoName(product.name);
     return parts ? sameToken(parts.groupCode, group) : lastNumericToken(product.name) === group || lastNumericToken(product.category || "") === group;
   });
-  return exact;
 }
 
 function establishedCardScore(product: CatalogProduct) {
