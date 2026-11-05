@@ -869,8 +869,24 @@ export function sameProductCode(left: string, right: string) {
   return Boolean(a) && a === b;
 }
 
+/** Model revision (R4/R5/R7) ni olib tashlab asosiy kodni qaytaradi — 088 R5 ≈ 088. */
+export function coreProductCode(value: string): string {
+  const raw = foldGlyphs(value).trim().replace(/\s+/g, " ");
+  if (!raw) return "";
+  const stripped = raw.replace(/\s+R-?\d+$/i, "").trim();
+  return compactCode(stripped || raw);
+}
+
+export function productModelToken(value: string): string {
+  const raw = foldGlyphs(value).trim().replace(/\s+/g, " ");
+  const hit = raw.match(/\s+(R-?\d+)$/i);
+  return hit ? hit[1].toUpperCase().replace(/^R-/i, "R") : "";
+}
+
 export function productCodeMatches(nameCode: string, typed: string) {
-  return sameProductCode(nameCode, typed);
+  const a = coreProductCode(nameCode);
+  const b = coreProductCode(typed);
+  return Boolean(a) && a === b;
 }
 
 export function foldProductName(value: string) {
@@ -887,6 +903,7 @@ export function sameBordoCard(
   if (!sameFactoryCode(parts.factoryCode, input.factoryCode)) return false;
   if (!productCodeMatches(parts.productCode, input.productCode)) return false;
   if (input.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(input.size))) return false;
+  // Guruh qattiq: 1020 ≠ 1021 ≠ 2021 — xato guruhga eski kartochka topilmasin.
   const group = input.groupCode?.trim() || "";
   if (group) {
     if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
@@ -953,17 +970,19 @@ export function lastNumericToken(label: string) {
   return groups[groups.length - 1] || nums[nums.length - 1] || "";
 }
 
-export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string } | null {
+export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string; model: string } | null {
   let raw = foldGlyphs(name).trim().replace(/\s+/g, " ");
   let color = "";
+  let model = "";
   const paren = raw.match(/\(([^)]+)\)\s*$/);
   if (paren && paren.index != null) {
     color = paren[1].trim();
     raw = raw.slice(0, paren.index).trim();
   }
+  // Oxiridagi R5 faqat size bo‘lmasa model/rang — size dan oldin ham bo‘lishi mumkin.
   const tail = raw.match(/\s+(R-?\d+)\s*$/i);
   if (tail && tail.index != null) {
-    color = color || tail[1];
+    model = tail[1].toUpperCase().replace(/^R-/i, "R");
     raw = raw.slice(0, tail.index).trim();
   }
   raw = raw.replace(/\s+\d{4,}$/, "");
@@ -988,9 +1007,14 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   while (productTokens.length >= 2 && /^\d{4,}$/.test(productTokens[productTokens.length - 1])) {
     productTokens = productTokens.slice(0, -1);
   }
+  // "088 R5" → productCode=088, model=R5 (rang emas — parent kartochka bo‘lib qolsin).
+  if (productTokens.length >= 2 && /^R-?\d+$/i.test(productTokens[productTokens.length - 1])) {
+    model = productTokens[productTokens.length - 1].toUpperCase().replace(/^R-/i, "R");
+    productTokens = productTokens.slice(0, -1);
+  }
   const productCode = productTokens.join(" ");
   if (!productCode) return null;
-  return { factoryCode, groupCode, productCode, size, color };
+  return { factoryCode, groupCode, productCode, size, color, model };
 }
 
 function sameFactoryLabel(left: string, right: string) {
@@ -1081,11 +1105,26 @@ export function listWaybillProducts(
   return exact;
 }
 
-export function pickPassport(rows: CatalogProduct[]): { id: string; name: string } | null {
+function establishedCardScore(product: CatalogProduct) {
+  let score = 0;
+  if (product.cost && product.cost > 0) score += 8;
+  if (product.article?.trim()) score += 6;
+  if ((product.stock || 0) > 0) score += 4;
+  if ((product.barcodes || []).some((code) => code && !/^200\d{10}$/.test(code))) score += 3;
+  const code = String(product.code || "").trim();
+  // MoySklad auto-code (1284399…) yangi dublikatlarda — eski qisqa kodlar afzal.
+  if (code && !/^128\d{7,}$/.test(code)) score += 5;
+  if (code && code.length <= 6) score += 2;
+  return score;
+}
+
+export function pickPassport(
+  rows: CatalogProduct[],
+  prefer?: { groupCode?: string; productCode?: string },
+): { id: string; name: string } | null {
   if (!rows.length) return null;
   if (rows.length === 1) return { id: rows[0].id, name: rows[0].name };
-  // Agar barcha topilgan kartochkalar aynan bitta (factory + group + code + size) bo‘lsa (tarixiy dublikatlar),
-  // yangi dublikat ochmaslik va passport/narx ishlashi uchun asosiy kartochkani tanlaymiz.
+  // Identity: factory + guruh + asosiy kod + razmer (bir xil guruhdagi twinlar — yangi ochilmasin).
   const keys = new Set(
     rows.map((row) => {
       const p = parseBordoName(row.name);
@@ -1093,16 +1132,30 @@ export function pickPassport(rows: CatalogProduct[]): { id: string; name: string
       return [
         canonicalFactoryCode(p.factoryCode),
         compactCode(p.groupCode),
-        compactCode(p.productCode),
+        coreProductCode(p.productCode),
         compactCode(p.size),
       ].join("|");
     }),
   );
   if (keys.size !== 1) return null;
+  const wantedGroup = prefer?.groupCode?.trim() || "";
+  const wantedModel = productModelToken(prefer?.productCode || "");
   const best = [...rows].sort((a, b) => {
-    const aCost = Number(Boolean(a.cost && a.cost > 0));
-    const bCost = Number(Boolean(b.cost && b.cost > 0));
-    if (bCost !== aCost) return bCost - aCost;
+    const aEst = establishedCardScore(a);
+    const bEst = establishedCardScore(b);
+    if (bEst !== aEst) return bEst - aEst;
+    const pa = parseBordoName(a.name);
+    const pb = parseBordoName(b.name);
+    if (wantedModel) {
+      const aM = Number(Boolean(pa?.model && pa.model.toUpperCase() === wantedModel));
+      const bM = Number(Boolean(pb?.model && pb.model.toUpperCase() === wantedModel));
+      if (bM !== aM) return bM - aM;
+    }
+    if (wantedGroup) {
+      const aG = Number(Boolean(pa?.groupCode && sameToken(pa.groupCode, wantedGroup)));
+      const bG = Number(Boolean(pb?.groupCode && sameToken(pb.groupCode, wantedGroup)));
+      if (bG !== aG) return bG - aG;
+    }
     if ((b.stock || 0) !== (a.stock || 0)) return (b.stock || 0) - (a.stock || 0);
     return a.name.length - b.name.length;
   })[0];
@@ -1125,8 +1178,11 @@ export function matchWaybillProduct(
 ): { id: string; name: string } | null {
   const code = input.productCode.trim();
   if (!code) return null;
-  // Faqat aniq factory+group+code+size. Boshqa guruhdagi eski kartochkaga yopishtirish taqiqlanadi.
-  return pickPassport(listWaybillProducts(catalog, input));
+  // Aniq factory + guruh + kod + razmer. Guruh xato bo‘lsa — topilmaydi (yumshoq match yo‘q).
+  return pickPassport(listWaybillProducts(catalog, input), {
+    groupCode: input.groupCode,
+    productCode: input.productCode,
+  });
 }
 
 export function matchNamedProducts(

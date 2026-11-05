@@ -1,4 +1,4 @@
-import { canonicalFactoryCode, compactCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, productBelongsToFactory, productCodeMatches, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog } from "./catalog";
+import { canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog, type CatalogProduct } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -83,8 +83,8 @@ export async function productPackSize(productId: string): Promise<number> {
 }
 
 export async function ensurePachka(productId: string, packSize: number): Promise<GoodsPack | null> {
-  try {
-    const current = await moysklad<{ uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
+  const savePack = async (): Promise<GoodsPack | null> => {
+    const current = await moysklad<{ id?: string; name?: string; code?: string; uom?: { meta?: Meta }; packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom,uom`);
     const packs = current.packs ?? [];
     const pachka = packs.find((pack) => isPachkaPack(pack));
     if (!(packSize > 1)) {
@@ -104,7 +104,21 @@ export async function ensurePachka(productId: string, packSize: number): Promise
     if (saved?.id && saved.uom?.meta) return saved;
     const again = await moysklad<{ packs?: GoodsPack[] }>(`/entity/product/${productId}?expand=packs.uom`);
     return (again.packs ?? []).find((pack) => isPachkaPack(pack) && pack.quantity === packSize) ?? null;
+  };
+  try {
+    return await savePack();
   } catch (error) {
+    if (uniqueNameConflict(error) && (uniqueNameParameter(error) === "code" || /код|code/i.test(error instanceof Error ? error.message : ""))) {
+      try {
+        const row = await productById(productId);
+        if (row) await ensureUniqueProductCode(row);
+        return await savePack();
+      } catch (retryError) {
+        if (!permissionDenied(retryError)) {
+          logger.warn({ productId, packSize, err: retryError instanceof Error ? retryError.message : retryError }, "MoySklad pack code-repair failed");
+        }
+      }
+    }
     if (!permissionDenied(error)) throw error;
     logger.warn({ productId, packSize, err: error instanceof Error ? error.message : error }, "MoySklad pack skipped");
     return null;
@@ -457,7 +471,7 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
   if (!sameFactoryCode(parts.factoryCode, expected.factoryCode)) return false;
   if (!productCodeMatches(parts.productCode, expected.productCode)) return false;
   if (compactCode(parts.size) !== compactCode(expected.size)) return false;
-  // Guruh ham bir xil bo‘lishi shart — aks holda 277 boshqa guruhdagi eski kartochkaga yopishadi.
+  // Guruh qattiq: 1020 ≠ 1021 — xato guruhga eski kartochka yopishmasin.
   if (expected.groupCode) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
   }
@@ -524,13 +538,35 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
   if (wanted) {
     const exact = await productByExactName(wanted);
     if (exact && recoveredCardFits(exact, wanted) && sameListedName(exact.name || "", wanted)) {
-      return asCreated(exact);
+      return asCreated(await ensureUniqueProductCode(exact));
+    }
+    // Bir xil guruh + kod + razmer (masalan 088 ≈ 088 R5) — yangi ochmaymiz. Guruh farqi — ochiladi.
+    const parsed = parseBordoName(wanted);
+    if (parsed) {
+      const byIdentity = await findRemoteByIdentity({
+        factoryCode: parsed.factoryCode,
+        sectionCode: parsed.groupCode,
+        productCode: parsed.productCode,
+        size: parsed.size,
+      }, {
+        factoryCode: parsed.factoryCode,
+        factoryName: "",
+        catalog: { products: [] } as unknown as Catalog,
+      }).catch(() => null);
+      if (byIdentity?.id && recoveredCardFits(byIdentity, wanted)) {
+        logger.info({ wanted, reuse: byIdentity.id, name: byIdentity.name }, "MoySklad create reused identity card");
+        return asCreated(await ensureUniqueProductCode(byIdentity));
+      }
     }
   }
   // skipLookup faqat sekin fuzzy search’ni o‘tkazib yuboradi; aniq nom yuqorida tekshirildi.
   if (!opts?.skipLookup) {
     const listed = wanted ? await productByName(wanted) : null;
-    if (listed && recoveredCardFits(listed, wanted)) return asCreated(listed);
+    if (listed && recoveredCardFits(listed, wanted)) return asCreated(await ensureUniqueProductCode(listed));
+  }
+  // Parallel create da MoySklad auto-code to‘qnashmasin — o‘zimiz unikal kod beramiz.
+  if (!String(payload.code || "").trim()) {
+    payload.code = await mintUniqueAssortmentCode();
   }
   for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 3; attempt += 1) {
     try {
@@ -546,17 +582,23 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
             "MoySklad duplicate product delete skipped",
             { created: created.id, reuse: older.id },
           );
-          return asCreated(rememberProduct(older, [wanted]));
+          return asCreated(await ensureUniqueProductCode(rememberProduct(older, [wanted])));
         }
       }
-      return asCreated(rememberProduct(created, [wanted]));
+      const remembered = rememberProduct(created, [wanted]);
+      return asCreated(await ensureUniqueProductCode(remembered));
     } catch (error) {
       const existing = wanted ? await recoverExistingProduct(wanted) : null;
-      if (existing) return asCreated(existing);
+      if (existing) return asCreated(await ensureUniqueProductCode(existing));
       if (uniqueNameConflict(error) || writeDropped(error)) {
         const parameter = uniqueNameParameter(error);
         if (parameter === "barcodes") {
           delete payload.barcodes;
+          continue;
+        }
+        if (parameter === "code" || /код|code/i.test(error instanceof Error ? error.message : "")) {
+          payload.code = await mintUniqueAssortmentCode();
+          logger.warn({ name: payload.name, parameter }, "MoySklad product create retry with fresh code");
           continue;
         }
         if (parameter !== "name" && ("article" in payload || "code" in payload || parameter === "article" || parameter === "code")) {
@@ -582,7 +624,7 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
     }
   }
   const fallback = wanted ? await recoverExistingProduct(wanted) : null;
-  if (fallback) return asCreated(fallback);
+  if (fallback) return asCreated(await ensureUniqueProductCode(fallback));
   throw new MoySkladError("MoySklad mahsulot yaratilmadi", 403);
 }
 
@@ -617,6 +659,44 @@ async function assortmentHoldersOfCode(code: string) {
   return [...ids];
 }
 
+async function mintUniqueAssortmentCode(excludeIds: string[] = []) {
+  const exclude = new Set(excludeIds.filter(Boolean));
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const next = freshAssortmentCode();
+    const holders = await assortmentHoldersOfCode(next);
+    if (holders.every((id) => exclude.has(id))) return next;
+  }
+  return `${freshAssortmentCode()}${Math.floor(Math.random() * 90 + 10)}`.slice(-12);
+}
+
+/** Tovar kodi boshqa assortment bilan to‘qnashsa — yangi unikal kod (UI “код должен быть уникальным” chiqmasin). */
+async function ensureUniqueProductCode(product: ProductRow): Promise<ProductRow> {
+  if (!product.id) return product;
+  const current = String(product.code || "").trim();
+  const holders = current ? await assortmentHoldersOfCode(current) : [];
+  const clashes = !current || holders.some((id) => id !== product.id);
+  if (!clashes) return product;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const next = await mintUniqueAssortmentCode([product.id]);
+    if (next === current) continue;
+    try {
+      const saved = await moyskladSend<ProductRow>(`/entity/product/${encodeURIComponent(product.id)}`, { code: next }, "PUT");
+      logger.warn({ product: product.id, name: product.name, from: current || null, to: next }, "MoySklad product code reassigned");
+      return rememberProduct({ ...product, ...saved, code: saved.code || next }, [product.name || ""]);
+    } catch (error) {
+      const parameter = uniqueNameParameter(error);
+      if (uniqueNameConflict(error) && (parameter === "code" || !parameter)) continue;
+      if (permissionDenied(error)) {
+        logger.warn({ product: product.id, err: error instanceof Error ? error.message : error }, "MoySklad product code repair skipped");
+        return product;
+      }
+      if (!(error instanceof MoySkladError)) throw error;
+      logger.warn({ product: product.id, err: error.message }, "MoySklad product code repair retry");
+    }
+  }
+  return product;
+}
+
 /** Modifikatsiya kodi ota tovar yoki boshqa kartochka bilan to‘qnashsa — yangi unikal kod beradi. */
 async function ensureUniqueVariantCode(variant: VariantRow, product: ProductRow): Promise<VariantRow> {
   if (!variant.id) return variant;
@@ -626,7 +706,7 @@ async function ensureUniqueVariantCode(variant: VariantRow, product: ProductRow)
   const clashes = holders.some((id) => id !== variant.id) || (current && parentCode && current === parentCode);
   if (!clashes) return variant;
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    const next = freshAssortmentCode();
+    const next = await mintUniqueAssortmentCode([variant.id, product.id]);
     if (next === current || next === parentCode) continue;
     try {
       const saved = await moyskladSend<VariantRow>(`/entity/variant/${encodeURIComponent(variant.id)}`, { code: next }, "PUT");
@@ -1023,7 +1103,7 @@ function acceptFactoryProduct(
   line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string },
 ): ProductRow | null {
   if (!row?.id) return null;
-  const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode);
+  const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode || "", scope.factoryCode);
   const catalogProduct = scope.catalog.products.find((product) => product.id === row.id);
   // Faqat kartochkadagi HAQIQIY nom — wanted nom bilan yopib qo‘yib eski id’ni qabul qilmaslik.
   const name = (row.name || catalogProduct?.name || "").trim();
@@ -1041,12 +1121,102 @@ function acceptFactoryProduct(
   return row;
 }
 
+function pickIdentityProduct(
+  rows: ProductRow[],
+  line: { sectionCode?: string; productCode: string; size: string },
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+): ProductRow | null {
+  const accepted = rows
+    .map((row) => acceptFactoryProduct(row, scope, line))
+    .filter((row): row is ProductRow => Boolean(row?.id));
+  if (!accepted.length) return null;
+  const asCatalog: CatalogProduct[] = accepted.map((row) => {
+    const listed = scope.catalog.products.find((product) => product.id === row.id);
+    return {
+      id: row.id,
+      name: row.name || listed?.name || "",
+      code: row.code || listed?.code || null,
+      article: row.article || listed?.article || null,
+      barcodes: listed?.barcodes ?? [],
+      factory: listed?.factory ?? null,
+      category: listed?.category ?? null,
+      unit: listed?.unit ?? null,
+      packType: listed?.packType ?? null,
+      packSize: listed?.packSize ?? 0,
+      imageUrl: listed?.imageUrl ?? null,
+      stock: listed?.stock ?? 0,
+      available: listed?.available ?? 0,
+      cost: listed?.cost ?? null,
+      salePrice: listed?.salePrice ?? null,
+      lastSale: listed?.lastSale ?? null,
+      lastReceipt: listed?.lastReceipt ?? null,
+      sales7: listed?.sales7 ?? 0,
+      sales30: listed?.sales30 ?? 0,
+      sales60: listed?.sales60 ?? 0,
+      sales90: listed?.sales90 ?? 0,
+      daysCover: listed?.daysCover ?? null,
+      stockStatus: listed?.stockStatus ?? "non_moving",
+      inTransit: listed?.inTransit ?? 0,
+    };
+  });
+  const picked = pickPassport(asCatalog, { groupCode: line.sectionCode, productCode: line.productCode });
+  if (!picked?.id) return accepted[0] ?? null;
+  return accepted.find((row) => row.id === picked.id) ?? accepted[0] ?? null;
+}
+
+/** Katalog/aniq nom topmasa — MoySklad search orqali factory+guruh+kod+razmer (guruh qattiq). */
+async function findRemoteByIdentity(
+  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string },
+  scope: { factoryCode: string; factoryName: string; catalog: Catalog },
+): Promise<ProductRow | null> {
+  const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode || "", scope.factoryCode);
+  const size = normalizeBordoSize(line.size);
+  const code = line.productCode.trim();
+  const group = (line.sectionCode || "").trim();
+  if (!factory || !code || !size) return null;
+  const core = coreProductCode(code) || compactCode(code);
+  const queries = [...new Set([
+    ["Bordo", factory, group, code, size].filter(Boolean).join(" "),
+    ["Bordo", factory, group, core, size].filter(Boolean).join(" "),
+    group ? `${factory} ${group} ${code}` : `${factory} ${code}`,
+    code,
+  ].map((item) => item.trim()).filter((item) => item.length >= 2))];
+  const seen = new Set<string>();
+  const hits: ProductRow[] = [];
+  for (const query of queries) {
+    try {
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string }> }>(
+        `/entity/product?limit=50&search=${encodeURIComponent(query)}`,
+      );
+      for (const row of page.rows) {
+        if (!row.id || seen.has(row.id)) continue;
+        if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group })) continue;
+        seen.add(row.id);
+        const loaded = await productById(row.id);
+        if (loaded) hits.push(rememberProduct(loaded, [row.name || "", query]));
+      }
+      if (hits.length) break;
+    } catch (error) {
+      if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
+      logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad identity search skipped");
+    }
+  }
+  const picked = pickIdentityProduct(hits, line, scope);
+  if (picked) {
+    logger.info({
+      wanted: { factory, group, code, size, model: productModelToken(code) },
+      hit: { id: picked.id, name: picked.name, code: picked.code },
+    }, "kirim identity remote match");
+  }
+  return picked;
+}
+
 export async function findExistingBordoProduct(
   line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
   opts?: { remote?: boolean | "exact" },
 ): Promise<ProductRow | null> {
-  const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode);
+  const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode || "", scope.factoryCode);
   const groupCode = line.sectionCode || "";
   const size = normalizeBordoSize(line.size);
   const name = ["Bordo", factory, groupCode, line.productCode, size].filter(Boolean).join(" ").trim();
@@ -1086,16 +1256,21 @@ export async function findExistingBordoProduct(
       if (accepted) return rememberProduct(accepted, [name]);
     }
   }
-  // remote:false — umuman remote yo‘q. default/"exact" — faqat aniq nom (fuzzy search YO‘Q).
+  // remote:false — umuman remote yo‘q.
   if (opts?.remote === false) return null;
   if (name.length < 2) return null;
   const named = acceptFactoryProduct(await productByExactName(name), scope, line);
   if (named) return rememberProduct(named, [name]);
-  // Alias aniq nomlar (guruhli/guruhsiz) — fuzzy search YO‘Q, faqat exact name + acceptFactoryProduct.
+  // Alias aniq nomlar (guruhli/guruhsiz).
   for (const alias of nameAliases(name)) {
     if (alias === name) continue;
     const hit = acceptFactoryProduct(await productByExactName(alias), scope, line);
     if (hit) return rememberProduct(hit, [name, alias]);
+  }
+  // Bir xil guruh ichida model farqi (088 vs 088 R5) yoki twinlar — remote identity.
+  if (opts?.remote === "exact") {
+    const byIdentity = await findRemoteByIdentity(line, scope);
+    if (byIdentity) return byIdentity;
   }
   return null;
 }
