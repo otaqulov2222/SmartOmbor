@@ -682,8 +682,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const saveQueue = useRef(Promise.resolve(true));
   const [settings, setSettings] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Default: barcha yuklar. Bugungi sana filtri eski yuk xatlarini yashirib, “yo‘qolgan”dek ko‘rsatardi.
-  const [day, setDay] = useState('');
+  // Default: faqat shu kun (Toshkent). Eski yuklar — «Barchasi» yoki sana tozalash.
+  const [day, setDay] = useState(() => todayKey());
   const [openShipment, setOpenShipment] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [colorFor, setColorFor] = useState<string | null>(null);
@@ -1025,7 +1025,6 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   };
 
   const visible = useMemo(() => shipments.filter(shipment => {
-    if (shipment.status === 'sent') return true;
     if (!day) return true;
     return tashkentDay(shipment.date) === day;
   }), [shipments, day]);
