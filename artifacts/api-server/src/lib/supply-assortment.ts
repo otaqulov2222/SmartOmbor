@@ -344,7 +344,8 @@ function rowMatchesName(rowName: string, wanted: string) {
   if (!sameBordoColor(parts.color, parsed.color)) return false;
   return sameFactoryCode(parts.factoryCode, parsed.factoryCode)
     && productCodeMatches(parts.productCode, parsed.productCode)
-    && compactCode(parts.size) === compactCode(parsed.size);
+    && compactCode(parts.size) === compactCode(parsed.size)
+    && compactCode(parts.article) === compactCode(parsed.article);
 }
 
 function pickNamedRow(rows: Array<{ id?: string; name?: string }>, wanted: string) {
@@ -375,9 +376,16 @@ function nameAliases(name: string) {
   if (parsed) {
     const withGroup = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
     const withoutGroup = ["Bordo", parsed.factoryCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
-    aliases.push(withGroup, withoutGroup);
+    // Artikul bo‘lsa — alias ham artikulli (43937). Artsiz alias eski kartochkaga yopishmasin.
+    if (parsed.article) {
+      aliases.push(`${withGroup} ${parsed.article}`, `${withoutGroup} ${parsed.article}`);
+    } else {
+      aliases.push(withGroup, withoutGroup);
+    }
     if (parsed.color) {
-      aliases.push(`${withGroup} ${parsed.color}`, `${withGroup} (${parsed.color})`, `${withoutGroup} ${parsed.color}`, `${withoutGroup} (${parsed.color})`);
+      const base = parsed.article ? `${withGroup} ${parsed.article}` : withGroup;
+      const baseNoGroup = parsed.article ? `${withoutGroup} ${parsed.article}` : withoutGroup;
+      aliases.push(`${base} ${parsed.color}`, `${base} (${parsed.color})`, `${baseNoGroup} ${parsed.color}`, `${baseNoGroup} (${parsed.color})`);
     }
   }
   return [...new Set(aliases.map((item) => item.trim().replace(/\s+/g, " ")).filter(Boolean))];
@@ -408,6 +416,7 @@ async function searchListedName(name: string) {
           productCode: parsed.productCode,
           size: parsed.size,
           groupCode: parsed.groupCode,
+          article: parsed.article,
         }));
         if (identity) {
           const loaded = await rowFromSearchHit(identity, trimmed);
@@ -479,6 +488,9 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
   if (expected.groupCode) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
   }
+  // Artikul qattiq: "…24-29" ≠ "…24-29 43937".
+  const hitArticle = compactCode(parts.article || hit.article || "");
+  if (compactCode(expected.article) !== hitArticle) return false;
   return true;
 }
 
@@ -573,6 +585,7 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
         sectionCode: parsed.groupCode,
         productCode: parsed.productCode,
         size: parsed.size,
+        article: parsed.article,
       }, {
         factoryCode: parsed.factoryCode,
         factoryName: "",
@@ -1143,6 +1156,10 @@ function acceptFactoryProduct(
   if (group) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== group) return null;
   }
+  // Yuk xatida artikul yo‘q → "…43937" eskisiga yopishmasin.
+  const wantedArticle = compactCode((line as { article?: string }).article || "");
+  const cardArticle = compactCode(parts.article || catalogProduct?.article || row.article || "");
+  if (wantedArticle !== cardArticle) return null;
   return row;
 }
 
@@ -1191,13 +1208,14 @@ function pickIdentityProduct(
 
 /** Katalog/aniq nom topmasa — MoySklad search orqali factory+guruh+kod+razmer (guruh qattiq). */
 async function findRemoteByIdentity(
-  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string },
+  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; article?: string },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
 ): Promise<ProductRow | null> {
   const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode || "", scope.factoryCode);
   const size = normalizeBordoSize(line.size);
   const code = line.productCode.trim();
   const group = (line.sectionCode || "").trim();
+  const article = compactCode(line.article || "");
   if (!factory || !code || !size) return null;
   const core = coreProductCode(code) || compactCode(code);
   const exactName = ["Bordo", factory, group, code, size].filter(Boolean).join(" ").trim();
@@ -1213,19 +1231,19 @@ async function findRemoteByIdentity(
   if (exactName.length >= 2) {
     for (const row of await listExactNamedProducts(exactName).catch(() => [] as ProductRow[])) {
       if (!row.id || seen.has(row.id)) continue;
-      if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group })) continue;
+      if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group, article }, { article: row.article })) continue;
       seen.add(row.id);
       hits.push(row);
     }
   }
   for (const query of queries) {
     try {
-      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string }> }>(
+      const page = await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string; article?: string }> }>(
         `/entity/product?limit=50&search=${encodeURIComponent(query)}`,
       );
       for (const row of page.rows) {
         if (!row.id || seen.has(row.id)) continue;
-        if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group })) continue;
+        if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group, article }, { article: row.article })) continue;
         seen.add(row.id);
         const loaded = await productById(row.id);
         if (loaded) hits.push(rememberProduct(loaded, [row.name || "", query]));

@@ -915,12 +915,20 @@ export function productCodeMatches(nameCode: string, typed: string) {
 }
 
 export function foldProductName(value: string) {
-  return normalizeBordoCode(value).replace(/\s+\d{4,}$/, "");
+  // Artikul (43937) identity — strip qilinsa eski/yangi kartochka bir xil bo‘lib qoladi.
+  return normalizeBordoCode(value);
+}
+
+/** Nom oxiridagi yoki MoySklad article maydonidagi artikul (4+ raqam). */
+export function bordoCardArticle(name: string, fallbackArticle = ""): string {
+  const parts = parseBordoName(name);
+  return compactCode(parts?.article || fallbackArticle || "");
 }
 
 export function sameBordoCard(
   name: string,
-  input: { factoryCode: string; productCode: string; size: string; groupCode?: string },
+  input: { factoryCode: string; productCode: string; size: string; groupCode?: string; article?: string },
+  extras?: { article?: string | null },
 ) {
   const parts = parseBordoName(name);
   if (!parts) return false;
@@ -933,6 +941,10 @@ export function sameBordoCard(
   if (group) {
     if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
   }
+  // Artikul qattiq: "…24-29" ≠ "…24-29 43937" (o‘tgan yilgi qo‘shimcha artikul).
+  const wanted = compactCode(input.article ?? "");
+  const got = compactCode(parts.article || extras?.article || "");
+  if (wanted !== got) return false;
   return true;
 }
 
@@ -995,10 +1007,11 @@ export function lastNumericToken(label: string) {
   return groups[groups.length - 1] || nums[nums.length - 1] || "";
 }
 
-export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string; model: string } | null {
+export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string; model: string; article: string } | null {
   let raw = foldGlyphs(name).trim().replace(/\s+/g, " ");
   let color = "";
   let model = "";
+  let article = "";
   const paren = raw.match(/\(([^)]+)\)\s*$/);
   if (paren && paren.index != null) {
     color = paren[1].trim();
@@ -1010,13 +1023,22 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
     model = tail[1].toUpperCase().replace(/^R-/i, "R");
     raw = raw.slice(0, tail.index).trim();
   }
-  raw = raw.replace(/\s+\d{4,}$/, "");
+  // Size dan keyingi 4+ raqam = artikul (43937). Olib tashlamasdan saqlaymiz — aks holda eski kartochkaga yopishadi.
+  const articleTail = raw.match(/\s+(\d{4,})\s*$/);
+  if (articleTail && articleTail.index != null) {
+    const beforeArticle = raw.slice(0, articleTail.index);
+    if (/\d{1,2}-\d{1,2}/.test(beforeArticle)) {
+      article = articleTail[1];
+      raw = beforeArticle.trim();
+    }
+  }
   const sizeMatches = [...raw.matchAll(/\d{1,2}-\d{1,2}/g)];
   const sizeMatch = [...sizeMatches].reverse().find((item) => BORDO_SIZES.some((size) => compactCode(size) === compactCode(item[0]))) ?? sizeMatches[sizeMatches.length - 1];
   if (!sizeMatch || sizeMatch.index == null) return null;
   const size = normalizeBordoSize(sizeMatch[0]);
-  const after = raw.slice(sizeMatch.index + size.length).trim();
-  if (after && !/^\d{4,}$/.test(after)) color = color || after.replace(/^\((.*)\)$/, "$1").trim();
+  const after = raw.slice(sizeMatch.index + sizeMatch[0].length).trim();
+  if (after && /^\d{4,}$/.test(after)) article = article || after;
+  else if (after) color = color || after.replace(/^\((.*)\)$/, "$1").trim();
   const head = raw.slice(0, sizeMatch.index).trim();
   const tokens = head.split(/\s+/).filter(Boolean);
   if (tokens[0] && /^(bordo|бордо)$/i.test(tokens[0])) tokens.shift();
@@ -1039,7 +1061,7 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   }
   const productCode = productTokens.join(" ");
   if (!productCode) return null;
-  return { factoryCode, groupCode, productCode, size, color, model };
+  return { factoryCode, groupCode, productCode, size, color, model, article };
 }
 
 function sameFactoryLabel(left: string, right: string) {
@@ -1122,11 +1144,12 @@ function waybillIndexFor(catalog: Catalog) {
 
 export function listWaybillProducts(
   catalog: Catalog,
-  input: { factoryCode: string; factoryName: string; productCode: string; size?: string; groupCode?: string },
+  input: { factoryCode: string; factoryName: string; productCode: string; size?: string; groupCode?: string; article?: string },
 ): CatalogProduct[] {
   const code = input.productCode.trim();
   const size = input.size?.trim() || "";
   const group = input.groupCode?.trim() || "";
+  const wantedArticle = compactCode(input.article || "");
   if (!code) return [];
   const core = coreProductCode(code);
   // To‘liq katalog fallback yo‘q — GET/matches 504 bermasin. Indeks miss = bo‘sh.
@@ -1140,6 +1163,9 @@ export function listWaybillProducts(
     if (!isParentCard(product)) continue;
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) continue;
     const parts = parseBordoName(product.name);
+    const cardArticle = compactCode(parts?.article || product.article || "");
+    // Artikul bo‘sh ≠ 43937 — o‘tgan yilgi kartochkaga yangi kirim yopishmasin.
+    if (cardArticle !== wantedArticle) continue;
     if (parts) {
       if (!productCodeMatches(parts.productCode, code)) continue;
       if (size && compactCode(parts.size) !== compactCode(size)) continue;
@@ -1192,6 +1218,7 @@ export function pickPassport(
         compactCode(p.groupCode),
         coreProductCode(p.productCode),
         compactCode(p.size),
+        compactCode(p.article || row.article || ""),
       ].join("|");
     }),
   );
@@ -1232,11 +1259,11 @@ export function pickSibling(rows: CatalogProduct[]): { id: string; name: string 
 
 export function matchWaybillProduct(
   catalog: Catalog,
-  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },
+  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string; article?: string },
 ): { id: string; name: string } | null {
   const code = input.productCode.trim();
   if (!code) return null;
-  // Aniq factory + guruh + kod + razmer. Guruh xato bo‘lsa — topilmaydi (yumshoq match yo‘q).
+  // Aniq factory + guruh + kod + razmer + artikul. Artikul farqi — yangi kartochka.
   return pickPassport(listWaybillProducts(catalog, input), {
     groupCode: input.groupCode,
     productCode: input.productCode,
@@ -1244,11 +1271,11 @@ export function matchWaybillProduct(
 }
 
 export function matchNamedProducts(
-  rows: Array<{ id: string; name: string; factory?: string | null }>,
-  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string },
+  rows: Array<{ id: string; name: string; factory?: string | null; article?: string | null }>,
+  input: { factoryCode: string; factoryName: string; productCode: string; size: string; groupCode?: string; article?: string },
 ): { id: string; name: string } | null {
   return matchWaybillProduct(
-    { products: rows.map((row) => emptyProduct({ id: row.id, name: row.name, factory: row.factory ?? null })) } as Catalog,
+    { products: rows.map((row) => emptyProduct({ id: row.id, name: row.name, factory: row.factory ?? null, article: row.article ?? null })) } as Catalog,
     input,
   );
 }
