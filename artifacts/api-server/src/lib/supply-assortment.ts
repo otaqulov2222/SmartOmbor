@@ -280,7 +280,11 @@ function rememberProduct(row: ProductRow, aliases: string[] = []) {
   productCache.set(`id:${row.id}`, row);
   for (const name of [row.name, ...aliases]) {
     const key = foldProductName(String(name || "").trim().replace(/\s+/g, " "));
-    if (key) productCache.set(`name:${key}`, row);
+    if (!key) continue;
+    const prev = productCache.get(`name:${key}`);
+    // Twin nomlar: cache’da yangi 1284399… o‘rniga eski/mustahkam kartochka saqlansin.
+    const better = prev ? rankProductRows([prev, row]) : row;
+    productCache.set(`name:${key}`, better || row);
   }
   return row;
 }
@@ -504,9 +508,28 @@ async function listExactNamedProducts(name: string) {
   return rows;
 }
 
+/** Twin kartochkalar ichidan eski/mustahkamini tanlaydi (yangi 1284399… emas). */
+function rankProductRows(rows: ProductRow[]): ProductRow | null {
+  if (!rows.length) return null;
+  if (rows.length === 1) return rows[0] ?? null;
+  return [...rows].sort((a, b) => {
+    const score = (row: ProductRow) => {
+      let value = 0;
+      if (row.article?.trim()) value += 6;
+      const code = String(row.code || "").trim();
+      if (code && !/^128\d{7,}$/.test(code)) value += 5;
+      if (code && code.length <= 6) value += 2;
+      return value;
+    };
+    const diff = score(b) - score(a);
+    if (diff) return diff;
+    return (a.name || "").length - (b.name || "").length;
+  })[0] ?? null;
+}
+
 async function productByExactName(name: string) {
   const rows = await listExactNamedProducts(name);
-  return rows[0] ?? null;
+  return rankProductRows(rows);
 }
 
 async function recoverExistingProduct(name: string) {
@@ -536,8 +559,10 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
   const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
   // MoySkladda nom UNIQUE EMAS — oldindan aniq nom bo‘yicha qayta ishlatish majburiy, aks holda dublikat kodlar chiqadi.
   if (wanted) {
-    const exact = await productByExactName(wanted);
-    if (exact && recoveredCardFits(exact, wanted) && sameListedName(exact.name || "", wanted)) {
+    const exactTwins = (await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]))
+      .filter((row) => recoveredCardFits(row, wanted) && sameListedName(row.name || "", wanted));
+    const exact = rankProductRows(exactTwins);
+    if (exact) {
       return asCreated(await ensureUniqueProductCode(exact));
     }
     // Bir xil guruh + kod + razmer (masalan 088 ≈ 088 R5) — yangi ochmaymiz. Guruh farqi — ochiladi.
@@ -1175,14 +1200,24 @@ async function findRemoteByIdentity(
   const group = (line.sectionCode || "").trim();
   if (!factory || !code || !size) return null;
   const core = coreProductCode(code) || compactCode(code);
+  const exactName = ["Bordo", factory, group, code, size].filter(Boolean).join(" ").trim();
   const queries = [...new Set([
-    ["Bordo", factory, group, code, size].filter(Boolean).join(" "),
+    exactName,
     ["Bordo", factory, group, core, size].filter(Boolean).join(" "),
     group ? `${factory} ${group} ${code}` : `${factory} ${code}`,
     code,
   ].map((item) => item.trim()).filter((item) => item.length >= 2))];
   const seen = new Set<string>();
   const hits: ProductRow[] = [];
+  // Avval aniq nomdagi BARCHA twinlar — search birinchi yangisini qaytarsa ham eski tanlansin.
+  if (exactName.length >= 2) {
+    for (const row of await listExactNamedProducts(exactName).catch(() => [] as ProductRow[])) {
+      if (!row.id || seen.has(row.id)) continue;
+      if (!sameBordoCard(row.name || "", { factoryCode: factory, productCode: code, size, groupCode: group })) continue;
+      seen.add(row.id);
+      hits.push(row);
+    }
+  }
   for (const query of queries) {
     try {
       const page = await moysklad<{ rows: Array<{ id?: string; name?: string; code?: string }> }>(
@@ -1195,13 +1230,12 @@ async function findRemoteByIdentity(
         const loaded = await productById(row.id);
         if (loaded) hits.push(rememberProduct(loaded, [row.name || "", query]));
       }
-      if (hits.length) break;
     } catch (error) {
       if (!permissionDenied(error) && !(error instanceof MoySkladError)) throw error;
       logger.warn({ query, err: error instanceof Error ? error.message : error }, "MoySklad identity search skipped");
     }
   }
-  const picked = pickIdentityProduct(hits, line, scope);
+  const picked = pickIdentityProduct(hits, line, scope) ?? rankProductRows(hits);
   if (picked) {
     logger.info({
       wanted: { factory, group, code, size, model: productModelToken(code) },
@@ -1259,12 +1293,18 @@ export async function findExistingBordoProduct(
   // remote:false — umuman remote yo‘q.
   if (opts?.remote === false) return null;
   if (name.length < 2) return null;
-  const named = acceptFactoryProduct(await productByExactName(name), scope, line);
+  const exactTwins = (await listExactNamedProducts(name).catch(() => [] as ProductRow[]))
+    .map((row) => acceptFactoryProduct(row, scope, line))
+    .filter((row): row is ProductRow => Boolean(row?.id));
+  const named = pickIdentityProduct(exactTwins, line, scope) ?? rankProductRows(exactTwins);
   if (named) return rememberProduct(named, [name]);
-  // Alias aniq nomlar (guruhli/guruhsiz).
+  // Alias aniq nomlar (guruhli/guruhsiz) — twinlar ichidan eskini tanlaymiz.
   for (const alias of nameAliases(name)) {
     if (alias === name) continue;
-    const hit = acceptFactoryProduct(await productByExactName(alias), scope, line);
+    const aliasTwins = (await listExactNamedProducts(alias).catch(() => [] as ProductRow[]))
+      .map((row) => acceptFactoryProduct(row, scope, line))
+      .filter((row): row is ProductRow => Boolean(row?.id));
+    const hit = pickIdentityProduct(aliasTwins, line, scope) ?? rankProductRows(aliasTwins);
     if (hit) return rememberProduct(hit, [name, alias]);
   }
   // Bir xil guruh ichida model farqi (088 vs 088 R5) yoki twinlar — remote identity.
