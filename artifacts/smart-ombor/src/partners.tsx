@@ -672,7 +672,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const saveQueue = useRef(Promise.resolve(true));
   const [settings, setSettings] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [day, setDay] = useState(todayKey);
+  // Default: barcha yuklar. Bugungi sana filtri eski yuk xatlarini yashirib, “yo‘qolgan”dek ko‘rsatardi.
+  const [day, setDay] = useState('');
   const [openShipment, setOpenShipment] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [colorFor, setColorFor] = useState<string | null>(null);
@@ -1053,7 +1054,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       <div><span className="kpi-icon"><Banknote size={18}/></span><div><span>{t('zavod.sum')}</span><b>{money(amount)}</b></div></div>
     </div>
     <section className="card factory-sheet">
-      <div className="card-head"><h2>{t('partners.incoming')}</h2><div className="waybill-head-tools"><label className="waybill-filter"><span>{t('common.date')}</span><input className="input" type="date" value={day} onChange={e => setDay(e.target.value)} data-testid="input-shipment-date"/></label>{visible.length > 0 && <WaybillExport shipments={visible} filename={`${row.account?.code || row.name}-${day || 'all'}`} title={t('partners.incoming')} factory={row.name} code={row.account?.code || ''}/>}</div></div>
+      <div className="card-head"><h2>{t('partners.incoming')}</h2><div className="waybill-head-tools"><label className="waybill-filter"><span>{t('common.date')}</span><input className="input" type="date" value={day} onChange={e => setDay(e.target.value)} data-testid="input-shipment-date"/>{day && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDay('')} data-testid="button-clear-shipment-date">{t('common.all')}</button>}<button type="button" className="btn btn-ghost btn-sm" onClick={() => setDay(todayKey())} data-testid="button-today-shipment-date">{t('common.today')}</button></label>{visible.length > 0 && <WaybillExport shipments={visible} filename={`${row.account?.code || row.name}-${day || 'all'}`} title={t('partners.incoming')} factory={row.name} code={row.account?.code || ''}/>}</div></div>
       {detail.isLoading && !shipments.length ? (
         <div className="loading-rows"><i className="skeleton-line"/><i className="skeleton-line"/></div>
       ) : visible.length ? (
@@ -1109,6 +1110,13 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
             )}
           </article>
         ))}</div>
+      ) : day && shipments.length ? (
+        <div className="state state-empty">
+          <p className="muted">{t('partners.noOnDate')}</p>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDay('')} data-testid="button-show-all-shipments">
+            {t('partners.showAllShipments', { count: fmt(shipments.length) })}
+          </button>
+        </div>
       ) : <p className="muted">{day ? t('partners.noOnDate') : t('partners.noShipments')}</p>}
     </section>
     {(row.productCount > 0 || (products.data?.total ?? products.data?.items?.length ?? 0) > 0) && <section className={`card partner-catalog ${catalogOpen ? 'is-open' : ''}`}>
