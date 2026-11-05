@@ -2,6 +2,12 @@ import { moyskladToken } from "./connection";
 import { logger } from "./logger";
 
 const BASE = "https://api.moysklad.ru/api/remap/1.2";
+/** Bitta MoySklad fetch — nginx 504 oldidan uziladi. */
+const FETCH_MS = 35_000;
+
+function fetchSignal() {
+  return AbortSignal.timeout(FETCH_MS);
+}
 
 export class MoySkladError extends Error {
   retryAfterMs?: number;
@@ -26,7 +32,7 @@ export function writeDropped(error: unknown): boolean {
   if (error instanceof MoySkladError) return error.status === 429 || error.status === 502 || error.status === 503 || error.status === 504;
   if (!(error instanceof Error)) return false;
   const cause = error.cause as { code?: string } | undefined;
-  return error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
+  return error.name === "TimeoutError" || error.name === "AbortError" || error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
 }
 
 export function moyskladConfigured(): boolean {
@@ -52,9 +58,10 @@ export async function moyskladBinary(url: string): Promise<{ type: string; body:
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
     redirect: "manual",
+    signal: fetchSignal(),
   });
   const location = first.status >= 300 && first.status < 400 ? first.headers.get("location") : null;
-  const response = location ? await fetch(location, { method: "GET" }) : first;
+  const response = location ? await fetch(location, { method: "GET", signal: fetchSignal() }) : first;
   if (!response.ok) {
     throw new MoySkladError(`MoySklad image ${response.status}`, response.status);
   }
@@ -79,6 +86,7 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
           ...(method === "DELETE" ? {} : { "Content-Type": "application/json" }),
         },
         ...(method === "DELETE" ? {} : { body: JSON.stringify(body) }),
+        signal: fetchSignal(),
       });
       if (!response.ok) {
         const retryAfter = response.headers.get("retry-after");
@@ -160,7 +168,7 @@ function attachRetryAfter(error: MoySkladError, header: string | null): MoySklad
 function networkFailure(error: unknown): boolean {
   if (!(error instanceof Error) || error instanceof MoySkladError) return false;
   const cause = error.cause as { code?: string } | undefined;
-  return error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
+  return error.name === "TimeoutError" || error.name === "AbortError" || error.message === "fetch failed" || cause?.code === "UND_ERR_CONNECT_TIMEOUT" || cause?.code === "ECONNRESET" || cause?.code === "ETIMEDOUT";
 }
 
 function temporaryMoySklad(error: unknown): boolean {
@@ -222,6 +230,7 @@ export async function moysklad<T>(path: string): Promise<T> {
           Accept: "application/json;charset=utf-8",
           "Accept-Encoding": "gzip",
         },
+        signal: fetchSignal(),
       });
 
       if (!response.ok) {

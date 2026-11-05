@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { dataFile } from "../lib/data-dir";
-import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, compactCode, findProductsByLabel, lastNumericToken, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
+import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, catalogForRead, compactCode, findProductsByLabel, lastNumericToken, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
@@ -71,9 +71,9 @@ router.get("/partner-factories", async (_req, res, next) => {
   try {
     void refreshPartnersIfNeeded();
     // Katalog xotirada bo‘lmasa diskdan — aks holda MoySkladdagi zavodlar “yo‘qolib” ko‘rinardi.
-    const catalog = await peekOrRecallCatalog();
-    if (!catalog?.products?.length) void loadCatalog().catch(() => undefined);
+    const catalog = await catalogForRead();
     const grouped = new Map<string, { name: string; productCount: number; stock: number }>();
+    const byLower = new Map<string, { name: string; productCount: number; stock: number }>();
     for (const product of catalog?.products ?? []) {
       const name = product.factory?.trim();
       if (!name) continue;
@@ -81,18 +81,24 @@ router.get("/partner-factories", async (_req, res, next) => {
       current.productCount += 1;
       current.stock += product.stock;
       grouped.set(name, current);
+      byLower.set(name.toLowerCase(), current);
     }
     const accounts = listAccounts().filter((account) => account.active !== false);
-    const shipments = listShipments();
+    const shipmentsByFactory = new Map<string, ReturnType<typeof listShipments>>();
+    for (const shipment of listShipments()) {
+      const bucket = shipmentsByFactory.get(shipment.factoryId);
+      if (bucket) bucket.push(shipment);
+      else shipmentsByFactory.set(shipment.factoryId, [shipment]);
+    }
     const used = new Set<string>();
-    const sameFactory = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase();
     const catalogRowFor = (account: { name: string; catalogName: string }) =>
       grouped.get(account.catalogName)
       || grouped.get(account.name)
-      || [...grouped.values()].find((row) => sameFactory(row.name, account.catalogName) || sameFactory(row.name, account.name))
+      || byLower.get(account.catalogName.trim().toLowerCase())
+      || byLower.get(account.name.trim().toLowerCase())
       || null;
     const rows = accounts.map((account) => {
-      const own = shipments.filter((item) => item.factoryId === account.id);
+      const own = shipmentsByFactory.get(account.id) ?? [];
       const catalogRow = catalogRowFor(account);
       if (catalogRow) used.add(catalogRow.name);
       return {
@@ -105,8 +111,9 @@ router.get("/partner-factories", async (_req, res, next) => {
         lastShipment: own[0]?.createdAt ?? null,
       };
     });
+    const rowNames = new Set(rows.map((item) => item.name.trim().toLowerCase()));
     const extras = [...grouped.values()]
-      .filter((row) => !used.has(row.name) && !rows.some((item) => sameFactory(item.name, row.name)))
+      .filter((row) => !used.has(row.name) && !rowNames.has(row.name.trim().toLowerCase()))
       .map((row) => ({
         ...row,
         account: null,
@@ -478,14 +485,19 @@ router.get("/partner-factories/shipments/:id/matches", async (req, res, next) =>
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const account = getAccount(shipment.factoryId);
+    const byId = new Map(catalog.products.map((product) => [product.id, product]));
     const lines = shipment.lines.map((line) => {
       const matched = account ? matchWaybillProduct(catalog, { factoryCode: account.code || line.factoryCode, factoryName: account.catalogName || account.name, groupCode: line.sectionCode, productCode: line.productCode, size: line.size }) : null;
       const text = [line.productCode, line.model, line.size].filter(Boolean).join(" ");
       const found = new Map<string, { id: string; name: string; code: string | null; stock: number }>();
       if (matched) {
-        const product = catalog.products.find((item) => item.id === matched.id);
+        const product = byId.get(matched.id);
         if (product) found.set(product.id, { id: product.id, name: product.name, code: product.code, stock: product.stock });
       }
       for (const product of findProductsByLabel(catalog, text).products) {
@@ -507,7 +519,11 @@ router.post("/partner-factories/shipments/:id/lines/:lineId/link", async (req, r
       res.json(linkShipmentLine(String(req.params.id), String(req.params.lineId), null));
       return;
     }
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const product = catalog.products.find((item) => item.id === productId);
     if (!product) {
       res.status(400).json({ error: "product" });
@@ -1054,7 +1070,11 @@ router.get("/factory/products", requireFactory, async (req, res, next) => {
       res.json({ items: [] });
       return;
     }
-    const catalog = (await peekOrRecallCatalog()) ?? await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing", items: [] });
+      return;
+    }
     const account = res.locals.factory as { code?: string; name?: string; catalogName?: string };
     const compact = compactCode(query);
     const scored: Array<{ score: number; id: string; name: string; code: string | null; article: string | null; barcode: string | null }> = [];

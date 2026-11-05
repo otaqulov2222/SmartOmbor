@@ -163,6 +163,12 @@ let persistRunning = false;
 
 function remember(next: Catalog) {
   cache = next;
+  // Yangi katalog — eski waybill/barcode/name indekslari yaroqsiz.
+  waybillIndexCatalog = null;
+  indexedCatalog = null;
+  nameCatalog = null;
+  scanIndexCatalog = null;
+  scanIndexBody = null;
   persistQueued = next;
   if (persistRunning) return;
   persistRunning = true;
@@ -745,6 +751,25 @@ export async function peekOrRecallCatalog(): Promise<Catalog | null> {
   return cache;
 }
 
+/**
+ * GET/list uchun: disk/xotira. To‘liq MoySklad build hech qachon so‘rovni bloklamaydi.
+ * Bo‘sh bo‘lsa fon sync ishga tushadi va null qaytadi (handler 503/bo‘sh UI bersin).
+ */
+export async function catalogForRead(): Promise<Catalog | null> {
+  const hit = await peekOrRecallCatalog();
+  if (hit?.products?.length) {
+    // Indeksni isitish — keyingi waybill match CPU yemasin.
+    waybillIndexFor(hit);
+    return hit;
+  }
+  if (!catalogSyncing()) {
+    void loadCatalog(false).catch((error) => {
+      logger.warn({ err: error }, "Background catalog warm failed");
+    });
+  }
+  return hit;
+}
+
 let bootstrapOnce: Promise<Catalog | null> | null = null;
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1104,9 +1129,9 @@ export function listWaybillProducts(
   const group = input.groupCode?.trim() || "";
   if (!code) return [];
   const core = coreProductCode(code);
-  const indexed = waybillIndexFor(catalog).get(core) ?? [];
-  // Indeks bo‘sh/eski bo‘lsa fallback — lekin odatda kandidatlar kam.
-  const pool = indexed.length ? indexed : catalog.products;
+  // To‘liq katalog fallback yo‘q — GET/matches 504 bermasin. Indeks miss = bo‘sh.
+  const pool = waybillIndexFor(catalog).get(core) ?? [];
+  if (!pool.length) return [];
   const seen = new Set<string>();
   const rows: CatalogProduct[] = [];
   for (const product of pool) {

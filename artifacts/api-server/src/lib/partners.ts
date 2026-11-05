@@ -150,7 +150,13 @@ function adoptStore(store: Store, stamp: number) {
   revision = Math.max(revision, Math.floor(stamp));
 }
 
+let lastFileSyncAt = 0;
+
 function syncFromFile() {
+  // Har load() da disk o‘qish — GET’larni sekinlatardi.
+  const now = Date.now();
+  if (memory && now - lastFileSyncAt < 2_000) return;
+  lastFileSyncAt = now;
   try {
     const mtime = statSync(filePath).mtimeMs;
     if (!memory || mtime > memoryUpdatedAt + 1) {

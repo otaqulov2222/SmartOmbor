@@ -490,6 +490,12 @@ function WaybillExport({ shipments, filename, title, factory, code }: { shipment
   return <div className="waybill-export" ref={box}><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(value => !value)} data-testid={`button-export-${filename}`}><Download size={14}/>{t('common.export')}</button>{open && <div className="waybill-export-menu"><button type="button" onClick={excel}><FileSpreadsheet size={15}/>{t('export.excel')}</button><button type="button" onClick={pdf}><FileText size={15}/>{t('export.pdf')}</button></div>}</div>;
 }
 
+async function apiGet(url: string, ms = 25_000) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(ms) });
+  if (!response.ok) throw new Error(`http_${response.status}`);
+  return response.json();
+}
+
 export function PartnersPage() {
   const { t, fmt, date } = useI18n();
   const search = useSearch();
@@ -503,11 +509,8 @@ export function PartnersPage() {
     queryKey: ['partner-alerts'],
     staleTime: 15_000,
     refetchInterval: selected ? false : 12_000,
-    queryFn: async () => {
-      const response = await fetch('/api/partner-alerts');
-      if (!response.ok) throw new Error('alerts');
-      return response.json();
-    },
+    retry: 2,
+    queryFn: async () => apiGet('/api/partner-alerts', 12_000),
   });
   const revision = alerts.data?.revision;
   const lastRevision = useRef<number | null>(null);
@@ -522,11 +525,8 @@ export function PartnersPage() {
     staleTime: 20_000,
     refetchInterval: selected ? false : 20_000,
     placeholderData: previous => previous,
-    queryFn: async () => {
-      const response = await fetch('/api/partner-factories');
-      if (!response.ok) throw new Error('load');
-      return response.json();
-    },
+    retry: 2,
+    queryFn: async () => apiGet('/api/partner-factories', 25_000),
   });
   const items = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -742,11 +742,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
     refetchInterval: editingNow ? false : 12_000,
     refetchOnWindowFocus: !editingNow,
     placeholderData: previous => previous,
-    queryFn: async () => {
-      const response = await fetch(`/api/partner-factories/${row.account!.id}`);
-      if (!response.ok) throw new Error('load');
-      return response.json();
-    },
+    retry: 2,
+    queryFn: async () => apiGet(`/api/partner-factories/${row.account!.id}`, 25_000),
   });
   const products = useQuery({
     queryKey: ['partner-catalog', row.account?.catalogName || row.name],

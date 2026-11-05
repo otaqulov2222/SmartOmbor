@@ -44,7 +44,14 @@ app.listen(port, (err) => {
     hydrateOffice(),
     hydratePartners()
       .then(() => {
-        resumePendingSupplies();
+        // Kirim resume biroz kechiksin — birinchi UI so‘rovlari slot olishsin.
+        setTimeout(() => {
+          try {
+            resumePendingSupplies();
+          } catch (error: unknown) {
+            logger.warn({ err: error instanceof Error ? error.message : error }, "Pending supply resume failed");
+          }
+        }, 15_000);
       })
       .catch((error: unknown) => {
         logger.warn({ err: error instanceof Error ? error.message : "partner-store" }, "Partner database was not loaded");
@@ -53,5 +60,15 @@ app.listen(port, (err) => {
     startCatalogKeepalive();
   });
   startTelegramDigest();
+  // Render free sleep (15m) oldidan o‘zini urib turadi — 504 cold-start kamayadi.
+  const keepUrl = (process.env.RENDER_EXTERNAL_URL || process.env.KEEPALIVE_URL || "").replace(/\/$/, "");
+  if (keepUrl) {
+    const ping = () => {
+      void fetch(`${keepUrl}/api/healthz`, { signal: AbortSignal.timeout(8_000) }).catch(() => undefined);
+    };
+    setTimeout(ping, 20_000);
+    const timer = setInterval(ping, 10 * 60_000);
+    if (typeof timer === "object" && timer && "unref" in timer) timer.unref();
+  }
 });
 }

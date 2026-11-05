@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickSibling, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, catalogForRead, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickSibling, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -1209,7 +1209,11 @@ router.get("/products", async (req, res, next) => {
 
 router.get("/products/:id/image", async (req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const href = catalog.imageHrefs.get(String(req.params.id));
     if (!href) {
       res.status(404).end();
@@ -1229,7 +1233,12 @@ router.get("/products/:id/image", async (req, res, next) => {
 
 router.get("/scan-index", async (_req, res, next) => {
   try {
-    res.json(scanIndex(await loadCatalog()));
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
+    res.json(scanIndex(catalog));
   } catch (error) {
     next(error);
   }
@@ -1272,7 +1281,11 @@ router.get("/products/resolve", async (req, res, next) => {
   try {
     const code = typeof req.query.code === "string" ? req.query.code : "";
     const text = typeof req.query.text === "string" ? req.query.text : "";
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const resolved = resolveScan(catalog, code, text);
     const ids = new Set(resolved.products.map((product) => product.id));
     const locations = catalog.stockRows
@@ -1298,7 +1311,11 @@ router.get("/products/resolve", async (req, res, next) => {
 router.get("/products/barcode/:barcode", async (req, res, next) => {
   try {
     const { barcode } = LookupBarcodeParams.parse(req.params);
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const products = findProductsByBarcode(catalog, barcode);
     const ids = new Set(products.map((product) => product.id));
     const locations = catalog.stockRows
@@ -1318,7 +1335,11 @@ router.get("/products/barcode/:barcode", async (req, res, next) => {
 
 router.get("/products/:id", async (req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const product = catalog.products.find((item) => item.id === String(req.params.id));
     if (!product) {
       res.status(404).json({ error: "not_found" });
@@ -1333,7 +1354,11 @@ router.get("/products/:id", async (req, res, next) => {
 router.get("/stock", async (req, res, next) => {
   try {
     const query = ListStockQueryParams.parse(req.query);
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     let items = catalog.stockRows;
     if (query.warehouseId) items = items.filter((row) => row.warehouse.id === query.warehouseId);
     if (query.search) items = items.filter((row) => matchesSearch(row.product, query.search ?? ""));
@@ -1353,7 +1378,11 @@ router.get("/stock", async (req, res, next) => {
 
 router.get("/documents/:id", async (req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const id = String(req.params.id);
     const summary = catalog.documents.find((item) => item.id === id);
     if (!summary) {
@@ -1412,7 +1441,11 @@ router.get("/documents/:id", async (req, res, next) => {
 router.get("/documents", async (req, res, next) => {
   try {
     const query = ListDocumentsQueryParams.parse(req.query);
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     let items = catalog.documents;
     if (query.kind && query.kind !== "all") items = items.filter((item) => item.kind === query.kind);
     if (query.status) items = items.filter((item) => item.status === query.status);
@@ -1425,7 +1458,11 @@ router.get("/documents", async (req, res, next) => {
 router.get("/analytics/non-moving", async (req, res, next) => {
   try {
     const query = GetNonMovingProductsQueryParams.parse(numericQuery(req.query, ["days"]));
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const idle = (product: CatalogProduct) => {
       const days = idleDays(product, catalog.salesCoverage);
       return days != null && days >= query.days;
@@ -1445,7 +1482,11 @@ router.get("/analytics/non-moving", async (req, res, next) => {
 
 router.get("/catalog/factories", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const ready = catalog.products.some((product) => product.factory?.trim());
     if (!ready) void ensureSuppliers(catalog).catch(() => undefined);
     const grouped = new Map<string, { name: string; count: number; stock: number; value: number; products: Array<{ id: string; name: string; code: string | null; stock: number; value: number }> }>();
@@ -1471,7 +1512,11 @@ router.get("/catalog/factories", async (_req, res, next) => {
 router.get("/analytics/recommendations", async (req, res, next) => {
   try {
     const query = GetPurchaseRecommendationsQueryParams.parse(req.query);
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const items = orderRecommendations(catalog, query.warehouseId);
     res.json(GetPurchaseRecommendationsResponse.parse(items));
   } catch (error) {
@@ -1481,7 +1526,11 @@ router.get("/analytics/recommendations", async (req, res, next) => {
 
 router.get("/analytics/rebalance", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     const grouped = new Map<string, typeof catalog.stockRows>();
     for (const row of catalog.stockRows) {
       if (row.quantity <= 0) continue;
@@ -1686,7 +1735,11 @@ router.get("/analytics/sales", async (req, res, next) => {
 
 router.get("/export/catalog", async (_req, res, next) => {
   try {
-    const catalog = await loadCatalog();
+    const catalog = await catalogForRead();
+    if (!catalog) {
+      res.status(503).json({ error: "catalog_syncing" });
+      return;
+    }
     res.json({
       companyName: catalog.companyName,
       loadedAt: catalog.loadedAt,
