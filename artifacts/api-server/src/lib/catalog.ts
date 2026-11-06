@@ -950,6 +950,43 @@ export function bordoCardArticle(name: string, fallbackArticle = ""): string {
   return bordoIdentityArticle(name, fallbackArticle);
 }
 
+/** MoySkladda article yozishdan oldin: tovar/guruh/zavod/razmer nusxasini yozmaslik. */
+export function sanitizeMoySkladArticle(
+  article: string,
+  identity: { productCode?: string; groupCode?: string; factoryCode?: string; size?: string },
+): string {
+  const art = String(article || "").trim();
+  if (!art) return "";
+  const compact = compactCode(art);
+  if (identity.productCode && compact === coreProductCode(identity.productCode)) return "";
+  if (identity.productCode && compact === compactCode(identity.productCode)) return "";
+  if (identity.groupCode && compact === compactCode(identity.groupCode)) return "";
+  if (identity.factoryCode && compact === compactCode(identity.factoryCode)) return "";
+  if (identity.size && compact === compactCode(identity.size)) return "";
+  return art;
+}
+
+/** Canonical parent nom — har doim shu tartib. */
+export function bordoParentName(input: {
+  factoryCode: string;
+  groupCode?: string;
+  productCode: string;
+  size: string;
+  article?: string;
+}): string {
+  const factory = canonicalFactoryCode(input.factoryCode) || normalizeBordoCode(input.factoryCode);
+  const group = normalizeBordoCode(input.groupCode || "");
+  const code = normalizeBordoCode(input.productCode);
+  const size = normalizeBordoSize(input.size);
+  const article = sanitizeMoySkladArticle(input.article || "", {
+    productCode: code,
+    groupCode: group,
+    factoryCode: factory,
+    size,
+  });
+  return ["Bordo", factory, group, code, size, article].filter(Boolean).join(" ").trim();
+}
+
 export function sameBordoCard(
   name: string,
   input: { factoryCode: string; productCode: string; size: string; groupCode?: string; article?: string },
@@ -1032,6 +1069,14 @@ export function lastNumericToken(label: string) {
   return groups[groups.length - 1] || nums[nums.length - 1] || "";
 }
 
+/**
+ * Bordo identity (tartib qat’iy):
+ *   Bordo {zavod=factoryCode} {guruh=groupCode} {tovar=productCode} {razmer=size} [artikul] [(rang)]
+ * Misollar:
+ *   Bordo 0044 1020 289 36-40          → zavod 0044, guruh 1020, tovar 289, razmer 36-40
+ *   Bordo 0007 1020 2522 24-29 43937   → … + artikul 43937 (nom oxiridagi qo‘shimcha)
+ * MoySklad `article` maydoniga tovar/guruh kodini yozish — XATO (dublikat ochadi).
+ */
 export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string; model: string; article: string } | null {
   let raw = foldGlyphs(name).trim().replace(/\s+/g, " ");
   let color = "";

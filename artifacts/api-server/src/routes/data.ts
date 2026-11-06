@@ -25,7 +25,7 @@ import {
   LookupBarcodeResponse,
   SyncMoyskladResponse,
 } from "@workspace/api-zod";
-import { addCatalogProduct, catalogForRead, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickSibling, resetCatalog, resolveScan, sameProductCode, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
+import { addCatalogProduct, bordoParentName, catalogForRead, catalogLoadedAt, catalogSyncing, catalogSyncState, compactCode, ensureSuppliers, findProductsByBarcode, folderLabel, idleDays, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchProductFolder, matchWaybillProduct, normalizeBordoCode, normalizeBordoSize, parseBordoName, peekCatalog, peekOrRecallCatalog, pickSibling, resetCatalog, resolveScan, sameProductCode, sanitizeMoySkladArticle, scanIndex, updateCatalogProduct, type CatalogProduct } from "../lib/catalog";
 import { markupsFromSales, markupFromPrices, parseMarkups, resolveMarkups, SALE_READ_ORDER, SALE_TYPES, salesOf, type SaleMarkup, type SaleType } from "../lib/markup";
 import { ensurePachka, findExistingBordoProduct, isPachkaPack, nextInternalEan13, writeProductCard } from "../lib/supply-assortment";
 import { addScanHit, clearScanSession, readScanSession, removeScanHit, subscribeScanSession } from "../lib/scan-session";
@@ -651,10 +651,16 @@ router.post("/products", async (req, res, next) => {
     const productCode = normalizeBordoCode(String(req.body?.productCode ?? req.body?.code ?? ""));
     const size = normalizeBordoSize(String(req.body?.size ?? ""));
     const requestedMarkups = parseMarkups(req.body?.markups, String(req.body?.priceType ?? "").trim(), req.body?.markupPct);
-    const builtName = ["Bordo", factoryCode, groupCode, productCode, size].filter(Boolean).join(" ").trim();
+    // article ≠ tovar/guruh kodi. Bo‘sh bo‘lsa yozilmaydi — aks holda 289 dublikat ochilardi.
+    const article = sanitizeMoySkladArticle(String(req.body?.article ?? ""), {
+      productCode,
+      groupCode,
+      factoryCode,
+      size,
+    });
+    const builtName = bordoParentName({ factoryCode, groupCode, productCode, size, article });
     const name = factoryCode ? builtName : String(req.body?.name ?? "").trim() || builtName;
     const code = productCode;
-    const article = String(req.body?.article ?? "").trim() || productCode || groupCode;
     const catalog = peekCatalog() ?? await loadCatalog();
     let barcode = String(req.body?.barcode ?? "").trim();
     if (!barcode) barcode = nextInternalEan13(catalog, new Set());
@@ -1063,7 +1069,12 @@ router.get("/products/suggest", async (req, res, next) => {
       folderName: folder ? folderLabel(folder) : "",
       supplierId,
       supplierName: supplierId ? supplierName : "",
-      article: sample?.article || code,
+      article: sanitizeMoySkladArticle(sample?.article || "", {
+        productCode: code,
+        groupCode: sample ? (parseBordoName(sample.name)?.groupCode || "") : "",
+        factoryCode: sample ? (parseBordoName(sample.name)?.factoryCode || "") : "",
+        size: sample ? (parseBordoName(sample.name)?.size || "") : "",
+      }),
       cost: sample?.cost ?? null,
       priceExclusive: sample?.salePrice ?? sample?.cost ?? null,
       packSize: sample && sample.packSize > 1 ? sample.packSize : null,
@@ -1107,7 +1118,13 @@ router.put("/products/:id", async (req, res, next) => {
     const id = String(req.params.id);
     const name = String(req.body?.name ?? "").trim();
     const code = String(req.body?.code ?? "").trim();
-    const article = String(req.body?.article ?? "").trim();
+    const parsedName = parseBordoName(name);
+    const article = sanitizeMoySkladArticle(String(req.body?.article ?? ""), {
+      productCode: parsedName?.productCode || code,
+      groupCode: parsedName?.groupCode || "",
+      factoryCode: parsedName?.factoryCode || "",
+      size: parsedName?.size || "",
+    });
     const barcode = String(req.body?.barcode ?? "").trim();
     const prices = {
       Exclusive: som(req.body?.priceExclusive),

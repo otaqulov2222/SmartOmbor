@@ -1,4 +1,4 @@
-import { bordoIdentityArticle, canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog, type CatalogProduct } from "./catalog";
+import { bordoIdentityArticle, bordoParentName, canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, sanitizeMoySkladArticle, type Catalog, type CatalogProduct } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -570,6 +570,18 @@ function asCreated(row: ProductRow): CreatedProduct {
 async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?: boolean }): Promise<CreatedProduct> {
   const payload: Record<string, unknown> = { ...body };
   const wanted = String(payload.name ?? "").trim().replace(/\s+/g, " ");
+  // article maydoniga tovar/guruh kodini yozmaslik (289 → dublikat).
+  if ("article" in payload) {
+    const parsed = parseBordoName(wanted);
+    const clean = sanitizeMoySkladArticle(String(payload.article ?? ""), {
+      productCode: parsed?.productCode || "",
+      groupCode: parsed?.groupCode || "",
+      factoryCode: parsed?.factoryCode || "",
+      size: parsed?.size || "",
+    });
+    if (clean) payload.article = clean;
+    else delete payload.article;
+  }
   // MoySkladda nom UNIQUE EMAS — oldindan aniq nom bo‘yicha qayta ishlatish majburiy, aks holda dublikat kodlar chiqadi.
   if (wanted) {
     const exactTwins = (await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]))
@@ -1273,7 +1285,14 @@ export async function findExistingBordoProduct(
   const factory = canonicalFactoryCode(scope.factoryCode || line.factoryCode || "", scope.factoryCode);
   const groupCode = line.sectionCode || "";
   const size = normalizeBordoSize(line.size);
-  const name = ["Bordo", factory, groupCode, line.productCode, size].filter(Boolean).join(" ").trim();
+  // Bordo {zavod} {guruh} {tovar} {razmer} — tartib qat’iy.
+  const name = bordoParentName({
+    factoryCode: factory,
+    groupCode,
+    productCode: line.productCode,
+    size,
+    article: (line as { article?: string }).article || "",
+  });
   const remembered = acceptFactoryProduct(cachedByName(name), scope, line);
   if (remembered) return remembered;
   const localId = String(line.productId || "").trim();
@@ -1360,7 +1379,12 @@ export async function buildSupplyPositions(
   };
   const findT0 = Date.now();
   resolved.push(...await Promise.all(wanted.map(async (line) => {
-    const name = ["Bordo", canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode), line.sectionCode, line.productCode, normalizeBordoSize(line.size)].filter(Boolean).join(" ").trim();
+    const name = bordoParentName({
+      factoryCode: canonicalFactoryCode(scope.factoryCode || line.factoryCode, scope.factoryCode),
+      groupCode: line.sectionCode,
+      productCode: line.productCode,
+      size: normalizeBordoSize(line.size),
+    });
     const cacheKey = String(line.productId || productIdentity(line, scope.factoryCode) || name);
     const parent = await findOnce(cacheKey, line);
     if (parent) rememberProduct(parent, [name]);
