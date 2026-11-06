@@ -676,8 +676,9 @@ router.post("/products", async (req, res, next) => {
       return;
     }
     const existing = await findExistingBordoProduct(
-      { factoryCode, sectionCode: groupCode, productCode, size },
+      { factoryCode, sectionCode: groupCode, productCode, size, article },
       { factoryCode, factoryName: partner.name, catalog },
+      { remote: "exact" },
     );
     if (existing?.id) {
       if (packSize > 1) await ensurePachka(existing.id, packSize);
@@ -766,8 +767,9 @@ router.post("/products", async (req, res, next) => {
       created = await moyskladSend<{ id: string; name: string; code?: string; article?: string }>("/entity/product", payload);
     } catch (error) {
       const again = await findExistingBordoProduct(
-        { factoryCode, sectionCode: groupCode, productCode, size },
+        { factoryCode, sectionCode: groupCode, productCode, size, article },
         { factoryCode, factoryName: partner.name, catalog },
+        { remote: "exact" },
       ).catch(() => null);
       if (!again?.id) throw error;
       if (packSize > 1) await ensurePachka(again.id, packSize);

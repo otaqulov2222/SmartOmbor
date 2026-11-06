@@ -208,11 +208,29 @@ export async function writeProductCard(
   } catch (error) {
     if (!permissionDenied(error) && !(error instanceof MoySkladError && error.status === 404)) throw error;
   }
-  const article = extras.article?.trim();
+  const currentName = String((current as { name?: string; article?: string }).name || "").trim();
+  const parsed = parseBordoName(currentName);
+  const safeArticle = sanitizeMoySkladArticle(extras.article || "", {
+    productCode: parsed?.productCode || "",
+    groupCode: parsed?.groupCode || "",
+    factoryCode: parsed?.factoryCode || "",
+    size: parsed?.size || "",
+  });
+  const existingArticle = String(current.article || "").trim();
+  const existingSafe = existingArticle
+    ? sanitizeMoySkladArticle(existingArticle, {
+      productCode: parsed?.productCode || "",
+      groupCode: parsed?.groupCode || "",
+      factoryCode: parsed?.factoryCode || "",
+      size: parsed?.size || "",
+    })
+    : "";
   const description = extras.description?.trim();
   const card: Record<string, unknown> = {
     ...(buyKopecks > 0 ? { buyPrice: { value: buyKopecks, currency: { meta: currencyMeta } } } : {}),
-    ...(article && !current.article?.trim() ? { article } : {}),
+    // Haqiqiy artikul yoziladi; tovar/guruh kodi nusxasi — o‘chiriladi (289 dublikat sababi).
+    ...(safeArticle && !existingSafe ? { article: safeArticle } : {}),
+    ...(existingArticle && !existingSafe ? { article: "" } : {}),
     ...(description && !current.description?.trim() ? { description } : {}),
     ...(extras.supplierMeta && current.supplier?.meta?.href !== extras.supplierMeta.href ? { supplier: { meta: extras.supplierMeta } } : {}),
     ...(extras.folderMeta && !current.productFolder?.meta?.href ? { productFolder: { meta: extras.folderMeta } } : {}),
@@ -1171,7 +1189,17 @@ function acceptFactoryProduct(
     if (!parts.groupCode || compactCode(parts.groupCode) !== group) return null;
   }
   // Yuk xatida artikul yo‘q → "…43937" eskisiga yopishmasin. article=289 (kod) e’tiborsiz.
-  const wantedArticle = compactCode((line as { article?: string }).article || "");
+  const wantedArticle = bordoIdentityArticle(
+    bordoParentName({
+      factoryCode: factory,
+      groupCode: line.sectionCode || "",
+      productCode: line.productCode,
+      size: line.size,
+      article: (line as { article?: string }).article || "",
+    }),
+    (line as { article?: string }).article,
+    line.productCode || parts.productCode,
+  );
   const cardArticle = bordoIdentityArticle(name, catalogProduct?.article || row.article, line.productCode || parts.productCode);
   if (wantedArticle !== cardArticle) return null;
   return row;
@@ -1278,7 +1306,7 @@ async function findRemoteByIdentity(
 }
 
 export async function findExistingBordoProduct(
-  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null },
+  line: { factoryCode?: string; sectionCode?: string; productCode: string; size: string; productId?: string | null; article?: string },
   scope: { factoryCode: string; factoryName: string; catalog: Catalog },
   opts?: { remote?: boolean | "exact" },
 ): Promise<ProductRow | null> {
@@ -1291,7 +1319,7 @@ export async function findExistingBordoProduct(
     groupCode,
     productCode: line.productCode,
     size,
-    article: (line as { article?: string }).article || "",
+    article: line.article || "",
   });
   const remembered = acceptFactoryProduct(cachedByName(name), scope, line);
   if (remembered) return remembered;
@@ -1310,12 +1338,14 @@ export async function findExistingBordoProduct(
     if (accepted) return rememberProduct(accepted, [name]);
     // productId boshqa kodga tegishli bo‘lsa — e’tiborsiz qoldiramiz, yangi kartochka yaratiladi.
   }
+  const wantedArticle = bordoIdentityArticle(name, line.article, line.productCode);
   const catalogMatch = matchWaybillProduct(scope.catalog, {
     factoryCode: factory,
     factoryName: scope.factoryName,
     groupCode,
     productCode: line.productCode,
     size,
+    article: wantedArticle,
   });
   if (catalogMatch?.id) {
     const listed = scope.catalog.products.find((product) => product.id === catalogMatch.id);
@@ -1325,6 +1355,7 @@ export async function findExistingBordoProduct(
         id: catalogMatch.id,
         name: realName,
         meta: entityMeta(`${BASE}/entity/product/${catalogMatch.id}`, "product"),
+        article: listed?.article || null,
       }, scope, line);
       if (accepted) return rememberProduct(accepted, [name]);
     }
@@ -1346,11 +1377,15 @@ export async function findExistingBordoProduct(
     const hit = pickIdentityProduct(aliasTwins, line, scope) ?? rankProductRows(aliasTwins);
     if (hit) return rememberProduct(hit, [name, alias]);
   }
-  // Bir xil guruh ichida model farqi (088 vs 088 R5) yoki twinlar — remote identity.
-  if (opts?.remote === "exact") {
-    const byIdentity = await findRemoteByIdentity(line, scope);
-    if (byIdentity) return byIdentity;
-  }
+  // Har doim remote identity — katalog/nom miss bo‘lsa ham yangi 128… ochilmasin.
+  const byIdentity = await findRemoteByIdentity({
+    factoryCode: factory,
+    sectionCode: groupCode,
+    productCode: line.productCode,
+    size,
+    article: wantedArticle,
+  }, scope);
+  if (byIdentity) return byIdentity;
   return null;
 }
 
@@ -1466,6 +1501,12 @@ export async function buildSupplyPositions(
         listedCache.set(salesKey, listed);
       }
       const product = await createOnce(item.name, async () => {
+        // Oxirgi himoya: create oldidan yana bir marta identity qidiruv.
+        const again = await findExistingBordoProduct(item.line, scope, { remote: "exact" }).catch(() => null);
+        if (again?.id) {
+          logger.info({ name: item.name, reuse: again.id, code: again.code }, "kirim create aborted — existing identity");
+          return asCreated(again);
+        }
         const barcode = nextInternalEan13(scope.catalog, usedBarcodes);
         usedBarcodes.add(barcode);
         return createProduct({
