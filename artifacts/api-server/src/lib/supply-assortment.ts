@@ -1,4 +1,4 @@
-import { canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog, type CatalogProduct } from "./catalog";
+import { bordoIdentityArticle, canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, type Catalog, type CatalogProduct } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -488,8 +488,8 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
   if (expected.groupCode) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
   }
-  // Artikul qattiq: "…24-29" ≠ "…24-29 43937".
-  const hitArticle = compactCode(parts.article || hit.article || "");
+  // Artikul qattiq: "…24-29" ≠ "…24-29 43937". MS article=productCode — farq emas.
+  const hitArticle = bordoIdentityArticle(hit.name || "", hit.article, expected.productCode);
   if (compactCode(expected.article) !== hitArticle) return false;
   return true;
 }
@@ -527,10 +527,11 @@ function rankProductRows(rows: ProductRow[]): ProductRow | null {
   return [...rows].sort((a, b) => {
     const score = (row: ProductRow) => {
       let value = 0;
-      if (row.article?.trim()) value += 6;
+      if (bordoIdentityArticle(row.name || "", row.article, row.code || "")) value += 6;
       const code = String(row.code || "").trim();
-      if (code && !/^128\d{7,}$/.test(code)) value += 5;
+      if (code && !/^128\d{7,}$/.test(code)) value += 8;
       if (code && code.length <= 6) value += 2;
+      if (code && code.length >= 10 && !/^128\d{7,}$/.test(code) && !/^200\d{10}$/.test(code)) value += 4;
       return value;
     };
     const diff = score(b) - score(a);
@@ -609,12 +610,13 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
   for (let attempt = 0; attempt < STRIP_PRODUCT_FIELDS.length + 3; attempt += 1) {
     try {
       const created = await moyskladSend<CreatedProduct>("/entity/product", payload);
-      // Parallel/race: bir xil nomli eski kartochka bo‘lsa — yangisini tashlab eskisini ishlatamiz (MoySklad nomni unique qilmaydi).
+      // Parallel/race: bir xil nomli eski kartochka bo‘lsa — yangisini tashlab mustahkamini ishlatamiz.
       if (wanted && created.id) {
-        const twins = await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]);
-        const older = twins.find((row) => row.id && row.id !== created.id);
+        const twins = (await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]))
+          .filter((row) => row.id && recoveredCardFits(row, wanted) && sameListedName(row.name || "", wanted));
+        const older = rankProductRows(twins.filter((row) => row.id !== created.id));
         if (older?.id) {
-          logger.warn({ wanted, created: created.id, reuse: older.id }, "MoySklad duplicate name after create — reusing existing card");
+          logger.warn({ wanted, created: created.id, reuse: older.id, reuseCode: older.code }, "MoySklad duplicate name after create — reusing existing card");
           void optionalWrite(
             () => moyskladSend(`/entity/product/${encodeURIComponent(created.id!)}`, undefined, "DELETE"),
             "MoySklad duplicate product delete skipped",
@@ -1156,9 +1158,9 @@ function acceptFactoryProduct(
   if (group) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== group) return null;
   }
-  // Yuk xatida artikul yo‘q → "…43937" eskisiga yopishmasin.
+  // Yuk xatida artikul yo‘q → "…43937" eskisiga yopishmasin. article=289 (kod) e’tiborsiz.
   const wantedArticle = compactCode((line as { article?: string }).article || "");
-  const cardArticle = compactCode(parts.article || catalogProduct?.article || row.article || "");
+  const cardArticle = bordoIdentityArticle(name, catalogProduct?.article || row.article, line.productCode || parts.productCode);
   if (wantedArticle !== cardArticle) return null;
   return row;
 }

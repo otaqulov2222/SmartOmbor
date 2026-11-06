@@ -919,10 +919,35 @@ export function foldProductName(value: string) {
   return normalizeBordoCode(value);
 }
 
-/** Nom oxiridagi yoki MoySklad article maydonidagi artikul (4+ raqam). */
-export function bordoCardArticle(name: string, fallbackArticle = ""): string {
+/**
+ * Identity artikul: faqat nom oxiridagi 43937 kabi qo‘shimcha.
+ * MoySkladda article ba’zan product code (289) bilan to‘ldiriladi — bu farq EMAS, aks holda
+ * bir xil kartochka match qilinmay, yana 128… dublikat ochiladi.
+ */
+export function bordoIdentityArticle(
+  name: string,
+  msArticle?: string | null,
+  productCodeHint = "",
+): string {
   const parts = parseBordoName(name);
-  return compactCode(parts?.article || fallbackArticle || "");
+  if (parts?.article) return compactCode(parts.article);
+  const art = compactCode(msArticle || "");
+  if (!art) return "";
+  const code = coreProductCode(productCodeHint || parts?.productCode || "");
+  if (code && art === code) return "";
+  if (parts) {
+    if (compactCode(parts.productCode) && art === compactCode(parts.productCode)) return "";
+    if (parts.groupCode && art === compactCode(parts.groupCode)) return "";
+    if (parts.factoryCode && art === compactCode(parts.factoryCode)) return "";
+    if (parts.size && art === compactCode(parts.size)) return "";
+  }
+  // Nomda artikul yo‘q, lekin MS article boshqa uzun raqam (43937) — nomdagi kabi hisobla.
+  if (/^\d{4,}$/.test(art) && (!code || art !== code)) return art;
+  return "";
+}
+
+export function bordoCardArticle(name: string, fallbackArticle = ""): string {
+  return bordoIdentityArticle(name, fallbackArticle);
 }
 
 export function sameBordoCard(
@@ -941,9 +966,9 @@ export function sameBordoCard(
   if (group) {
     if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
   }
-  // Artikul qattiq: "…24-29" ≠ "…24-29 43937" (o‘tgan yilgi qo‘shimcha artikul).
+  // Artikul qattiq: "…24-29" ≠ "…24-29 43937". Lekin article=289 (kod nusxasi) e’tiborsiz.
   const wanted = compactCode(input.article ?? "");
-  const got = compactCode(parts.article || extras?.article || "");
+  const got = bordoIdentityArticle(name, extras?.article, input.productCode || parts.productCode);
   if (wanted !== got) return false;
   return true;
 }
@@ -1163,8 +1188,8 @@ export function listWaybillProducts(
     if (!isParentCard(product)) continue;
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) continue;
     const parts = parseBordoName(product.name);
-    const cardArticle = compactCode(parts?.article || product.article || "");
-    // Artikul bo‘sh ≠ 43937 — o‘tgan yilgi kartochkaga yangi kirim yopishmasin.
+    const cardArticle = bordoIdentityArticle(product.name, product.article, code || parts?.productCode || "");
+    // Artikul bo‘sh ≠ 43937 — lekin MS article=productCode (289) dublikat ochirmasin.
     if (cardArticle !== wantedArticle) continue;
     if (parts) {
       if (!productCodeMatches(parts.productCode, code)) continue;
@@ -1192,13 +1217,16 @@ export function listWaybillProducts(
 function establishedCardScore(product: CatalogProduct) {
   let score = 0;
   if (product.cost && product.cost > 0) score += 8;
-  if (product.article?.trim()) score += 6;
+  // Faqat HAQIQIY qo‘shimcha artikul (43937) — product code nusxasi emas.
+  if (bordoIdentityArticle(product.name, product.article, product.code || "")) score += 6;
   if ((product.stock || 0) > 0) score += 4;
+  if ((product.stock || 0) >= 50) score += 3;
   if ((product.barcodes || []).some((code) => code && !/^200\d{10}$/.test(code))) score += 3;
   const code = String(product.code || "").trim();
-  // MoySklad auto-code (1284399…) yangi dublikatlarda — eski qisqa kodlar afzal.
-  if (code && !/^128\d{7,}$/.test(code)) score += 5;
+  // MoySklad auto-code (1284399…) yangi dublikatlarda — eski/barcode kodlar afzal.
+  if (code && !/^128\d{7,}$/.test(code)) score += 8;
   if (code && code.length <= 6) score += 2;
+  if (code && code.length >= 10 && !/^128\d{7,}$/.test(code) && !/^200\d{10}$/.test(code)) score += 4;
   return score;
 }
 
@@ -1218,7 +1246,7 @@ export function pickPassport(
         compactCode(p.groupCode),
         coreProductCode(p.productCode),
         compactCode(p.size),
-        compactCode(p.article || row.article || ""),
+        bordoIdentityArticle(row.name, row.article, p.productCode),
       ].join("|");
     }),
   );
