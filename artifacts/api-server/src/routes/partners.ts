@@ -228,7 +228,7 @@ function lineMatchesCatalogProduct(
   if (!code) return true;
   if (sameProductCode(product.code || "", code) || sameProductCode(product.article || "", code)) return true;
   const parsed = parseBordoName(product.name);
-  if (parsed && productCodeMatches(parsed.productCode, code)) return true;
+  if (parsed && productCodeMatches(parsed.productCode, code, parsed.model)) return true;
   const needle = compactCode(code);
   return Boolean(needle) && product.barcodes.some((value) => compactCode(value) === needle);
 }
@@ -330,7 +330,7 @@ function priceFromWaybill(name: string, lines: Array<{ factoryCode: string; sect
     if (!(line.price > 0)) continue;
     const identity = ["bordo", line.factoryCode, line.sectionCode, line.productCode, line.size].filter(Boolean).join(" ").trim().toLowerCase();
     let score = 0;
-    const codeOk = parsed ? productCodeMatches(parsed.productCode, line.productCode) : false;
+    const codeOk = parsed ? productCodeMatches(parsed.productCode, line.productCode, parsed.model) : false;
     const sizeOk = parsed ? compactCode(parsed.size) === compactCode(line.size) : false;
     const groupOk = !line.sectionCode.trim() || (parsed ? sameProductCode(parsed.groupCode, line.sectionCode) : false);
     if (base === identity || compactCode(base) === compactCode(identity)) score = 4;

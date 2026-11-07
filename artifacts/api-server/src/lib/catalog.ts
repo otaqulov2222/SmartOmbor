@@ -803,7 +803,7 @@ export function reportBordoNameTwins(catalog: Catalog, limit = 20) {
       compactCode(parts.groupCode),
       coreProductCode(parts.productCode),
       compactCode(parts.size),
-      compactCode(parts.article),
+      bordoRangToken(parts.model, parts.color),
     ].join("|");
     if (!key.replace(/\|/g, "")) continue;
     const list = groups.get(key);
@@ -929,44 +929,81 @@ export function sameProductCode(left: string, right: string) {
   return Boolean(a) && a === b;
 }
 
-/** Model revision (R4/R5/R7) ni olib tashlab asosiy kodni qaytaradi — 088 R5 ≈ 088. */
+/** Asosiy tovar kodi — oxiridagi R1/R2/R5 ni ajratib. */
 export function coreProductCode(value: string): string {
   const raw = foldGlyphs(value).trim().replace(/\s+/g, " ");
   if (!raw) return "";
-  const stripped = raw.replace(/\s+R-?\d+$/i, "").trim();
+  const stripped = raw.replace(/\s+R\s*-?\s*\d+$/i, "").trim();
   return compactCode(stripped || raw);
 }
 
-export function productModelToken(value: string): string {
+/** Rang: R1, R-1, R 5, R2 → R1/R5/R2. Barcode/artikul/matn emas. */
+export function normalizeBordoModel(value: string): string {
   const raw = foldGlyphs(value).trim().replace(/\s+/g, " ");
-  const hit = raw.match(/\s+(R-?\d+)$/i);
-  return hit ? hit[1].toUpperCase().replace(/^R-/i, "R") : "";
+  if (!raw) return "";
+  const exact = raw.match(/^R\s*-?\s*(\d+)$/i);
+  if (exact) return `R${exact[1]}`;
+  const tail = raw.match(/(?:^|\s)R\s*-?\s*(\d+)$/i);
+  return tail ? `R${tail[1]}` : "";
 }
 
-export function productCodeMatches(nameCode: string, typed: string) {
-  const a = coreProductCode(nameCode);
-  const b = coreProductCode(typed);
-  return Boolean(a) && a === b;
+export function productModelToken(value: string): string {
+  return normalizeBordoModel(value);
 }
 
-export function foldProductName(value: string) {
-  // Artikul (43937) identity — strip qilinsa eski/yangi kartochka bir xil bo‘lib qoladi.
-  return normalizeBordoCode(value);
+/** Identity rang tokeni: R5 yoki VHK/qora. Bo‘sh = rangsiz parent. */
+export function bordoRangToken(model = "", color = ""): string {
+  const fromR = normalizeBordoModel(model) || normalizeBordoModel(color);
+  if (fromR) return fromR;
+  const named = normalizeBordoColor(color);
+  return named || "";
 }
 
 /**
- * Identity artikul: faqat NOM oxiridagi 43937 kabi qo‘shimcha.
- * MoySklad `article` maydoni o‘zi identity EMAS — u yerda barcode/kod/yolg‘on 43937 yozilgan
- * bo‘lishi mumkin; shuni “farq” deb o‘qisa Bordo 0035 1020 B 708 36-40 kabi kartochka
- * topilmay, yana 128… dublikat ochiladi. Farq faqat nomdagi artikul bilan.
+ * Tovar kodi + R1/R2/R3.
+ * Asosiy kod bir xil bo‘lsa ham R1 ≠ R2 ≠ bo‘sh — har biri o‘z kartochkasiga.
+ */
+export function productCodeMatches(nameCode: string, typed: string, nameModel = "") {
+  const a = coreProductCode(nameCode);
+  const b = coreProductCode(typed);
+  if (!a || a !== b) return false;
+  const modelA = normalizeBordoModel(nameModel) || productModelToken(nameCode);
+  const modelB = productModelToken(typed);
+  return modelA === modelB;
+}
+
+/**
+ * Qattiq identity kaliti:
+ *   Bordo | zavod | guruh | mahsulot | razmer | [rang]
+ * Old/orqa matn, raqam, artikul — hisobga olinmaydi.
+ */
+export function bordoIdentityKey(name: string): string {
+  const parts = parseBordoName(name);
+  if (!parts) return normalizeBordoCode(name);
+  return [
+    "BORDO",
+    canonicalFactoryCode(parts.factoryCode),
+    compactCode(parts.groupCode),
+    coreProductCode(parts.productCode),
+    compactCode(parts.size),
+    bordoRangToken(parts.model, parts.color),
+  ].filter((part) => part !== "").join("|");
+}
+
+export function foldProductName(value: string) {
+  return bordoIdentityKey(value);
+}
+
+/**
+ * Artikul identity EMAS — old/orqa raqam-matn kartochkani ajratmasin.
+ * Rang (R5/R3) alohida bordoRangToken orqali farqlanadi.
  */
 export function bordoIdentityArticle(
-  name: string,
+  _name: string,
   _msArticle?: string | null,
   _productCodeHint = "",
 ): string {
-  const parts = parseBordoName(name);
-  return parts?.article ? compactCode(parts.article) : "";
+  return "";
 }
 
 export function bordoCardArticle(name: string, fallbackArticle = ""): string {
@@ -1012,24 +1049,27 @@ export function bordoParentName(input: {
 
 export function sameBordoCard(
   name: string,
-  input: { factoryCode: string; productCode: string; size: string; groupCode?: string; article?: string },
-  extras?: { article?: string | null },
+  input: { factoryCode: string; productCode: string; size: string; groupCode?: string; article?: string; model?: string; color?: string },
+  _extras?: { article?: string | null },
 ) {
   const parts = parseBordoName(name);
   if (!parts) return false;
-  if (parts.color) return false;
+  // Paren rangli variant nomi — parent identity emas (R5 model parent bo‘lishi mumkin).
+  if (parts.color && !normalizeBordoModel(parts.color)) return false;
   if (!sameFactoryCode(parts.factoryCode, input.factoryCode)) return false;
-  if (!productCodeMatches(parts.productCode, input.productCode)) return false;
+  const coreA = coreProductCode(parts.productCode);
+  const coreB = coreProductCode(input.productCode);
+  if (!coreA || coreA !== coreB) return false;
   if (input.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(input.size))) return false;
   // Guruh qattiq: 1020 ≠ 1021 ≠ 2021 — xato guruhga eski kartochka topilmasin.
   const group = input.groupCode?.trim() || "";
   if (group) {
     if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
   }
-  // Artikul qattiq: "…24-29" ≠ "…24-29 43937". Lekin article=289 (kod nusxasi) e’tiborsiz.
-  const wanted = compactCode(input.article ?? "");
-  const got = bordoIdentityArticle(name, extras?.article, input.productCode || parts.productCode);
-  if (wanted !== got) return false;
+  // Rang qattiq: R5 ≠ R3 ≠ bo‘sh. Artikul/old-orqa matn — yo‘q.
+  const wantedRang = bordoRangToken(input.model || productModelToken(input.productCode), input.color || "");
+  const gotRang = bordoRangToken(parts.model, parts.color);
+  if (wantedRang !== gotRang) return false;
   return true;
 }
 
@@ -1094,66 +1134,96 @@ export function lastNumericToken(label: string) {
 
 /**
  * Bordo identity (tartib qat’iy):
- *   Bordo {zavod=factoryCode} {guruh=groupCode} {tovar=productCode} {razmer=size} [artikul] [(rang)]
+ *   Bordo | zavod | guruh | mahsulot | razmer | [rang R5/VHK]
+ * Oldidagi va orqasidagi har qanday matn/raqam IGNORE — faqat rang identity.
  * Misollar:
- *   Bordo 0044 1020 289 36-40          → zavod 0044, guruh 1020, tovar 289, razmer 36-40
- *   Bordo 0007 1020 2522 24-29 43937   → … + artikul 43937 (nom oxiridagi qo‘shimcha)
- * MoySklad `article` maydoniga tovar/guruh kodini yozish — XATO (dublikat ochadi).
+ *   "junk Bordor 0035 1020 B 708 36-40" → 0035|1020|B 708|36-40
+ *   "Bordo 0035 1020 B 708 36-40 R 5" → … + rang R5
  */
 export function parseBordoName(name: string): { factoryCode: string; groupCode: string; productCode: string; size: string; color: string; model: string; article: string } | null {
   let raw = foldGlyphs(name).trim().replace(/\s+/g, " ");
   let color = "";
   let model = "";
-  let article = "";
+  const article = "";
   const paren = raw.match(/\(([^)]+)\)\s*$/);
   if (paren && paren.index != null) {
     color = paren[1].trim();
     raw = raw.slice(0, paren.index).trim();
   }
-  // Oxiridagi R5 faqat size bo‘lmasa model/rang — size dan oldin ham bo‘lishi mumkin.
-  const tail = raw.match(/\s+(R-?\d+)\s*$/i);
-  if (tail && tail.index != null) {
-    model = tail[1].toUpperCase().replace(/^R-/i, "R");
-    raw = raw.slice(0, tail.index).trim();
+  // Oldidagi junk: faqat Bordo/Bordor/бордо dan boshlab o‘qiymiz.
+  const bordoAt = raw.search(/(?:^|\s)(?:bordo|бордо|bordor)\b/i);
+  if (bordoAt >= 0) {
+    raw = raw.slice(bordoAt).replace(/^\s+/, "");
+    raw = raw.replace(/^(?:bordo|бордо|bordor)\b/i, "Bordo");
   }
-  // Size dan keyingi 4+ raqam = artikul (43937). Olib tashlamasdan saqlaymiz — aks holda eski kartochkaga yopishadi.
-  const articleTail = raw.match(/\s+(\d{4,})\s*$/);
-  if (articleTail && articleTail.index != null) {
-    const beforeArticle = raw.slice(0, articleTail.index);
-    if (/\d{1,2}-\d{1,2}/.test(beforeArticle)) {
-      article = articleTail[1];
-      raw = beforeArticle.trim();
+  // Oxiridagi "R 5" / "R-5" / "R5" — size dan keyin ham bo‘lishi mumkin.
+  const tailModel = raw.match(/\s+R\s*-?\s*(\d+)\s*$/i);
+  if (tailModel && tailModel.index != null) {
+    const before = raw.slice(0, tailModel.index).trim();
+    // Size bo‘lmasa ham model — lekin size yo‘q parse fail. Size bor bo‘lsa model.
+    if (/\d{1,2}-\d{1,2}/.test(before)) {
+      model = `R${tailModel[1]}`;
+      raw = before;
     }
   }
   const sizeMatches = [...raw.matchAll(/\d{1,2}-\d{1,2}/g)];
   const sizeMatch = [...sizeMatches].reverse().find((item) => BORDO_SIZES.some((size) => compactCode(size) === compactCode(item[0]))) ?? sizeMatches[sizeMatches.length - 1];
   if (!sizeMatch || sizeMatch.index == null) return null;
   const size = normalizeBordoSize(sizeMatch[0]);
-  const after = raw.slice(sizeMatch.index + sizeMatch[0].length).trim();
-  if (after && /^\d{4,}$/.test(after)) article = article || after;
-  else if (after) color = color || after.replace(/^\((.*)\)$/, "$1").trim();
+  // Size dan keyingi qolgan matn: faqat R-rang — qolgan junk/artikul IGNORE.
+  let after = raw.slice(sizeMatch.index + sizeMatch[0].length).trim();
+  const afterModel = after.match(/^R\s*-?\s*(\d+)\b/i);
+  if (afterModel) {
+    model = model || `R${afterModel[1]}`;
+    after = after.slice(afterModel[0].length).trim();
+  }
+  if (!model && after) {
+    const asModel = normalizeBordoModel(after);
+    if (asModel) model = asModel;
+    // aks holda junk — e’tiborsiz
+  }
   const head = raw.slice(0, sizeMatch.index).trim();
   const tokens = head.split(/\s+/).filter(Boolean);
-  if (tokens[0] && /^(bordo|бордо)$/i.test(tokens[0])) tokens.shift();
+  if (tokens[0] && /^(bordo|бордо|bordor)$/i.test(tokens[0])) tokens.shift();
   if (tokens.length < 2) return null;
-  const factoryCode = tokens[0];
-  const rest = tokens.slice(1);
+  // Zavod kodi: birinchi 3–6 xonali token (oldidagi so‘z junk bo‘lsa o‘tkazib yuboramiz).
+  let factoryIdx = tokens.findIndex((token) => /^\d{3,6}$/.test(token));
+  if (factoryIdx < 0) factoryIdx = 0;
+  const factoryCode = tokens[factoryIdx];
+  const rest = tokens.slice(factoryIdx + 1);
   let groupCode = "";
   let productTokens = rest;
   if (rest.length >= 2 && /^\d{3,6}$/.test(rest[0])) {
     groupCode = rest[0];
     productTokens = rest.slice(1);
   }
+  // Orqa junk raqamlar mahsulot kodidan emas — identity emas.
   while (productTokens.length >= 2 && /^\d{4,}$/.test(productTokens[productTokens.length - 1])) {
     productTokens = productTokens.slice(0, -1);
   }
-  // "088 R5" → productCode=088, model=R5 (rang emas — parent kartochka bo‘lib qolsin).
-  if (productTokens.length >= 2 && /^R-?\d+$/i.test(productTokens[productTokens.length - 1])) {
-    model = productTokens[productTokens.length - 1].toUpperCase().replace(/^R-/i, "R");
-    productTokens = productTokens.slice(0, -1);
+  // "088 R5" / "088 R 5" → productCode=088, model=R5
+  if (productTokens.length >= 2) {
+    const last = productTokens[productTokens.length - 1];
+    const prev = productTokens[productTokens.length - 2];
+    const joinedModel = normalizeBordoModel(`${prev} ${last}`) || normalizeBordoModel(last);
+    if (joinedModel && /^R\s*-?\s*\d+$/i.test(last)) {
+      model = model || joinedModel;
+      productTokens = productTokens.slice(0, -1);
+    } else if (joinedModel && /^R$/i.test(prev) && /^\d+$/.test(last)) {
+      model = model || joinedModel;
+      productTokens = productTokens.slice(0, -2);
+    }
   }
-  const productCode = productTokens.join(" ");
+  const productCode = productTokens.join(" ").trim();
   if (!productCode) return null;
+  // Paren ichidagi R5 ham model.
+  if (!model && color) {
+    const colorModel = normalizeBordoModel(color);
+    if (colorModel) {
+      model = colorModel;
+      color = "";
+    }
+  }
   return { factoryCode, groupCode, productCode, size, color, model, article };
 }
 
@@ -1206,7 +1276,8 @@ export function matchProductFolder<T extends { name: string; pathName?: string }
 
 function isParentCard(product: { name: string }) {
   const parts = parseBordoName(product.name);
-  if (parts?.color) return false;
+  // Faqat nomdagi oddiy (qora) rang — variant. R5 model parent bo‘la oladi.
+  if (parts?.color && !normalizeBordoModel(parts.color)) return false;
   return !/\([^)]*\)\s*$/.test(product.name);
 }
 
@@ -1242,9 +1313,9 @@ export function listWaybillProducts(
   const code = input.productCode.trim();
   const size = input.size?.trim() || "";
   const group = input.groupCode?.trim() || "";
-  const wantedArticle = compactCode(input.article || "");
   if (!code) return [];
   const core = coreProductCode(code);
+  const wantedRang = bordoRangToken(productModelToken(code), "");
   // To‘liq katalog fallback yo‘q — GET/matches 504 bermasin. Indeks miss = bo‘sh.
   const pool = waybillIndexFor(catalog).get(core) ?? [];
   if (!pool.length) return [];
@@ -1256,11 +1327,9 @@ export function listWaybillProducts(
     if (!isParentCard(product)) continue;
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) continue;
     const parts = parseBordoName(product.name);
-    const cardArticle = bordoIdentityArticle(product.name, product.article, code || parts?.productCode || "");
-    // Artikul bo‘sh ≠ 43937 — lekin MS article=productCode (289) dublikat ochirmasin.
-    if (cardArticle !== wantedArticle) continue;
     if (parts) {
-      if (!productCodeMatches(parts.productCode, code)) continue;
+      if (coreProductCode(parts.productCode) !== core) continue;
+      if (bordoRangToken(parts.model, parts.color) !== wantedRang) continue;
       if (size && compactCode(parts.size) !== compactCode(size)) continue;
       if (group) {
         if (!parts.groupCode || !sameToken(parts.groupCode, group)) continue;
@@ -1314,7 +1383,7 @@ export function pickPassport(
         compactCode(p.groupCode),
         coreProductCode(p.productCode),
         compactCode(p.size),
-        bordoIdentityArticle(row.name, row.article, p.productCode),
+        bordoRangToken(p.model, p.color),
       ].join("|");
     }),
   );
@@ -1328,8 +1397,8 @@ export function pickPassport(
     const pa = parseBordoName(a.name);
     const pb = parseBordoName(b.name);
     if (wantedModel) {
-      const aM = Number(Boolean(pa?.model && pa.model.toUpperCase() === wantedModel));
-      const bM = Number(Boolean(pb?.model && pb.model.toUpperCase() === wantedModel));
+      const aM = Number(Boolean(normalizeBordoModel(pa?.model || "") === wantedModel));
+      const bM = Number(Boolean(normalizeBordoModel(pb?.model || "") === wantedModel));
       if (bM !== aM) return bM - aM;
     }
     if (wantedGroup) {

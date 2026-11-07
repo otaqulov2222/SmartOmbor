@@ -1,4 +1,4 @@
-import { bordoIdentityArticle, bordoParentName, canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, sanitizeMoySkladArticle, type Catalog, type CatalogProduct } from "./catalog";
+import { bordoIdentityArticle, bordoIdentityKey, bordoParentName, bordoRangToken, canonicalFactoryCode, compactCode, coreProductCode, foldProductName, matchNamedProducts, matchProductFolder, matchWaybillProduct, normalizeBordoColor, normalizeBordoModel, normalizeBordoSize, parseBordoName, pickPassport, productBelongsToFactory, productCodeMatches, productModelToken, sameBordoCard, sameBordoColor, sameFactoryCode, sanitizeMoySkladArticle, type Catalog, type CatalogProduct } from "./catalog";
 import { loadMarkup, markedSale, resolveMarkups, salesOf } from "./markup";
 import type { ShipmentLine } from "./partners";
 import { logger } from "./logger";
@@ -267,10 +267,11 @@ function variantColor(variant: VariantRow) {
   if (named?.value?.trim()) return named.value.trim();
   const parsed = parseBordoName(variant.name || "");
   if (parsed?.color) return parsed.color;
+  if (parsed?.model) return parsed.model;
   if (chars[0]?.value?.trim()) return chars[0].value.trim();
   const fromName = (variant.name || "").match(/\(([^)]+)\)\s*$/);
   if (fromName?.[1]) return fromName[1].trim();
-  const tail = (variant.name || "").match(/\s+([A-Z0-9]*R-?\d+[A-Z0-9]*)\s*$/i);
+  const tail = (variant.name || "").match(/\s+(R-?\d+)\s*$/i);
   return tail?.[1]?.trim() || "";
 }
 
@@ -346,6 +347,8 @@ function sameListedName(left: string, right: string) {
   if (!a || !b) return false;
   if (a === b) return true;
   if (a.localeCompare(b, "ru", { sensitivity: "accent" }) === 0) return true;
+  // Old/orqa junk farqi — bir xil Bordo identity (+rang) bo‘lsa bir kartochka.
+  if (bordoIdentityKey(a) === bordoIdentityKey(b)) return true;
   return namesEquivalent(a, b);
 }
 
@@ -359,11 +362,15 @@ function rowMatchesName(rowName: string, wanted: string) {
   if (!parsed) return false;
   const parts = parseBordoName(rowName);
   if (!parts) return false;
-  if (!sameBordoColor(parts.color, parsed.color)) return false;
+  // Nomdagi paren rang (variant) — parent solishtirishda R-model bilan.
+  if (parts.color && !normalizeBordoModel(parts.color) && parsed.color && !normalizeBordoModel(parsed.color)) {
+    if (!sameBordoColor(parts.color, parsed.color)) return false;
+  }
   return sameFactoryCode(parts.factoryCode, parsed.factoryCode)
-    && productCodeMatches(parts.productCode, parsed.productCode)
+    && coreProductCode(parts.productCode) === coreProductCode(parsed.productCode)
     && compactCode(parts.size) === compactCode(parsed.size)
-    && compactCode(parts.article) === compactCode(parsed.article);
+    && (!parsed.groupCode || !parts.groupCode || compactCode(parts.groupCode) === compactCode(parsed.groupCode))
+    && bordoRangToken(parts.model, parts.color) === bordoRangToken(parsed.model, parsed.color);
 }
 
 function pickNamedRow(rows: Array<{ id?: string; name?: string }>, wanted: string) {
@@ -392,18 +399,15 @@ function nameAliases(name: string) {
   const parsed = parseBordoName(trimmed);
   const aliases = [trimmed];
   if (parsed) {
-    const withGroup = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
-    const withoutGroup = ["Bordo", parsed.factoryCode, parsed.productCode, parsed.size].filter(Boolean).join(" ").trim();
-    // Artikul bo‘lsa — alias ham artikulli (43937). Artsiz alias eski kartochkaga yopishmasin.
-    if (parsed.article) {
-      aliases.push(`${withGroup} ${parsed.article}`, `${withoutGroup} ${parsed.article}`);
-    } else {
-      aliases.push(withGroup, withoutGroup);
-    }
-    if (parsed.color) {
-      const base = parsed.article ? `${withGroup} ${parsed.article}` : withGroup;
-      const baseNoGroup = parsed.article ? `${withoutGroup} ${parsed.article}` : withoutGroup;
-      aliases.push(`${base} ${parsed.color}`, `${base} (${parsed.color})`, `${baseNoGroup} ${parsed.color}`, `${baseNoGroup} (${parsed.color})`);
+    const rang = bordoRangToken(parsed.model, parsed.color);
+    const withGroup = ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size, rang].filter(Boolean).join(" ").trim();
+    const withoutGroup = ["Bordo", parsed.factoryCode, parsed.productCode, parsed.size, rang].filter(Boolean).join(" ").trim();
+    aliases.push(withGroup, withoutGroup);
+    if (rang) {
+      aliases.push(
+        ["Bordo", parsed.factoryCode, parsed.groupCode, parsed.productCode, parsed.size].filter(Boolean).join(" ") + ` (${rang})`,
+        ["Bordo", parsed.factoryCode, parsed.productCode, parsed.size].filter(Boolean).join(" ") + ` (${rang})`,
+      );
     }
   }
   return [...new Set(aliases.map((item) => item.trim().replace(/\s+/g, " ")).filter(Boolean))];
@@ -434,7 +438,8 @@ async function searchListedName(name: string) {
           productCode: parsed.productCode,
           size: parsed.size,
           groupCode: parsed.groupCode,
-          article: parsed.article,
+          model: parsed.model,
+          color: parsed.color,
         }));
         if (identity) {
           const loaded = await rowFromSearchHit(identity, trimmed);
@@ -500,15 +505,14 @@ function recoveredCardFits(hit: ProductRow, wanted: string) {
   const parts = parseBordoName(hit.name || "");
   if (!parts) return false;
   if (!sameFactoryCode(parts.factoryCode, expected.factoryCode)) return false;
-  if (!productCodeMatches(parts.productCode, expected.productCode)) return false;
+  if (coreProductCode(parts.productCode) !== coreProductCode(expected.productCode)) return false;
   if (compactCode(parts.size) !== compactCode(expected.size)) return false;
   // Guruh qattiq: 1020 ≠ 1021 — xato guruhga eski kartochka yopishmasin.
   if (expected.groupCode) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== compactCode(expected.groupCode)) return false;
   }
-  // Artikul qattiq: "…24-29" ≠ "…24-29 43937". MS article=productCode — farq emas.
-  const hitArticle = bordoIdentityArticle(hit.name || "", hit.article, expected.productCode);
-  if (compactCode(expected.article) !== hitArticle) return false;
+  // Rang qattiq: R5 ≠ R3. Old/orqa matn va artikul — e’tiborsiz.
+  if (bordoRangToken(parts.model, parts.color) !== bordoRangToken(expected.model, expected.color)) return false;
   return true;
 }
 
@@ -576,7 +580,7 @@ async function recoverExistingProduct(name: string) {
 }
 
 function listedNameKey(name: string) {
-  return name.trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US");
+  return bordoIdentityKey(name).toLocaleUpperCase("en-US");
 }
 
 type CreatedProduct = ProductRow & { packs?: GoodsPack[]; barcodes?: Array<Record<string, string>> };
@@ -616,9 +620,8 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
       const byIdentity = await findRemoteByIdentity({
         factoryCode: parsed.factoryCode,
         sectionCode: parsed.groupCode,
-        productCode: parsed.productCode,
+        productCode: [parsed.productCode, parsed.model].filter(Boolean).join(" "),
         size: parsed.size,
-        article: parsed.article,
       }, {
         factoryCode: parsed.factoryCode,
         factoryName: "",
@@ -1185,26 +1188,16 @@ function acceptFactoryProduct(
   if (!productBelongsToFactory(probe, factory, scope.factoryName)) return null;
   const parts = parseBordoName(name);
   if (!parts) return null;
-  if (line.productCode.trim() && !productCodeMatches(parts.productCode, line.productCode)) return null;
+  if (line.productCode.trim() && coreProductCode(parts.productCode) !== coreProductCode(line.productCode)) return null;
   if (line.size.trim() && compactCode(parts.size) !== compactCode(normalizeBordoSize(line.size))) return null;
   const group = compactCode(line.sectionCode || "");
   if (group) {
     if (!parts.groupCode || compactCode(parts.groupCode) !== group) return null;
   }
-  // Yuk xatida artikul yo‘q → "…43937" eskisiga yopishmasin. article=289 (kod) e’tiborsiz.
-  const wantedArticle = bordoIdentityArticle(
-    bordoParentName({
-      factoryCode: factory,
-      groupCode: line.sectionCode || "",
-      productCode: line.productCode,
-      size: line.size,
-      article: (line as { article?: string }).article || "",
-    }),
-    (line as { article?: string }).article,
-    line.productCode || parts.productCode,
-  );
-  const cardArticle = bordoIdentityArticle(name, catalogProduct?.article || row.article, line.productCode || parts.productCode);
-  if (wantedArticle !== cardArticle) return null;
+  // Rang qattiq (R5 ≠ R3). Artikul/old-orqa — yo‘q.
+  const wantedRang = bordoRangToken(productModelToken(line.productCode), "");
+  const cardRang = bordoRangToken(parts.model, parts.color);
+  if (wantedRang !== cardRang) return null;
   return row;
 }
 
