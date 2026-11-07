@@ -602,9 +602,11 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
   }
   // MoySkladda nom UNIQUE EMAS — oldindan aniq nom bo‘yicha qayta ishlatish majburiy, aks holda dublikat kodlar chiqadi.
   if (wanted) {
+    // Bir xil yozilgan nom (Bordo|zavod|guruh|tovar|razmer) — MS article/barcode farqi dublikat ochirmasin.
     const exactTwins = (await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]))
-      .filter((row) => recoveredCardFits(row, wanted) && sameListedName(row.name || "", wanted));
-    const exact = rankProductRows(exactTwins);
+      .filter((row) => sameListedName(row.name || "", wanted));
+    const exact = rankProductRows(exactTwins.filter((row) => recoveredCardFits(row, wanted)))
+      ?? rankProductRows(exactTwins);
     if (exact) {
       return asCreated(await ensureUniqueProductCode(exact));
     }
@@ -643,8 +645,9 @@ async function createProduct(body: Record<string, unknown>, opts?: { skipLookup?
       // Parallel/race: bir xil nomli eski kartochka bo‘lsa — yangisini tashlab mustahkamini ishlatamiz.
       if (wanted && created.id) {
         const twins = (await listExactNamedProducts(wanted).catch(() => [] as ProductRow[]))
-          .filter((row) => row.id && recoveredCardFits(row, wanted) && sameListedName(row.name || "", wanted));
-        const older = rankProductRows(twins.filter((row) => row.id !== created.id));
+          .filter((row) => row.id && sameListedName(row.name || "", wanted));
+        const older = rankProductRows(twins.filter((row) => row.id !== created.id && recoveredCardFits(row, wanted)))
+          ?? rankProductRows(twins.filter((row) => row.id !== created.id));
         if (older?.id) {
           logger.warn({ wanted, created: created.id, reuse: older.id, reuseCode: older.code }, "MoySklad duplicate name after create — reusing existing card");
           void optionalWrite(

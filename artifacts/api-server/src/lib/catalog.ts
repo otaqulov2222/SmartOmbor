@@ -792,30 +792,65 @@ export function ensureCatalogBootstrapped(): Promise<Catalog | null> {
   return bootstrapOnce;
 }
 
+/** Bir xil Bordo nomdagi twin kartochkalarni aniqlaydi — 15 daqiqalik hisobot uchun. */
+export function reportBordoNameTwins(catalog: Catalog, limit = 20) {
+  const groups = new Map<string, CatalogProduct[]>();
+  for (const product of catalog.products) {
+    const parts = parseBordoName(product.name);
+    if (!parts || parts.color) continue;
+    const key = [
+      canonicalFactoryCode(parts.factoryCode),
+      compactCode(parts.groupCode),
+      coreProductCode(parts.productCode),
+      compactCode(parts.size),
+      compactCode(parts.article),
+    ].join("|");
+    if (!key.replace(/\|/g, "")) continue;
+    const list = groups.get(key);
+    if (list) list.push(product);
+    else groups.set(key, [product]);
+  }
+  const twins = [...groups.entries()]
+    .filter(([, rows]) => rows.length > 1)
+    .map(([key, rows]) => ({
+      key,
+      count: rows.length,
+      name: rows[0]?.name || key,
+      codes: rows.map((row) => row.code || row.id).slice(0, 6),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+  if (twins.length) {
+    logger.warn({ twinGroups: twins.length, sample: twins.slice(0, 8) }, "Bordo twin-card check: same identity, multiple MoySklad cards");
+  } else {
+    logger.info({ products: catalog.products.length }, "Bordo twin-card check: no exact-name twins");
+  }
+  return twins;
+}
+
 export function startCatalogKeepalive() {
   if (keepAliveTimer) return;
-  const refresh = () => {
-    void loadCatalog(false).catch((error) => {
-      logger.warn({ err: error }, "Catalog keepalive soft load failed");
-    });
+  const refresh = (force: boolean) => {
+    void loadCatalog(force)
+      .then((catalog) => {
+        if (catalog?.products?.length) reportBordoNameTwins(catalog);
+      })
+      .catch((error) => {
+        logger.warn({ err: error }, force ? "Catalog keepalive force sync failed" : "Catalog keepalive soft load failed");
+      });
   };
-  // Tez soft-load (disk), keyin periodik yangilash.
-  setTimeout(refresh, 2_000);
-  setTimeout(() => {
-    void loadCatalog(true).catch((error) => {
-      logger.warn({ err: error }, "Catalog keepalive force sync failed");
-    });
-  }, 45_000);
+  // Tez soft-load (disk), keyin periodik yangilash + twin hisobot.
+  setTimeout(() => refresh(false), 2_000);
+  setTimeout(() => refresh(true), 45_000);
   keepAliveTimer = setInterval(() => {
     if (!cache?.products?.length) {
       void peekOrRecallCatalog().then((hit) => {
-        if (!hit?.products?.length) void loadCatalog(true).catch(() => undefined);
+        if (!hit?.products?.length) refresh(true);
+        else reportBordoNameTwins(hit);
       });
       return;
     }
-    void loadCatalog(true).catch((error) => {
-      logger.warn({ err: error }, "Catalog periodic refresh failed");
-    });
+    refresh(true);
   }, 15 * 60_000);
   if (typeof keepAliveTimer === "object" && keepAliveTimer && "unref" in keepAliveTimer) {
     keepAliveTimer.unref();
@@ -920,30 +955,18 @@ export function foldProductName(value: string) {
 }
 
 /**
- * Identity artikul: faqat nom oxiridagi 43937 kabi qo‘shimcha.
- * MoySkladda article ba’zan product code (289) bilan to‘ldiriladi — bu farq EMAS, aks holda
- * bir xil kartochka match qilinmay, yana 128… dublikat ochiladi.
+ * Identity artikul: faqat NOM oxiridagi 43937 kabi qo‘shimcha.
+ * MoySklad `article` maydoni o‘zi identity EMAS — u yerda barcode/kod/yolg‘on 43937 yozilgan
+ * bo‘lishi mumkin; shuni “farq” deb o‘qisa Bordo 0035 1020 B 708 36-40 kabi kartochka
+ * topilmay, yana 128… dublikat ochiladi. Farq faqat nomdagi artikul bilan.
  */
 export function bordoIdentityArticle(
   name: string,
-  msArticle?: string | null,
-  productCodeHint = "",
+  _msArticle?: string | null,
+  _productCodeHint = "",
 ): string {
   const parts = parseBordoName(name);
-  if (parts?.article) return compactCode(parts.article);
-  const art = compactCode(msArticle || "");
-  if (!art) return "";
-  const code = coreProductCode(productCodeHint || parts?.productCode || "");
-  if (code && art === code) return "";
-  if (parts) {
-    if (compactCode(parts.productCode) && art === compactCode(parts.productCode)) return "";
-    if (parts.groupCode && art === compactCode(parts.groupCode)) return "";
-    if (parts.factoryCode && art === compactCode(parts.factoryCode)) return "";
-    if (parts.size && art === compactCode(parts.size)) return "";
-  }
-  // Nomda artikul yo‘q, lekin MS article boshqa uzun raqam (43937) — nomdagi kabi hisobla.
-  if (/^\d{4,}$/.test(art) && (!code || art !== code)) return art;
-  return "";
+  return parts?.article ? compactCode(parts.article) : "";
 }
 
 export function bordoCardArticle(name: string, fallbackArticle = ""): string {

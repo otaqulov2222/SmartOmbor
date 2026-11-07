@@ -61,6 +61,10 @@ check("identity ignores article=tovar", !bordoIdentityArticle("Bordo 0044 1020 2
 check("sameCard with poisoned ms article", sameBordoCard("Bordo 0044 1020 289 36-40", {
   factoryCode: "0044", productCode: "289", size: "36-40", groupCode: "1020", article: "",
 }, { article: "289" }));
+check("sameCard ignores barcode-like ms article", sameBordoCard("Bordo 0035 1020 B 708 36-40", {
+  factoryCode: "0035", productCode: "B 708", size: "36-40", groupCode: "1020", article: "",
+}, { article: "036960390307" }));
+check("identity article only from name", !bordoIdentityArticle("Bordo 0035 1020 B 708 36-40", "036960390307", "B 708"));
 check("sameCard rejects real trailing article", !sameBordoCard("Bordo 0044 1020 289 36-40 43937", {
   factoryCode: "0044", productCode: "289", size: "36-40", groupCode: "1020", article: "",
 }, { article: "43937" }));
