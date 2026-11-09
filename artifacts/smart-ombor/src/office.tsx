@@ -7,6 +7,8 @@ import {
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
 import { OfficeMap } from '@/office-map-section';
+import { FluidNav } from '@/motion/fluid-pill';
+import { MotionItem, PageTransition, StaggerIn, staggerItem } from '@/motion/page-transition';
 import './office.css';
 
 type Punch = { date: string; inAt: string | null; outAt: string | null; workedMs: number };
@@ -121,10 +123,6 @@ export function OfficePage() {
   const [payOpen, setPayOpen] = useState(false);
   const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'tasks'>('mark');
   const video = useRef<HTMLVideoElement>(null);
-  const markRef = useRef<HTMLDivElement>(null);
-  const historyRef = useRef<HTMLDivElement>(null);
-  const payRef = useRef<HTMLDivElement>(null);
-  const tasksRef = useRef<HTMLDivElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
   const punchKind = useRef<'in' | 'out'>('in');
@@ -484,8 +482,6 @@ export function OfficePage() {
 
   const jumpSection = (id: 'mark' | 'history' | 'pay' | 'tasks') => {
     setSection(id);
-    const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : id === 'pay' ? payRef.current : tasksRef.current;
-    node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const ctaNeedCam = !camReady;
@@ -535,117 +531,152 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className={`office-sections ${me?.director ? 'is-3' : 'is-4'}`} role="tablist" aria-label={t('nav.office')}>
+      <FluidNav
+        className={`office-sections fluid-nav ${me?.director ? 'is-3' : 'is-4'}`}
+        pillClassName="fluid-pill fluid-pill-office"
+        axis="x"
+        activeSelector="button.is-on"
+        watchKey={`${section}|${me?.director ? '3' : '4'}`}
+        role="tablist"
+        aria-label={t('nav.office')}
+      >
         <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
         <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
         <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
         {!me?.director && <button type="button" role="tab" aria-selected={section === 'tasks'} className={section === 'tasks' ? 'is-on' : ''} onClick={() => jumpSection('tasks')}>{t('office.sectionTasks')}</button>}
-      </div>
-      <div ref={markRef} id="office-mark" className="office-block">
-        <div className="office-pair">
-          <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
-            <span>
-              <b>{t('office.in')} <Clock size={13}/></b>
-              <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
-              <small>{t('office.plan', { time: me?.office.start || '09:00' })}</small>
-            </span>
-            <LogIn size={18} className="office-go-arrow"/>
-          </button>
-          <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
-            <span>
-              <b>{t('office.out')} <Clock size={13}/></b>
-              <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
-              <small>{t('office.plan', { time: me?.office.end || '18:00' })}</small>
-            </span>
-            <LogOut size={18} className="office-go-arrow"/>
-          </button>
-        </div>
-        {me && <OfficeMap
-          officeLat={me.office.lat} officeLng={me.office.lng}
-          radiusM={radiusM}
-          here={inZone}
-          user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null}
-          status={gps ? geoStatus : ''}
-          gpsBlocked={!gps}
-          meters={meters}
-          onNudge={pingGps}
-          onEnableGps={pingGps}
-        />}
-        {ok && <p className="office-ok">{ok}</p>}
-        {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <p className="office-warn">{note}</p>}
-        <h2>{t('office.method')}</h2>
-        <p className="lead">{t('office.methodBody')}</p>
-        <div className="office-methods">
-          <button type="button" className={`office-method ${method === 'face' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('face'); }}>
-            <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
-            <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
-          </button>
-          <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
-            <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
-            <b>QR Scanner</b><small>{t('office.qrHint')}</small>
-          </button>
-        </div>
-        <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
-          <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
-          <small>{!canPunch
-            ? (gpsState === 'denied' || !gps ? t('office.lockedGps') : inZone ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) }) : t('office.distFar', { m: Math.round(meters || 0) }))
-            : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
-        </button>
-      </div>
-      <div ref={historyRef} id="office-history" className="office-card office-block">
-        <div className="office-card-top">
-          <div className="office-card-title">
-            <span className="is-clock"><Clock size={16}/></span>
-            <div><b>{t('office.myDay')}</b><small>{t('office.history')}</small></div>
-          </div>
-          <div className="office-tabs">
-            {ranges.map(item => <button key={item.id} type="button" className={range === item.id ? 'is-on' : ''} onClick={() => { setRange(item.id); void loadHistory(item.id); }}>{t(item.key)}</button>)}
-          </div>
-        </div>
-        {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
-      </div>
-      <div ref={payRef} id="office-pay" className="office-card office-block">
-        <div className="office-card-top">
-          <div className="office-card-title">
-            <span className="is-pay"><Wallet size={16}/></span>
-            <div>
-              <b>{t('office.pay')}</b>
-              <small>{t('office.payWeek', { from: monthDay(week.from, t('date.months')), to: monthDay(week.to, t('date.months')) })}</small>
-            </div>
-          </div>
-          <button type="button" className="office-detail" onClick={() => setPayOpen(open => !open)}>{t('office.detail')}</button>
-        </div>
-        <div className="office-pay">
-          <div>{t('office.fiksa')}<b>{money(me?.fiksa || 0)}</b></div>
-          <div>{t('office.fine')}<b>{money(0)}</b></div>
-          <div className="full">{t('office.left')}<b>{money(me?.fiksa || 0)}</b></div>
-        </div>
-        {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
-      </div>
-      {!me?.director && <div ref={tasksRef} id="office-tasks" className="office-block">
-        <h2>{t('office.myTasks')}</h2>
-        <p className="lead">{t('office.tasksBody')}</p>
-        {ownTasks.length ? ownTasks.map(task => {
-          const statusKey = task.status === 'assigned' ? 'office.stNew' : task.status === 'accepted' ? 'office.stAccepted' : task.status === 'progress' ? 'office.stProgress' : task.status === 'review' ? 'office.stReview' : 'office.colDone';
-          const prioKey = task.priority === 'low' ? 'office.pLow' : task.priority === 'high' ? 'office.pHigh' : task.priority === 'urgent' ? 'office.pNow' : 'office.pMid';
-          return <article className={`office-task is-${task.priority}${task.late ? ' is-late' : ''}`} key={task.id}>
-            <div className="office-task-top">
-              <span className={`office-pill is-${task.priority}`}>{t(prioKey as TKey)}</span>
-              <span className={`office-pill is-${task.status}`}>{t(statusKey as TKey)}</span>
-            </div>
-            <b>{task.title}</b>
-            <p>{task.description || t('office.noDesc')}</p>
-            <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
-            <div className="office-task-actions">
-              {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
-              {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
-              {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
-              {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
-              {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
-            </div>
-          </article>;
-        }) : <p className="office-empty">{t('office.noTasks')}</p>}
-      </div>}
+      </FluidNav>
+      <PageTransition routeKey={section} className="office-section-pane page-enter">
+        {section === 'mark' && (
+          <StaggerIn className="office-block" watchKey="mark">
+            <MotionItem variants={staggerItem} className="office-pair">
+              <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
+                <span>
+                  <b>{t('office.in')} <Clock size={13}/></b>
+                  <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
+                  <small>{t('office.plan', { time: me?.office.start || '09:00' })}</small>
+                </span>
+                <LogIn size={18} className="office-go-arrow"/>
+              </button>
+              <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
+                <span>
+                  <b>{t('office.out')} <Clock size={13}/></b>
+                  <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
+                  <small>{t('office.plan', { time: me?.office.end || '18:00' })}</small>
+                </span>
+                <LogOut size={18} className="office-go-arrow"/>
+              </button>
+            </MotionItem>
+            <MotionItem variants={staggerItem}>
+              {me && <OfficeMap
+                officeLat={me.office.lat} officeLng={me.office.lng}
+                radiusM={radiusM}
+                here={inZone}
+                user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null}
+                status={gps ? geoStatus : ''}
+                gpsBlocked={!gps}
+                meters={meters}
+                onNudge={pingGps}
+                onEnableGps={pingGps}
+              />}
+            </MotionItem>
+            {ok && <MotionItem variants={staggerItem}><p className="office-ok">{ok}</p></MotionItem>}
+            {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <MotionItem variants={staggerItem}><p className="office-warn">{note}</p></MotionItem>}
+            <MotionItem variants={staggerItem}><h2>{t('office.method')}</h2><p className="lead">{t('office.methodBody')}</p></MotionItem>
+            <MotionItem variants={staggerItem} className="office-methods">
+              <button type="button" className={`office-method ${method === 'face' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('face'); }}>
+                <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
+                <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
+              </button>
+              <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
+                <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
+                <b>QR Scanner</b><small>{t('office.qrHint')}</small>
+              </button>
+            </MotionItem>
+            <MotionItem variants={staggerItem}>
+              <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
+                <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
+                <small>{!canPunch
+                  ? (gpsState === 'denied' || !gps ? t('office.lockedGps') : inZone ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) }) : t('office.distFar', { m: Math.round(meters || 0) }))
+                  : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
+              </button>
+            </MotionItem>
+          </StaggerIn>
+        )}
+        {section === 'history' && (
+          <StaggerIn className="office-card office-block" watchKey={`history-${range}`}>
+            <MotionItem variants={staggerItem} className="office-card-top">
+              <div className="office-card-title">
+                <span className="is-clock"><Clock size={16}/></span>
+                <div><b>{t('office.myDay')}</b><small>{t('office.history')}</small></div>
+              </div>
+              <FluidNav
+                className="office-tabs fluid-nav"
+                pillClassName="fluid-pill fluid-pill-tabs"
+                axis="x"
+                activeSelector="button.is-on"
+                watchKey={range}
+              >
+                {ranges.map(item => <button key={item.id} type="button" className={range === item.id ? 'is-on' : ''} onClick={() => { setRange(item.id); void loadHistory(item.id); }}>{t(item.key)}</button>)}
+              </FluidNav>
+            </MotionItem>
+            {history.length
+              ? history.map(row => (
+                <MotionItem variants={staggerItem} className="office-row" key={row.date}>
+                  <span>{date(row.date)}</span>
+                  <b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b>
+                </MotionItem>
+              ))
+              : <MotionItem variants={staggerItem}><p className="office-empty">{t('office.noRows')}</p></MotionItem>}
+          </StaggerIn>
+        )}
+        {section === 'pay' && (
+          <StaggerIn className="office-card office-block" watchKey="pay">
+            <MotionItem variants={staggerItem} className="office-card-top">
+              <div className="office-card-title">
+                <span className="is-pay"><Wallet size={16}/></span>
+                <div>
+                  <b>{t('office.pay')}</b>
+                  <small>{t('office.payWeek', { from: monthDay(week.from, t('date.months')), to: monthDay(week.to, t('date.months')) })}</small>
+                </div>
+              </div>
+              <button type="button" className="office-detail" onClick={() => setPayOpen(open => !open)}>{t('office.detail')}</button>
+            </MotionItem>
+            <MotionItem variants={staggerItem} className="office-pay">
+              <div>{t('office.fiksa')}<b>{money(me?.fiksa || 0)}</b></div>
+              <div>{t('office.fine')}<b>{money(0)}</b></div>
+              <div className="full">{t('office.left')}<b>{money(me?.fiksa || 0)}</b></div>
+            </MotionItem>
+            {payOpen && <MotionItem variants={staggerItem}><p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p></MotionItem>}
+          </StaggerIn>
+        )}
+        {section === 'tasks' && !me?.director && (
+          <StaggerIn className="office-block" watchKey="tasks">
+            <MotionItem variants={staggerItem}><h2>{t('office.myTasks')}</h2><p className="lead">{t('office.tasksBody')}</p></MotionItem>
+            {ownTasks.length ? ownTasks.map(task => {
+              const statusKey = task.status === 'assigned' ? 'office.stNew' : task.status === 'accepted' ? 'office.stAccepted' : task.status === 'progress' ? 'office.stProgress' : task.status === 'review' ? 'office.stReview' : 'office.colDone';
+              const prioKey = task.priority === 'low' ? 'office.pLow' : task.priority === 'high' ? 'office.pHigh' : task.priority === 'urgent' ? 'office.pNow' : 'office.pMid';
+              return (
+                <MotionItem variants={staggerItem} className={`office-task is-${task.priority}${task.late ? ' is-late' : ''}`} key={task.id}>
+                  <div className="office-task-top">
+                    <span className={`office-pill is-${task.priority}`}>{t(prioKey as TKey)}</span>
+                    <span className={`office-pill is-${task.status}`}>{t(statusKey as TKey)}</span>
+                  </div>
+                  <b>{task.title}</b>
+                  <p>{task.description || t('office.noDesc')}</p>
+                  <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
+                  <div className="office-task-actions">
+                    {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
+                    {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
+                    {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
+                    {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
+                    {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
+                  </div>
+                </MotionItem>
+              );
+            }) : <MotionItem variants={staggerItem}><p className="office-empty">{t('office.noTasks')}</p></MotionItem>}
+          </StaggerIn>
+        )}
+      </PageTransition>
     </div>
     {stage && <div className="office-stage">
       <video ref={video} className="is-on" playsInline muted autoPlay/>
