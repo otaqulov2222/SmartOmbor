@@ -356,7 +356,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                 className="btn btn-primary"
                 onClick={() => openNavigator(nextStop.id)}
               >
-                <Navigation size={15} /> Navigator (to‘liq ekran)
+                <Navigation size={15} /> <span className="ag-nav-cta-label">Navigator</span>
               </button>
             </div>
           ) : null}
@@ -549,6 +549,22 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             ))}
           </div>
         </section>
+      ) : null}
+
+      {tab === 'today' && nextStop && !mapFullscreen ? (
+        <div className="ag-mobile-dock">
+          <button type="button" className="btn btn-primary" onClick={() => openNavigator(nextStop.id)}>
+            <Navigation size={16} /> Navigator
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={markVisit.isPending}
+            onClick={() => confirmVisit(nextStop)}
+          >
+            <CheckCircle2 size={16} /> Bordim · #{nextStop.step}
+          </button>
+        </div>
       ) : null}
     </div>
   );

@@ -695,14 +695,14 @@ export function RouteMap({
         </div>
         <div className="rm-chain-actions">
           <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
-            <Crosshair size={14} /> {followOn ? 'Kuzatuv' : 'Menga qarat'}
+            <Crosshair size={14} /> <span className="rm-btn-label">{followOn ? 'Kuzatuv' : 'Menga qarat'}</span>
           </button>
           <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
-            <Route size={14} /> Butun marshrut
+            <Route size={14} /> <span className="rm-btn-label">Butun marshrut</span>
           </button>
           {nextStop ? (
             <button type="button" className="btn btn-primary" onClick={focusNext}>
-              <MapIcon size={14} /> #{nextStop.step} xaritada
+              <MapIcon size={14} /> <span className="rm-btn-label">#{nextStop.step}</span>
             </button>
           ) : null}
           <button
@@ -711,7 +711,7 @@ export function RouteMap({
             onClick={() => setFullscreen(!isFullscreen)}
           >
             {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            {isFullscreen ? 'Kichik' : 'To‘liq ekran'}
+            <span className="rm-btn-label">{isFullscreen ? 'Kichik' : 'To‘liq ekran'}</span>
           </button>
         </div>
       </div>
@@ -742,22 +742,41 @@ export function RouteMap({
       <div ref={wrapRef} className={`rm-canvas-wrap ${active || isFullscreen ? 'is-active' : ''} ${followOn ? 'is-follow' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
         {!hasLiveGps ? (
-          <div className="rm-gps-banner">GPS yo‘q — joylashuv kutilmoqda. Telefon GPS ni yoqing.</div>
+          <div className="rm-gps-banner">GPS yo‘q — telefon GPS ni yoqing.</div>
         ) : null}
         {approxNext ? (
-          <div className="rm-gps-banner is-warn">Navbatdagi nuqta taxminiy joyda — aniq GPS saqlang (Bordim yoki admin).</div>
+          <div className="rm-gps-banner is-warn">Taxminiy joy — «Bordim» yoki admin orqali aniq GPS saqlang.</div>
         ) : null}
         {followOn && hasLiveGps ? (
-          <div className="rm-follow-badge"><Navigation size={12} /> Jonli kuzatuv</div>
+          <div className="rm-follow-badge"><Navigation size={12} /> Jonli</div>
         ) : null}
       </div>
 
-      <div className="rm-legend">
-        <span><i className="rm-dot is-agent" /> Siz (jonli)</span>
-        <span><i className="rm-dot is-done" /> Borildi</span>
-        <span><i className="rm-dot is-next" /> Hozirgi yo‘l</span>
-        <span><i className="rm-dot is-wait" /> 1→2→3→… yo‘nalish</span>
-      </div>
+      {isFullscreen ? (
+        <div className="rm-fs-dock">
+          <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
+            <Crosshair size={16} /> Men
+          </button>
+          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
+            <Route size={16} /> 1→{stops.length}
+          </button>
+          {nextStop ? (
+            <button type="button" className="btn btn-primary" onClick={focusNext}>
+              <MapIcon size={16} /> #{nextStop.step}
+            </button>
+          ) : null}
+          <button type="button" className="btn" onClick={() => setFullscreen(false)}>
+            <X size={16} /> Yopish
+          </button>
+        </div>
+      ) : (
+        <div className="rm-legend">
+          <span><i className="rm-dot is-agent" /> Siz</span>
+          <span><i className="rm-dot is-done" /> Borildi</span>
+          <span><i className="rm-dot is-next" /> Hozirgi</span>
+          <span><i className="rm-dot is-wait" /> 1→2→3…</span>
+        </div>
+      )}
     </div>
   );
 }
