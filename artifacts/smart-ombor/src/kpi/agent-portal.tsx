@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CheckCircle2, Clock, Compass, Crosshair, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
-  Sparkles, TrendingUp, Users, Wallet,
+  BadgeCheck, CheckCircle2, Clock, Compass, Crosshair, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
+  TrendingUp, Users, Wallet,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
@@ -319,7 +319,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         <div className="ag-hero-main">
           <div className="ag-avatar">{(d?.agent.fullName || 'A').slice(0, 1).toUpperCase()}</div>
           <div className="ag-hero-copy">
-            <span className="ag-badge"><Sparkles size={13} /> Savdo agenti</span>
+            <span className="ag-badge"><BadgeCheck size={13} /> Savdo agenti</span>
             <h1>{d?.agent.fullName || 'Agent'}</h1>
             <p className={`ag-gps-line ${coords ? 'is-on' : ''}`}>
               <Navigation size={13} />
