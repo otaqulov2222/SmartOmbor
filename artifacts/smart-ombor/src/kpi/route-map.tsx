@@ -560,11 +560,12 @@ export function RouteMap({
     };
   }, [mapReady, livePos?.lat, livePos?.lng, nextStop?.id, stops]);
 
-  // Fit whole sequence once when stops load / agent changes (if not following)
+  // Fit whole sequence when stops load. Skip only while live GPS follow is actively driving the camera.
   useEffect(() => {
     if (!mapReady) return;
     const map = mapRef.current;
-    if (!map || followOn) return;
+    if (!map) return;
+    if (followOn && hasLiveGps && !userPanRef.current) return;
     const bounds: Array<[number, number]> = [];
     if (livePos) bounds.push([livePos.lat, livePos.lng]);
     for (const s of stops) {
@@ -572,22 +573,7 @@ export function RouteMap({
     }
     if (bounds.length === 1) map.setView(bounds[0], 14);
     else if (bounds.length > 1) map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14 });
-  }, [mapReady, stops.length, agentName, followOn]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Pan to selected stop inside the app map
-  useEffect(() => {
-    if (!mapReady || !selectedStopId) return;
-    const stop = stops.find((s) => s.id === selectedStopId);
-    if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return;
-    const map = mapRef.current;
-    if (!map) return;
-    userPanRef.current = true;
-    setFollowOn(false);
-    const pts: Array<[number, number]> = [[stop.lat, stop.lng]];
-    if (livePos) pts.push([livePos.lat, livePos.lng]);
-    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
-    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
-  }, [selectedStopId, mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, stops.length, agentName, followOn, hasLiveGps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fitWholeRoute = () => {
     const map = mapRef.current;
@@ -603,6 +589,20 @@ export function RouteMap({
     else if (bounds.length > 1) map.fitBounds(bounds, { padding: [44, 44], maxZoom: 14 });
   };
 
+  const panToStop = (stop: RouteStop, keepFollow = false) => {
+    onSelectStop?.(stop);
+    const map = mapRef.current;
+    if (!map || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return;
+    if (!keepFollow) {
+      userPanRef.current = true;
+      setFollowOn(false);
+    }
+    const pts: Array<[number, number]> = [[stop.lat, stop.lng]];
+    if (livePos) pts.push([livePos.lat, livePos.lng]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
+    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
+  };
+
   // Fullscreen navigator: lock scroll + resize Leaflet to show whole 1→N chain
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -616,8 +616,11 @@ export function RouteMap({
       try {
         mapRef.current?.invalidateSize?.(true);
         if (!isFullscreen) return;
+        // Prefer whole day chain so 1→2→3… all visible (don't fight live follow later)
         const map = mapRef.current;
         if (!map) return;
+        userPanRef.current = true;
+        setFollowOn(false);
         const bounds: Array<[number, number]> = [];
         if (livePos) bounds.push([livePos.lat, livePos.lng]);
         for (const s of stops) {
@@ -628,7 +631,7 @@ export function RouteMap({
       } catch {
         /* ignore */
       }
-    }, 120);
+    }, 160);
     return () => {
       document.body.style.overflow = prev || '';
       window.clearTimeout(t);
@@ -636,17 +639,19 @@ export function RouteMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFullscreen]);
 
+  // Esc closes fullscreen navigator
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullscreen]);
+
   const focusNext = () => {
     if (!nextStop) return;
-    onSelectStop?.(nextStop);
-    const map = mapRef.current;
-    if (!map) return;
-    userPanRef.current = true;
-    setFollowOn(false);
-    const pts: Array<[number, number]> = [[nextStop.lat, nextStop.lng]];
-    if (livePos) pts.push([livePos.lat, livePos.lng]);
-    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
-    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
+    panToStop(nextStop);
   };
 
   const recenter = () => {
@@ -723,7 +728,7 @@ export function RouteMap({
               <button
                 type="button"
                 className={`rm-node ${s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : ''} ${selectedStopId === s.id ? 'is-sel' : ''}`}
-                onClick={() => onSelectStop?.(s)}
+                onClick={() => panToStop(s)}
                 title={s.name}
               >
                 <span className="rm-node-num">
