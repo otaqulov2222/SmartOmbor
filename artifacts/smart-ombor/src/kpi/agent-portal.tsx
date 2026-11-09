@@ -322,7 +322,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             <span className="ag-badge"><BadgeCheck size={13} /> Savdo agenti</span>
             <h1>{d?.agent.fullName || 'Agent'}</h1>
             <p className={`ag-gps-line ${coords ? 'is-on' : ''}`}>
-              <Navigation size={13} />
+              <Crosshair size={13} />
               {coords ? `GPS ulangan · ±${Math.round(coords.accuracy || 0)} m` : 'GPS kutilmoqda…'}
             </p>
           </div>

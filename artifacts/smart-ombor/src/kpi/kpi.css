@@ -164,10 +164,27 @@
   background: linear-gradient(135deg, #eff6ff, #f8fbff);
   border: 1px solid #bfdbfe;
 }
-.ag-next-banner span { display: block; font-size: .74rem; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: .04em; }
+.ag-next-banner > div > span {
+  display: block; font-size: .74rem; font-weight: 700; color: #1d4ed8;
+  text-transform: uppercase; letter-spacing: .04em;
+}
 .ag-next-banner b { display: block; margin-top: .15rem; font-size: 1.02rem; color: #0f1b2d; }
 .ag-next-banner small { display: block; margin-top: .2rem; color: #64748b; font-size: .82rem; }
-.ag-next-banner .btn { flex: none; }
+.ag-next-banner .btn {
+  flex: none; color: #fff !important; font-weight: 800; font-size: .95rem;
+  letter-spacing: .01em; text-transform: none;
+}
+.ag-next-banner .btn span,
+.ag-next-banner .btn svg {
+  color: #fff !important; fill: currentColor;
+  display: inline; font-size: inherit; font-weight: inherit;
+  text-transform: none; letter-spacing: normal;
+}
+.ag-mobile-dock .btn-primary,
+.ag-mobile-dock .btn-primary span,
+.ag-mobile-dock .btn-primary svg {
+  color: #fff !important;
+}
 
 .ag-stops { display: grid; gap: .6rem; }
 .ag-stop {
