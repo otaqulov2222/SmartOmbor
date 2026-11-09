@@ -148,83 +148,124 @@ export function OfficePage() {
     const id = window.setInterval(() => setClock(tashkentClock()), 1000);
     return () => window.clearInterval(id);
   }, []);
+  const gpsWatch = useRef<number | null>(null);
+  const gpsFails = useRef(0);
+  const applyGps = useRef<(pos: GeolocationPosition) => void>(() => undefined);
+  const failGps = useRef<(err: GeolocationPositionError, fromUser: boolean) => void>(() => undefined);
+
+  applyGps.current = (pos: GeolocationPosition) => {
+    if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
+    let accuracy = Number(pos.coords.accuracy);
+    if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
+    const heading = Number(pos.coords.heading);
+    gpsFails.current = 0;
+    setGps({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy,
+      heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
+    });
+    setGpsState('ready');
+    setNote('');
+  };
+  failGps.current = (err, fromUser) => {
+    if (err.code === err.PERMISSION_DENIED) {
+      // Avtomatik so‘rov iOS’da denied berishi mumkin — faqat user gesture’dan keyin denied deb belgilaymiz.
+      if (fromUser) setGpsState('denied');
+      else setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
+      return;
+    }
+    gpsFails.current += 1;
+    setGpsState(prev => {
+      if (prev === 'ready') return prev;
+      return gpsFails.current >= 3 ? 'error' : 'pending';
+    });
+  };
+
+  const startGpsWatch = (fromUser: boolean) => {
+    if (!navigator.geolocation) return;
+    if (gpsWatch.current != null) navigator.geolocation.clearWatch(gpsWatch.current);
+    gpsWatch.current = navigator.geolocation.watchPosition(
+      pos => applyGps.current(pos),
+      err => failGps.current(err, fromUser),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 25000 },
+    );
+  };
+
+  const requestGpsFix = (fromUser: boolean) => {
+    if (!window.isSecureContext || !navigator.geolocation) {
+      setGpsState('error');
+      return;
+    }
+    if (fromUser) setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        applyGps.current(pos);
+        startGpsWatch(fromUser);
+      },
+      () => {
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            applyGps.current(pos);
+            startGpsWatch(fromUser);
+          },
+          err => failGps.current(err, fromUser),
+          { enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000 },
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 12_000 },
+    );
+  };
+
   useEffect(() => {
     if (!window.isSecureContext || !navigator.geolocation) {
       setGpsState('error');
       return;
     }
     let cancelled = false;
-    let fails = 0;
-    let watchId: number | null = null;
-    const apply = (pos: GeolocationPosition) => {
-      if (cancelled) return;
-      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
-      let accuracy = Number(pos.coords.accuracy);
-      if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
-      const heading = Number(pos.coords.heading);
-      fails = 0;
-      setGps({
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        accuracy,
-        heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
-      });
-      setGpsState('ready');
-      setNote('');
+    let permStatus: PermissionStatus | null = null;
+    const onPermChange = () => {
+      if (!permStatus) return;
+      if (permStatus.state === 'granted') requestGpsFix(false);
+      if (permStatus.state === 'denied') setGpsState('denied');
     };
-    const fail = (err: GeolocationPositionError) => {
-      if (cancelled) return;
-      if (err.code === err.PERMISSION_DENIED) {
-        setGpsState('denied');
-        return;
+    const boot = async () => {
+      // Safari/iOS: sahifa ochilishi bilan GPS so‘rash → ko‘pincha denied. Faqat allaqachon granted bo‘lsa auto-start.
+      let granted = false;
+      try {
+        const perm = (navigator as Navigator & { permissions?: { query: (q: { name: PermissionName }) => Promise<PermissionStatus> } }).permissions;
+        const status = await perm?.query({ name: 'geolocation' as PermissionName });
+        if (cancelled) return;
+        if (status) {
+          permStatus = status;
+          granted = status.state === 'granted';
+          if (status.state === 'denied') setGpsState('denied');
+          status.addEventListener('change', onPermChange);
+        }
+      } catch {
+        /* permissions API yo‘q — user tugmasini kutamiz */
       }
-      fails += 1;
-      setGpsState(prev => {
-        if (prev === 'ready') return prev;
-        return fails >= 3 ? 'error' : 'pending';
-      });
+      if (cancelled) return;
+      if (granted) requestGpsFix(false);
+      else setGpsState(prev => (prev === 'ready' || prev === 'denied' ? prev : 'pending'));
     };
-    const startWatch = () => {
-      if (watchId != null) navigator.geolocation.clearWatch(watchId);
-      watchId = navigator.geolocation.watchPosition(apply, fail, {
-        enableHighAccuracy: true, maximumAge: 5000, timeout: 25000,
-      });
+    void boot();
+    const onWake = () => {
+      if (cancelled || document.visibilityState === 'hidden') return;
+      void (navigator as Navigator & { permissions?: { query: (q: { name: PermissionName }) => Promise<PermissionStatus> } }).permissions
+        ?.query({ name: 'geolocation' as PermissionName })
+        .then(status => { if (status.state === 'granted') requestGpsFix(false); })
+        .catch(() => undefined);
     };
-    const requestFix = () => {
-      navigator.geolocation.getCurrentPosition(apply, () => {
-        navigator.geolocation.getCurrentPosition(apply, fail, {
-          enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000,
-        });
-      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 });
-    };
-    startWatch();
-    requestFix();
-    const onWake = () => { if (!cancelled) requestFix(); };
     window.addEventListener('focus', onWake);
     document.addEventListener('visibilitychange', onWake);
-    const perm = (navigator as Navigator & { permissions?: { query: (q: { name: PermissionName }) => Promise<PermissionStatus> } }).permissions;
-    let permStatus: PermissionStatus | null = null;
-    const onPerm = () => {
-      if (!permStatus) return;
-      if (permStatus.state === 'denied') setGpsState('denied');
-      if (permStatus.state === 'granted') {
-        setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
-        requestFix();
-        startWatch();
-      }
-    };
-    void perm?.query({ name: 'geolocation' as PermissionName }).then(status => {
-      if (cancelled) return;
-      permStatus = status;
-      status.addEventListener('change', onPerm);
-      onPerm();
-    }).catch(() => undefined);
     return () => {
       cancelled = true;
-      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+      if (gpsWatch.current != null) navigator.geolocation.clearWatch(gpsWatch.current);
+      gpsWatch.current = null;
       window.removeEventListener('focus', onWake);
       document.removeEventListener('visibilitychange', onWake);
-      permStatus?.removeEventListener('change', onPerm);
+      permStatus?.removeEventListener('change', onPermChange);
     };
   }, []);
   useEffect(() => {
@@ -437,44 +478,8 @@ export function OfficePage() {
   };
 
   const pingGps = () => {
-    if (!window.isSecureContext || !navigator.geolocation) {
-      setGpsState('error');
-      setNote(t('office.gpsOff'));
-      return;
-    }
-    setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
     setNote('');
-    const ok = (pos: GeolocationPosition) => {
-      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
-      let accuracy = Number(pos.coords.accuracy);
-      if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
-      const heading = Number(pos.coords.heading);
-      setGps({
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        accuracy,
-        heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
-      });
-      setGpsState('ready');
-      setNote('');
-    };
-    const bad = (err: GeolocationPositionError) => {
-      if (err.code === err.PERMISSION_DENIED) {
-        setGpsState('denied');
-        setNote(t('office.gpsNeed'));
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(ok, () => {
-        setGpsState(prev => {
-          if (prev === 'ready') return prev;
-          setNote(t('office.gpsOff'));
-          return 'error';
-        });
-      }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000 });
-    };
-    navigator.geolocation.getCurrentPosition(ok, bad, {
-      enableHighAccuracy: true, maximumAge: 0, timeout: 12_000,
-    });
+    requestGpsFix(true);
   };
 
   const jumpSection = (id: 'mark' | 'history' | 'pay' | 'tasks') => {
@@ -560,8 +565,8 @@ export function OfficePage() {
           radiusM={radiusM}
           here={inZone}
           user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null}
-          status={gpsState === 'denied' || (gpsState === 'error' && !gps) ? '' : geoStatus}
-          gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)}
+          status={gps ? geoStatus : ''}
+          gpsBlocked={!gps}
           meters={meters}
           onNudge={pingGps}
           onEnableGps={pingGps}
