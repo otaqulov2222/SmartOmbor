@@ -333,6 +333,8 @@
   padding: .45rem .65rem; font-size: .78rem; font-weight: 700;
   text-align: center; pointer-events: none;
 }
+.rm-gps-banner.is-warn { top: auto; bottom: 44px; background: rgba(255, 247, 237, .96); }
+.rm-pin-tag em.rm-approx { font-style: normal; color: #fde68a; margin-left: 2px; }
 .rm-follow-badge {
   position: absolute; left: 10px; bottom: 12px; z-index: 5;
   display: inline-flex; align-items: center; gap: .3rem;

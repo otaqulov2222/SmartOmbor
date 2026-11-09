@@ -1210,6 +1210,65 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
   }
 });
 
+/** Road geometry proxy (agent + staff). Avoids client SSL/CORS failures to public OSRM. */
+router.get("/kpi/route", requireKpiAgent(), async (req, res, next) => {
+  try {
+    const fromLat = Number(req.query.fromLat);
+    const fromLng = Number(req.query.fromLng);
+    const toLat = Number(req.query.toLat);
+    const toLng = Number(req.query.toLng);
+    if (![fromLat, fromLng, toLat, toLng].every((n) => Number.isFinite(n))) {
+      res.status(400).json({ error: "fromLat,fromLng,toLat,toLng kerak." });
+      return;
+    }
+    const coords = `${fromLng.toFixed(6)},${fromLat.toFixed(6)};${toLng.toFixed(6)},${toLat.toFixed(6)}`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+    if (!upstream.ok) {
+      res.status(502).json({
+        ok: false,
+        path: [
+          [fromLat, fromLng],
+          [toLat, toLng],
+        ],
+        distanceM: null,
+        durationSec: null,
+      });
+      return;
+    }
+    const data = (await upstream.json()) as {
+      code?: string;
+      routes?: Array<{
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: Array<[number, number]> };
+      }>;
+    };
+    const route = data.routes?.[0];
+    const geom = route?.geometry?.coordinates;
+    if (data.code !== "Ok" || !geom?.length) {
+      res.json({
+        ok: false,
+        path: [
+          [fromLat, fromLng],
+          [toLat, toLng],
+        ],
+        distanceM: null,
+        durationSec: null,
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      path: geom.map(([lng, lat]) => [lat, lng]),
+      distanceM: route?.distance != null ? Math.round(route.distance) : null,
+      durationSec: route?.duration != null ? Math.round(route.duration) : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureKpiBootstrapped();

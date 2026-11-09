@@ -1,5 +1,6 @@
 import { CheckCircle2, Crosshair, ExternalLink, Navigation } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { kpiFetch, readAgentToken } from './api';
 
 export type RouteStop = {
   id: string;
@@ -93,17 +94,46 @@ async function fetchRoadRoute(points: Array<[number, number]>): Promise<{
   path: Array<[number, number]>;
   distanceM: number | null;
   durationSec: number | null;
+  ok: boolean;
 }> {
-  if (points.length < 2) return { path: points, distanceM: null, durationSec: null };
+  if (points.length < 2) return { path: points, distanceM: null, durationSec: null, ok: false };
+  const [[fromLat, fromLng], [toLat, toLng]] = points;
+  const straight = {
+    path: points,
+    distanceM: Math.round(haversineM({ lat: fromLat, lng: fromLng }, { lat: toLat, lng: toLng })),
+    durationSec: null as number | null,
+    ok: false,
+  };
   try {
-    const coords = points
-      .slice(0, 2)
-      .map(([lat, lng]) => `${lng.toFixed(6)},${lat.toFixed(6)}`)
-      .join(';');
-    // overview=full + geometries=geojson — bitta toza agent→maqsad yo‘li
+    const mode = readAgentToken() ? 'agent' : 'admin';
+    const q = new URLSearchParams({
+      fromLat: String(fromLat),
+      fromLng: String(fromLng),
+      toLat: String(toLat),
+      toLng: String(toLng),
+    });
+    const data = await kpiFetch<{
+      ok?: boolean;
+      path?: Array<[number, number]>;
+      distanceM?: number | null;
+      durationSec?: number | null;
+    }>(`/kpi/route?${q.toString()}`, {}, mode);
+    if (data.ok && data.path && data.path.length > 1) {
+      return {
+        path: data.path,
+        distanceM: data.distanceM ?? straight.distanceM,
+        durationSec: data.durationSec ?? null,
+        ok: true,
+      };
+    }
+  } catch {
+    /* fall through to direct OSRM, then straight line */
+  }
+  try {
+    const coords = `${fromLng.toFixed(6)},${fromLat.toFixed(6)};${toLng.toFixed(6)},${toLat.toFixed(6)}`;
     const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
     const res = await fetch(url);
-    if (!res.ok) return { path: points, distanceM: null, durationSec: null };
+    if (!res.ok) return straight;
     const data = (await res.json()) as {
       code?: string;
       routes?: Array<{
@@ -112,20 +142,20 @@ async function fetchRoadRoute(points: Array<[number, number]>): Promise<{
         geometry?: { coordinates?: Array<[number, number]> };
       }>;
     };
-    if (data.code && data.code !== 'Ok') return { path: points, distanceM: null, durationSec: null };
     const route = data.routes?.[0];
     const geom = route?.geometry?.coordinates;
-    if (geom && geom.length > 1) {
+    if (data.code === 'Ok' && geom && geom.length > 1) {
       return {
         path: geom.map(([lng, lat]) => [lat, lng]),
-        distanceM: route?.distance != null ? Math.round(route.distance) : null,
+        distanceM: route?.distance != null ? Math.round(route.distance) : straight.distanceM,
         durationSec: route?.duration != null ? Math.round(route.duration) : null,
+        ok: true,
       };
     }
   } catch {
     /* offline */
   }
-  return { path: points, distanceM: null, durationSec: null };
+  return straight;
 }
 
 function agentIconHtml(label: string, deg: number) {
@@ -160,7 +190,6 @@ export function RouteMap({
   agentPos?: LatLng | null;
   agentName?: string;
   selectedStopId?: string | null;
-  /** Navigator follow-me: keep camera on the agent while moving */
   follow?: boolean;
   onSelectStop?: (stop: RouteStop) => void;
   onSelectAgent?: (agentId: string) => void;
@@ -176,16 +205,30 @@ export function RouteMap({
   const routeOriginRef = useRef<{ lat: number; lng: number; destId: string } | null>(null);
   const followRef = useRef(follow);
   const userPanRef = useRef(false);
+  const onSelectStopRef = useRef(onSelectStop);
+  const onSelectAgentRef = useRef(onSelectAgent);
 
+  const [mapReady, setMapReady] = useState(false);
   const [active, setActive] = useState(false);
   const [followOn, setFollowOn] = useState(follow);
-  const [roadHint, setRoadHint] = useState<{ distanceM: number | null; durationSec: number | null }>({
+  const [roadHint, setRoadHint] = useState<{ distanceM: number | null; durationSec: number | null; roadOk: boolean }>({
     distanceM: null,
     durationSec: null,
+    roadOk: false,
   });
   const [compassHeading, setCompassHeading] = useState<number | null>(null);
 
+  onSelectStopRef.current = onSelectStop;
+  onSelectAgentRef.current = onSelectAgent;
   followRef.current = followOn;
+
+  // Keep follow in sync when parent toggles (admin agent select)
+  useEffect(() => {
+    if (follow) {
+      userPanRef.current = false;
+      setFollowOn(true);
+    }
+  }, [follow]);
 
   const doneCount = stops.filter((s) => s.visitedToday).length;
   const nextStop = useMemo(
@@ -193,19 +236,21 @@ export function RouteMap({
     [stops],
   );
   const progressPct = stops.length ? Math.round((doneCount / stops.length) * 100) : 0;
+  const approxNext = Boolean(nextStop && nextStop.exactGps === false);
 
   const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
   const livePos: LatLng | null = useMemo(() => {
-    if (agentPos?.lat != null && agentPos?.lng != null) return agentPos;
+    if (agentPos?.lat != null && agentPos?.lng != null) {
+      return { lat: agentPos.lat, lng: agentPos.lng, heading: agentPos.heading };
+    }
     if (primaryAgent?.lat != null && primaryAgent?.lng != null) {
       return { lat: primaryAgent.lat, lng: primaryAgent.lng, heading: primaryAgent.heading };
     }
     return null;
-  }, [agentPos, primaryAgent]);
+  }, [agentPos?.lat, agentPos?.lng, agentPos?.heading, primaryAgent?.lat, primaryAgent?.lng, primaryAgent?.heading]);
 
   const hasLiveGps = Boolean(livePos);
 
-  // Device compass (when GPS heading missing)
   useEffect(() => {
     const onOrient = (e: DeviceOrientationEvent) => {
       const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
@@ -218,7 +263,6 @@ export function RouteMap({
     return () => window.removeEventListener('deviceorientation', onOrient, true);
   }, []);
 
-  // Map interactions: tap to enable; outside disables scroll capture
   useEffect(() => {
     const onDocDown = (e: MouseEvent | TouchEvent) => {
       const el = wrapRef.current;
@@ -249,9 +293,9 @@ export function RouteMap({
       map.touchZoom?.disable();
       map.doubleClickZoom?.disable();
     }
-  }, [active]);
+  }, [active, mapReady]);
 
-  // Init map once
+  // Init once + cleanup
   useEffect(() => {
     let alive = true;
     void ensureLeaflet().then((L) => {
@@ -276,37 +320,51 @@ export function RouteMap({
         userPanRef.current = true;
         setFollowOn(false);
       });
-      setTimeout(() => map.invalidateSize?.(), 60);
+      setMapReady(true);
+      setTimeout(() => map.invalidateSize?.(), 80);
     });
     return () => {
       alive = false;
+      try {
+        mapRef.current?.remove?.();
+      } catch {
+        /* ignore */
+      }
+      mapRef.current = null;
+      agentMarkerRef.current = null;
+      stopsLayerRef.current = null;
+      routeLayerRef.current = null;
+      trackLayerRef.current = null;
+      setMapReady(false);
     };
   }, []);
 
-  // Draw stops (when stop list / selection changes)
+  // Stops layer
   useEffect(() => {
+    if (!mapReady) return;
     const L = LRef.current;
-    const map = mapRef.current;
     const layer = stopsLayerRef.current;
-    if (!L || !map || !layer) return;
+    if (!L || !layer) return;
     layer.clearLayers();
-    const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-    for (const s of valid) {
+    for (const s of stops) {
+      if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
       const cls = s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : 'is-wait';
       const label = s.visitedToday ? `${s.step}✓` : String(s.step);
+      const approx = s.exactGps === false ? ' <em class="rm-approx">~</em>' : '';
       const icon = L.divIcon({
         className: 'rm-pin-wrap',
-        html: `<div class="rm-pin ${cls} ${selectedStopId === s.id ? 'is-sel' : ''}"><span>${label}</span></div><div class="rm-pin-tag">${s.name.slice(0, 18)}</div>`,
+        html: `<div class="rm-pin ${cls} ${selectedStopId === s.id ? 'is-sel' : ''}"><span>${label}</span></div><div class="rm-pin-tag">${s.name.slice(0, 18)}${approx}</div>`,
         iconSize: [42, 42],
         iconAnchor: [21, 21],
       });
       const marker = L.marker([s.lat, s.lng], { icon }).addTo(layer);
-      marker.on('click', () => onSelectStop?.(s));
+      marker.on('click', () => onSelectStopRef.current?.(s));
     }
-  }, [stops, selectedStopId, onSelectStop]);
+  }, [mapReady, stops, selectedStopId]);
 
-  // Track breadcrumb (light)
+  // Track
   useEffect(() => {
+    if (!mapReady) return;
     const L = LRef.current;
     const layer = trackLayerRef.current;
     if (!L || !layer) return;
@@ -317,13 +375,22 @@ export function RouteMap({
         { color: '#38bdf8', weight: 3, opacity: 0.55, lineCap: 'round' },
       ).addTo(layer);
     }
-  }, [track]);
+  }, [mapReady, track]);
 
-  // Live agent marker + follow camera (NO full redraw)
+  // Live agent marker + follow
   useEffect(() => {
+    if (!mapReady) return;
     const L = LRef.current;
     const map = mapRef.current;
-    if (!L || !map || !livePos) return;
+    if (!L || !map) return;
+
+    if (!livePos) {
+      if (agentMarkerRef.current) {
+        map.removeLayer(agentMarkerRef.current);
+        agentMarkerRef.current = null;
+      }
+      return;
+    }
 
     const dest = nextStop && !nextStop.visitedToday ? nextStop : null;
     let heading = livePos.heading ?? compassHeading ?? null;
@@ -344,9 +411,9 @@ export function RouteMap({
         icon,
         zIndexOffset: 1200,
       }).addTo(map);
-      if (primaryAgent) {
-        agentMarkerRef.current.on('click', () => onSelectAgent?.(primaryAgent.id));
-      }
+      agentMarkerRef.current.on('click', () => {
+        if (primaryAgent) onSelectAgentRef.current?.(primaryAgent.id);
+      });
     } else {
       agentMarkerRef.current.setLatLng([livePos.lat, livePos.lng]);
       agentMarkerRef.current.setIcon(icon);
@@ -354,12 +421,14 @@ export function RouteMap({
 
     if (followRef.current && !userPanRef.current) {
       const z = Math.max(map.getZoom?.() || 14, 15);
-      map.setView([livePos.lat, livePos.lng], z, { animate: true });
+      map.panTo([livePos.lat, livePos.lng], { animate: true });
+      if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: true });
     }
-  }, [livePos, nextStop, compassHeading, agentName, primaryAgent, onSelectAgent]);
+  }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
 
-  // Clean road route: only agent → next destination (refresh when moved far / dest changed)
+  // Road route agent → next
   useEffect(() => {
+    if (!mapReady) return;
     let alive = true;
     const L = LRef.current;
     const layer = routeLayerRef.current;
@@ -368,7 +437,7 @@ export function RouteMap({
     const run = async () => {
       if (!livePos || !nextStop || nextStop.visitedToday) {
         layer.clearLayers();
-        setRoadHint({ distanceM: nextStop?.distanceM ?? null, durationSec: null });
+        setRoadHint({ distanceM: nextStop?.distanceM ?? null, durationSec: null, roadOk: false });
         routeOriginRef.current = null;
         return;
       }
@@ -380,10 +449,10 @@ export function RouteMap({
         haversineM(prev, livePos) > 90;
 
       if (!movedFar && prev) {
-        // Keep existing road polyline; refresh ETA hint lightly
         setRoadHint((h) => ({
           distanceM: Math.round(haversineM(livePos, nextStop)),
           durationSec: h.durationSec,
+          roadOk: h.roadOk,
         }));
         return;
       }
@@ -397,21 +466,25 @@ export function RouteMap({
       setRoadHint({
         distanceM: road.distanceM ?? Math.round(haversineM(livePos, nextStop)),
         durationSec: road.durationSec,
+        roadOk: road.ok,
       });
       layer.clearLayers();
-      // Soft casing + solid route (navigator style)
-      L.polyline(road.path, { color: '#1e3a8a', weight: 10, opacity: 0.18, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
-      L.polyline(road.path, { color: '#2563eb', weight: 5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+      const style = road.ok
+        ? { color: '#2563eb', weight: 5, opacity: 0.95 }
+        : { color: '#64748b', weight: 4, opacity: 0.75, dashArray: '6 8' };
+      L.polyline(road.path, { color: '#1e3a8a', weight: 10, opacity: 0.16, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+      L.polyline(road.path, { ...style, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
     };
 
     void run();
     return () => {
       alive = false;
     };
-  }, [livePos?.lat, livePos?.lng, nextStop?.id, nextStop?.lat, nextStop?.lng, nextStop?.visitedToday, nextStop?.distanceM]);
+  }, [mapReady, livePos?.lat, livePos?.lng, nextStop?.id, nextStop?.lat, nextStop?.lng, nextStop?.visitedToday, nextStop?.distanceM]);
 
-  // Fit once when stops first load and no follow yet
+  // Initial fit when not following
   useEffect(() => {
+    if (!mapReady) return;
     const map = mapRef.current;
     if (!map || followOn) return;
     const bounds: Array<[number, number]> = [];
@@ -424,13 +497,15 @@ export function RouteMap({
     }
     if (bounds.length === 1) map.setView(bounds[0], 14);
     else if (bounds.length > 1) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
-  }, [stops.length, nextStop?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, stops.length, nextStop?.id, followOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const recenter = () => {
     userPanRef.current = false;
     setFollowOn(true);
     const map = mapRef.current;
-    if (map && livePos) map.setView([livePos.lat, livePos.lng], Math.max(map.getZoom?.() || 15, 15), { animate: true });
+    if (map && livePos) {
+      map.setView([livePos.lat, livePos.lng], Math.max(map.getZoom?.() || 15, 15), { animate: true });
+    }
   };
 
   return (
@@ -446,13 +521,15 @@ export function RouteMap({
               Navbatdagi: <b>#{nextStop.step} {nextStop.name}</b>
               {roadHint.distanceM != null ? ` · ${fmtDistance(roadHint.distanceM)}` : ''}
               {roadHint.durationSec != null ? ` · ${fmtEta(roadHint.durationSec)}` : ''}
+              {approxNext ? ' · taxminiy joy' : ''}
+              {!roadHint.roadOk && hasLiveGps ? ' · to‘g‘ri chiziq (OSRM yo‘q)' : ''}
             </span>
           ) : stops.length ? (
             <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
           ) : null}
         </div>
         <div className="rm-chain-actions">
-          <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter}>
+          <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
             <Crosshair size={14} /> {followOn ? 'Kuzatuv yoqilgan' : 'Menga qarat'}
           </button>
           {nextStop ? (
@@ -497,6 +574,9 @@ export function RouteMap({
         <div ref={boxRef} className="rm-canvas" />
         {!hasLiveGps ? (
           <div className="rm-gps-banner">GPS yo‘q — joylashuv kutilmoqda. Telefon GPS ni yoqing.</div>
+        ) : null}
+        {approxNext ? (
+          <div className="rm-gps-banner is-warn">Navbatdagi nuqta taxminiy joyda — aniq GPS saqlang (Bordim yoki admin).</div>
         ) : null}
         {followOn && hasLiveGps ? (
           <div className="rm-follow-badge"><Navigation size={12} /> Jonli kuzatuv</div>
