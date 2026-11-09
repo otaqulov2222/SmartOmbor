@@ -138,14 +138,23 @@ export function orderRouteStops<
 
   const ordered = [...visited, ...greedySort(unvisitedDebtors), ...greedySort(unvisitedOthers)];
   let nextAssigned = false;
+  const hasStart = startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng);
 
   return ordered.map((item, idx) => {
     const isNext = !item.visitedToday && !nextAssigned;
     if (isNext) nextAssigned = true;
-    const distanceM =
-      startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng)
-        ? distanceMeters(startLat, startLng, item.lat, item.lng)
-        : null;
+    // Leg distance: agent → first pending, then stop → stop along the ordered route
+    let distanceM: number | null = null;
+    if (idx === 0) {
+      distanceM = hasStart ? distanceMeters(startLat as number, startLng as number, item.lat, item.lng) : null;
+    } else {
+      const prev = ordered[idx - 1];
+      distanceM = distanceMeters(prev.lat, prev.lng, item.lat, item.lng);
+    }
+    // For the next stop, always show distance from the live agent when available
+    if (isNext && hasStart) {
+      distanceM = distanceMeters(startLat as number, startLng as number, item.lat, item.lng);
+    }
     return {
       ...item,
       step: idx + 1,

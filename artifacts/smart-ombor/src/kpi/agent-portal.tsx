@@ -3,7 +3,7 @@ import {
   CheckCircle2, Clock, Compass, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
   Sparkles, TrendingUp, Users, Wallet,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
 import { RouteMap, type RouteStop } from './route-map';
@@ -80,6 +80,18 @@ type CabinetData = {
 
 type Tab = 'today' | 'kpi' | 'customers';
 
+function fmtDist(m: number | null | undefined) {
+  if (m == null || !Number.isFinite(m)) return null;
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+/** Today's route: debtors + already visited today, keeping server nearest-neighbor order. */
+function buildRouteStops(customers: CustomerCard[]): CustomerCard[] {
+  const hasDebtors = customers.some((c) => Number(c.debt) > 0);
+  if (!hasDebtors) return customers;
+  return customers.filter((c) => Number(c.debt) > 0 || c.visitedToday);
+}
+
 export function AgentPortal() {
   const [tokenTick, setTokenTick] = useState(0);
   const hasToken = Boolean(readAgentToken() || readStaffToken());
@@ -142,15 +154,18 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
   const [tab, setTab] = useState<Tab>('today');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
+  const stopRefs = useRef<Record<string, HTMLElement | null>>({});
   const cache = useQueryClient();
   const mode = readAgentToken() ? 'agent' : 'admin';
   const q = useQuery({
     queryKey: ['kpi-agent-cabinet'],
     queryFn: () => kpiFetch<CabinetData>('/kpi/agent/cabinet', {}, mode),
+    refetchInterval: 45_000,
   });
 
   useEffect(() => {
     if (!navigator.geolocation) return;
+    let lastPosted = 0;
     const sendLoc = (pos: GeolocationPosition) => {
       const next = {
         lat: pos.coords.latitude,
@@ -159,7 +174,12 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         heading: pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
       };
       setCoords(next);
-      void kpiFetch('/kpi/agent/location', { method: 'POST', body: JSON.stringify(next) }, mode).catch(() => undefined);
+      const now = Date.now();
+      if (now - lastPosted < 25_000) return;
+      lastPosted = now;
+      void kpiFetch('/kpi/agent/location', { method: 'POST', body: JSON.stringify(next) }, mode)
+        .then(() => cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }))
+        .catch(() => undefined);
     };
     navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, { enableHighAccuracy: true, timeout: 10000 });
     const watchId = navigator.geolocation.watchPosition(sendLoc, () => undefined, {
@@ -168,7 +188,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       timeout: 15000,
     });
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [mode]);
+  }, [mode, cache]);
 
   const markVisit = useMutation({
     mutationFn: (customerId: string) =>
@@ -191,27 +211,53 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const d = q.data;
   const s = d?.summary;
-  const debtors = (d?.customers || []).filter((c) => Number(c.debt) > 0);
+  const routeStops = useMemo(() => buildRouteStops(d?.customers || []), [d?.customers]);
+  const nextStop = routeStops.find((c) => c.isNext) || routeStops.find((c) => !c.visitedToday) || null;
   const targetCount = s ? (s.debtorsCount || s.customersCount || 1) : 1;
   const visitPct = s ? Math.min(100, Math.round((s.visitedToday / targetCount) * 100)) : 0;
 
+  useEffect(() => {
+    if (!routeStops.length) return;
+    const next = routeStops.find((c) => c.isNext) || routeStops.find((c) => !c.visitedToday);
+    setSelectedStopId((prev) => {
+      if (prev && routeStops.some((c) => c.id === prev)) return prev;
+      return next?.id || routeStops[0]?.id || null;
+    });
+  }, [routeStops]);
+
+  useEffect(() => {
+    if (!selectedStopId || tab !== 'today') return;
+    const el = stopRefs.current[selectedStopId];
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [selectedStopId, tab]);
+
+  const confirmVisit = (c: CustomerCard) => {
+    if (c.distanceM != null && c.distanceM > 800 && coords) {
+      const ok = window.confirm(
+        `${c.name} sizdan ~${fmtDist(c.distanceM)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
+      );
+      if (!ok) return;
+    }
+    markVisit.mutate(c.id);
+  };
+
   return (
     <div className="ag-wrap" data-testid="page-agent-portal">
-      {/* Hero Banner */}
       <section className="ag-hero">
         <div className="ag-hero-main">
           <div className="ag-avatar">{(d?.agent.fullName || 'A').slice(0, 1).toUpperCase()}</div>
-          <div>
+          <div className="ag-hero-copy">
             <span className="ag-badge"><Sparkles size={13} /> Savdo agenti</span>
             <h1>{d?.agent.fullName || 'Agent'}</h1>
+            <p className={`ag-gps-line ${coords ? 'is-on' : ''}`}>
+              <Navigation size={13} />
+              {coords ? `GPS ulangan · ±${Math.round(coords.accuracy || 0)} m` : 'GPS kutilmoqda…'}
+            </p>
           </div>
         </div>
         <div className="ag-hero-actions">
-          <span className="ag-btn ag-btn-glass" title="GPS holati">
-            <Navigation size={15} /> {coords ? 'GPS ulangan' : 'GPS kutilmoqda'}
-          </span>
           <Link href="/office" className="ag-btn ag-btn-glass">
-            <Fingerprint size={16} /> Davomat va hisobot
+            <Fingerprint size={16} /> Davomat
           </Link>
           <button type="button" className="ag-btn ag-btn-glass" onClick={() => void q.refetch()}>
             <RefreshCw size={16} /> Yangilash
@@ -227,72 +273,89 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       {q.isLoading ? <p className="kpi-muted">Ma’lumotlar yuklanmoqda…</p> : null}
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
 
-      {/* 4 Primary Stat Cards */}
       {s ? (
         <section className="ag-stats">
           <article className="ag-stat is-green">
             <div className="ag-stat-head">
-              <span>Tasdiqlangan KPI bonusim</span>
+              <span>KPI bonus</span>
               <span className="ag-stat-ico"><Wallet size={18} /></span>
             </div>
             <strong>{uzs(s.kpiEarned)}</strong>
-            <small>Olingan to‘lovlardan: {uzs(s.totalPaid)}</small>
+            <small>To‘lovlardan {uzs(s.totalPaid)}</small>
           </article>
-
           <article className="ag-stat is-blue">
             <div className="ag-stat-head">
-              <span>Qarz olinsa qo‘shiladigan KPI</span>
+              <span>Qo‘shimcha KPI</span>
               <span className="ag-stat-ico"><TrendingUp size={18} /></span>
             </div>
             <strong>+{uzs(s.kpiPotential)}</strong>
-            <small>1-bosqich muddatida to‘liq olinsa</small>
+            <small>1-bosqichda to‘liq olinsa</small>
           </article>
-
           <article className="ag-stat is-amber">
             <div className="ag-stat-head">
-              <span>Mijozlarda turgan pul (Qarz)</span>
+              <span>Qarz</span>
               <span className="ag-stat-ico"><Clock size={18} /></span>
             </div>
             <strong>{uzs(s.totalDue)}</strong>
-            <small>{s.debtorsCount} ta qarzdor mijozda</small>
+            <small>{s.debtorsCount} ta qarzdor</small>
           </article>
-
           <article className="ag-stat">
             <div className="ag-stat-head">
-              <span>Bugungi tashrif rejasi</span>
+              <span>Bugungi reja</span>
               <span className="ag-stat-ico"><Users size={18} /></span>
             </div>
-            <strong>{s.visitedToday} / {s.debtorsCount || s.customersCount} nuqta</strong>
+            <strong>{s.visitedToday} / {s.debtorsCount || s.customersCount}</strong>
             <div className="ag-bar"><i style={{ width: `${visitPct}%` }} /></div>
-            <small>Jami biriktirilgan mijozlar: {s.customersCount} ta</small>
+            <small>{s.customersCount} ta mijoz</small>
           </article>
         </section>
       ) : null}
 
-      {/* Navigation Switch */}
-      <nav className="ag-nav">
+      <nav className="ag-nav" aria-label="Kabinet bo‘limlari">
         <button type="button" className={tab === 'today' ? 'is-active' : ''} onClick={() => setTab('today')}>
           <Compass size={16} />
-          <span>Bugungi nuqtalar</span>
-          <em>{debtors.length || d?.customers.length || 0}</em>
+          <span>Marshrut</span>
+          <em>{routeStops.length}</em>
         </button>
         <button type="button" className={tab === 'kpi' ? 'is-active' : ''} onClick={() => setTab('kpi')}>
           <Wallet size={16} />
-          <span>KPI muddatlar va foizlar</span>
+          <span>KPI</span>
           <em>{d?.deals.length || 0}</em>
         </button>
         <button type="button" className={tab === 'customers' ? 'is-active' : ''} onClick={() => setTab('customers')}>
           <Users size={16} />
-          <span>Barcha mijozlarim</span>
+          <span>Mijozlar</span>
           <em>{d?.customers.length || 0}</em>
         </button>
       </nav>
 
-      {/* TAB 1: Today's Route & Stops */}
       {tab === 'today' ? (
-        <section className="ag-section">
+        <section className="ag-section ag-section-route">
+          {nextStop ? (
+            <div className="ag-next-banner">
+              <div>
+                <span>Navbatdagi nuqta</span>
+                <b>#{nextStop.step}. {nextStop.name}</b>
+                <small>
+                  {fmtDist(nextStop.distanceM) || 'Masofa hisoblanmoqda'}
+                  {Number(nextStop.debt) > 0 ? ` · olish: ${uzs(nextStop.debt)}` : ''}
+                </small>
+              </div>
+              <a
+                className="btn btn-primary"
+                href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}${
+                  coords ? `&origin=${coords.lat},${coords.lng}` : ''
+                }`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Navigation size={15} /> Yo‘l
+              </a>
+            </div>
+          ) : null}
+
           <RouteMap
-            stops={(debtors.length ? debtors : d?.customers || []) as RouteStop[]}
+            stops={routeStops as RouteStop[]}
             track={d?.track || []}
             agentName={d?.agent.fullName}
             agentPos={
@@ -307,44 +370,42 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           />
 
           <div className="ag-section-head">
-            <h2>Bugungi marshrut nuqtalari (1 → {(debtors.length ? debtors : d?.customers || []).length})</h2>
+            <h2>Marshrut nuqtalari</h2>
+            <p>1 → {routeStops.length} · eng yaqin qarzdordan boshlanadi</p>
           </div>
           <div className="ag-stops">
-            {(debtors.length ? debtors : d?.customers || []).map((c, idx) => {
+            {routeStops.map((c) => {
               const hasDebt = Number(c.debt) > 0;
-              const stepNum = c.step || idx + 1;
+              const selected = selectedStopId === c.id;
               return (
                 <article
                   key={c.id}
-                  className={`ag-stop ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next-stop' : hasDebt ? 'is-due' : ''}`}
+                  ref={(node) => { stopRefs.current[c.id] = node; }}
+                  className={`ag-stop ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next-stop' : hasDebt ? 'is-due' : ''} ${selected ? 'is-selected' : ''}`}
                   onClick={() => setSelectedStopId(c.id)}
                 >
                   <div className={`ag-stop-num ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next' : ''}`}>
-                    {c.visitedToday ? '✓' : stepNum}
+                    {c.visitedToday ? '✓' : c.step}
                   </div>
                   <div className="ag-stop-info">
                     <div className="ag-stop-title">
-                      <b>#{stepNum}. {c.name}</b>
+                      <b>#{c.step}. {c.name}</b>
                       {c.visitedToday ? (
-                        <span className="kpi-chip ok">✓ Borildi</span>
+                        <span className="kpi-chip ok">Borildi</span>
                       ) : c.isNext ? (
-                        <span className="kpi-chip active">Navbatdagi nuqta</span>
+                        <span className="kpi-chip active">Navbatdagi</span>
                       ) : hasDebt ? (
-                        <span className="kpi-chip pending">Pul olish kerak</span>
-                      ) : null}
-                      {c.distanceM != null ? (
-                        <span className="kpi-muted">
-                          · {c.distanceM >= 1000 ? `${(c.distanceM / 1000).toFixed(1)} km` : `${c.distanceM} m`}
-                        </span>
+                        <span className="kpi-chip pending">Qarz</span>
                       ) : null}
                     </div>
                     <div className="ag-stop-meta">
+                      {fmtDist(c.distanceM) ? <span><Compass size={13} /> {fmtDist(c.distanceM)}</span> : null}
                       {c.phone ? (
                         <a href={`tel:${c.phone}`} className="ag-meta-link" onClick={(e) => e.stopPropagation()}>
                           <Phone size={13} /> {c.phone}
                         </a>
                       ) : null}
-                      <span><MapPin size={13} /> {c.address || 'Manzil xaritada belgilangan'}</span>
+                      <span><MapPin size={13} /> {c.address || (c.exactGps ? 'GPS aniq' : 'Taxminiy joy')}</span>
                     </div>
                   </div>
                   <div className="ag-stop-amount">
@@ -354,41 +415,43 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   <div className="ag-stop-actions" onClick={(e) => e.stopPropagation()}>
                     <a
                       className="btn"
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}`}
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}${
+                        coords ? `&origin=${coords.lat},${coords.lng}` : ''
+                      }`}
                       target="_blank"
                       rel="noreferrer"
                     >
                       <Navigation size={15} /> Yo‘nalish
                     </a>
                     {c.visitedToday ? (
-                      <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi ✓</span>
+                      <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi</span>
                     ) : (
                       <button
                         type="button"
                         className="btn btn-primary"
                         disabled={markVisit.isPending}
-                        onClick={() => markVisit.mutate(c.id)}
+                        onClick={() => confirmVisit(c)}
                       >
-                        <CheckCircle2 size={15} /> Bordim / Gaplashdim
+                        <CheckCircle2 size={15} /> Bordim
                       </button>
                     )}
                   </div>
                 </article>
               );
             })}
-            {!d?.customers.length && !q.isLoading ? (
-              <div className="ag-empty">Hozircha sizga biriktirilgan mijoz topilmadi.</div>
+            {!routeStops.length && !q.isLoading ? (
+              <div className="ag-empty">Hozircha marshrut nuqtasi yo‘q.</div>
             ) : null}
           </div>
         </section>
       ) : null}
 
-      {/* TAB 2: 3-Stage KPI Deadlines */}
       {tab === 'kpi' ? (
         <section className="ag-section">
-        <div className="ag-section-head">
-          <h2>KPI muddatlari</h2>
-        </div>
+          <div className="ag-section-head">
+            <h2>KPI muddatlari</h2>
+            <p>Har bir otgruzka uchun 3 bosqich</p>
+          </div>
           <div className="ag-deals">
             {(d?.deals || []).map((deal) => {
               const hasDue = Number(deal.dueAmount) > 0;
@@ -399,15 +462,15 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                       <span className="ag-deal-no">Отгрузка №{deal.number}</span>
                       <h3>{deal.customerName}</h3>
                       <p>
-                        Sana: <b>{deal.orderDate}</b> · Joriy bosqich: <b>{deal.currentStage} ({deal.currentPercent}%)</b>
-                        {deal.daysRemaining != null ? ` · ${deal.daysRemaining} kun qoldi` : ''}
+                        Sana: <b>{deal.orderDate}</b> · Joriy: <b>{deal.currentStage} ({deal.currentPercent}%)</b>
+                        {deal.daysRemaining != null ? ` · ${deal.daysRemaining} kun` : ''}
                       </p>
                     </div>
                     <div className="ag-deal-sums">
-                      <div><span>Savdo summasi</span><b>{uzs(deal.total)}</b></div>
+                      <div><span>Savdo</span><b>{uzs(deal.total)}</b></div>
                       <div><span>To‘langan</span><b className="is-ok">{uzs(deal.paidAmount)}</b></div>
-                      <div><span>Qolgan qarz</span><b className={hasDue ? 'is-warn' : 'is-ok'}>{uzs(deal.dueAmount)}</b></div>
-                      <div><span>Yozilgan KPI</span><b className="is-blue">{uzs(deal.earnedKpi)}</b></div>
+                      <div><span>Qarz</span><b className={hasDue ? 'is-warn' : 'is-ok'}>{uzs(deal.dueAmount)}</b></div>
+                      <div><span>KPI</span><b className="is-blue">{uzs(deal.earnedKpi)}</b></div>
                     </div>
                   </div>
                   <div className="ag-stages">
@@ -418,7 +481,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                           <em>{st.percent}%</em>
                         </div>
                         <div className="ag-stage-date">
-                          <Clock size={13} /> <b>{st.untilDate}</b> gacha olinsa
+                          <Clock size={13} /> <b>{st.untilDate}</b> gacha
                         </div>
                         <strong className="ag-stage-kpi">
                           +{uzs(hasDue ? st.onRemainingDebtKpi : st.ifFullPaidKpi)}
@@ -442,13 +505,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         </section>
       ) : null}
 
-      {/* TAB 3: All Customers */}
       {tab === 'customers' ? (
         <section className="ag-section">
+          <div className="ag-section-head">
+            <h2>Barcha mijozlar</h2>
+            <p>{d?.customers.length || 0} ta biriktirilgan</p>
+          </div>
           <div className="ag-stops">
-            {(d?.customers || []).map((c, idx) => (
+            {(d?.customers || []).map((c) => (
               <article key={c.id} className="ag-stop">
-                <div className="ag-stop-num">{idx + 1}</div>
+                <div className="ag-stop-num">{c.step || '·'}</div>
                 <div className="ag-stop-info">
                   <div className="ag-stop-title">
                     <b>{c.name}</b>
@@ -460,13 +526,13 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   </div>
                 </div>
                 <div className="ag-stop-amount">
-                  <span>Joriy qarz</span>
+                  <span>Qarz</span>
                   <strong className={Number(c.debt) > 0 ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                 </div>
                 <div className="ag-stop-actions">
                   <a
                     className="btn"
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address || c.name)}`}
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}`}
                     target="_blank"
                     rel="noreferrer"
                   >

@@ -1,5 +1,5 @@
-import { CheckCircle2, ExternalLink, MapPin, Navigation } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { CheckCircle2, ExternalLink, Hand, Navigation } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 export type RouteStop = {
   id: string;
@@ -52,7 +52,6 @@ function ensureLeaflet(): Promise<any> {
   return leafletPromise;
 }
 
-/** Bearing in degrees (0 = North, 90 = East) from point A to point B */
 function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
   const toDeg = (r: number) => (r * 180) / Math.PI;
@@ -64,24 +63,51 @@ function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): num
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-async function fetchRoadGeometry(points: Array<[number, number]>): Promise<Array<[number, number]>> {
-  if (points.length < 2) return points;
+function fmtDistance(m: number | null | undefined) {
+  if (m == null || !Number.isFinite(m)) return '';
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+async function fetchRoadRoute(points: Array<[number, number]>): Promise<{
+  path: Array<[number, number]>;
+  distanceM: number | null;
+  durationSec: number | null;
+}> {
+  if (points.length < 2) return { path: points, distanceM: null, durationSec: null };
   try {
-    const coords = points.slice(0, 15).map(([lat, lng]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join(';');
+    const coords = points.slice(0, 12).map(([lat, lng]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join(';');
     const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
     const res = await fetch(url);
-    if (!res.ok) return points;
+    if (!res.ok) return { path: points, distanceM: null, durationSec: null };
     const data = (await res.json()) as {
-      routes?: Array<{ geometry?: { coordinates?: Array<[number, number]> } }>;
+      routes?: Array<{
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: Array<[number, number]> };
+      }>;
     };
-    const geom = data.routes?.[0]?.geometry?.coordinates;
+    const route = data.routes?.[0];
+    const geom = route?.geometry?.coordinates;
     if (geom && geom.length > 1) {
-      return geom.map(([lng, lat]) => [lat, lng]);
+      return {
+        path: geom.map(([lng, lat]) => [lat, lng]),
+        distanceM: route?.distance != null ? Math.round(route.distance) : null,
+        durationSec: route?.duration != null ? Math.round(route.duration) : null,
+      };
     }
   } catch {
-    /* fallback to direct points if offline */
+    /* offline fallback */
   }
-  return points;
+  return { path: points, distanceM: null, durationSec: null };
+}
+
+function fmtEta(sec: number | null) {
+  if (sec == null || !Number.isFinite(sec)) return '';
+  const m = Math.max(1, Math.round(sec / 60));
+  if (m < 60) return `~${m} daq`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `~${h} soat ${rest} daq` : `~${h} soat`;
 }
 
 export function RouteMap({
@@ -108,18 +134,26 @@ export function RouteMap({
   const mapRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
   const [active, setActive] = useState(false);
+  const [roadHint, setRoadHint] = useState<{ distanceM: number | null; durationSec: number | null }>({
+    distanceM: null,
+    durationSec: null,
+  });
 
-  // Click inside map -> enable interaction; click anywhere outside map -> disable so page scroll works smoothly
+  const doneCount = stops.filter((s) => s.visitedToday).length;
+  const nextStop = useMemo(
+    () => stops.find((s) => s.isNext) || stops.find((s) => !s.visitedToday) || null,
+    [stops],
+  );
+  const progressPct = stops.length ? Math.round((doneCount / stops.length) * 100) : 0;
+  const hasLiveGps = Boolean(agentPos?.lat != null && agentPos?.lng != null);
+
   useEffect(() => {
     const onDocDown = (e: MouseEvent | TouchEvent) => {
       const el = wrapRef.current;
       if (!el) return;
       const target = e.target as Node | null;
-      if (target && el.contains(target)) {
-        setActive(true);
-      } else {
-        setActive(false);
-      }
+      if (target && el.contains(target)) setActive(true);
+      else setActive(false);
     };
     document.addEventListener('mousedown', onDocDown, true);
     document.addEventListener('touchstart', onDocDown, true);
@@ -164,40 +198,34 @@ export function RouteMap({
           maxZoom: 19,
         }).addTo(mapRef.current);
         layerRef.current = L.layerGroup().addTo(mapRef.current);
+        setTimeout(() => mapRef.current?.invalidateSize?.(), 80);
       }
 
       const group = layerRef.current;
       group.clearLayers();
-      const bounds: Array<[number, number]> = [];
+      const focusBounds: Array<[number, number]> = [];
+      const allBounds: Array<[number, number]> = [];
 
       const validStops = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-      const nextStop = validStops.find((s) => s.isNext) || validStops.find((s) => !s.visitedToday) || validStops[0];
+      const next = validStops.find((s) => s.isNext) || validStops.find((s) => !s.visitedToday) || validStops[0] || null;
 
-      // Determine Agent's live position (or start anchor just before stop #1 so agent arrow is always visible)
       const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
-      let navLat =
-        agentPos?.lat ??
-        primaryAgent?.lat ??
-        (nextStop ? Number((nextStop.lat - 0.0065).toFixed(6)) : null);
-      let navLng =
-        agentPos?.lng ??
-        primaryAgent?.lng ??
-        (nextStop ? Number((nextStop.lng - 0.0085).toFixed(6)) : null);
+      const navLat = agentPos?.lat ?? primaryAgent?.lat ?? null;
+      const navLng = agentPos?.lng ?? primaryAgent?.lng ?? null;
 
       let navHeading = agentPos?.heading ?? primaryAgent?.heading ?? null;
-      if ((navHeading == null || !Number.isFinite(navHeading)) && navLat != null && navLng != null && nextStop) {
+      if ((navHeading == null || !Number.isFinite(navHeading)) && navLat != null && navLng != null && next) {
         if (track.length >= 2) {
           const prev = track[track.length - 2];
           const curr = track[track.length - 1];
           navHeading = bearingDeg(prev.lat, prev.lng, curr.lat, curr.lng);
         } else {
-          navHeading = bearingDeg(navLat, navLng, nextStop.lat, nextStop.lng);
+          navHeading = bearingDeg(navLat, navLng, next.lat, next.lng);
         }
       }
 
-      // Draw numbered customer stops: 1, 2, 3, 4, 5
       for (const s of validStops) {
-        bounds.push([s.lat, s.lng]);
+        allBounds.push([s.lat, s.lng]);
         const cls = s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : 'is-wait';
         const label = s.visitedToday ? `${s.step}✓` : String(s.step);
         const icon = L.divIcon({
@@ -210,9 +238,9 @@ export function RouteMap({
         marker.on('click', () => onSelectStop?.(s));
       }
 
-      // Draw rotating Navigation Arrow for the Agent
       if (navLat != null && navLng != null) {
-        bounds.push([navLat, navLng]);
+        allBounds.push([navLat, navLng]);
+        focusBounds.push([navLat, navLng]);
         const deg = Math.round(navHeading || 0);
         const label = agentName || primaryAgent?.fullName || 'Agent';
         const arrowIcon = L.divIcon({
@@ -237,62 +265,78 @@ export function RouteMap({
       }
 
       const sel = validStops.find((s) => s.id === selectedStopId);
-      if (sel) {
-        mapRef.current.setView([sel.lat, sel.lng], 15, { animate: true });
-      } else if (bounds.length === 1) {
-        mapRef.current.setView(bounds[0], 14);
-      } else if (bounds.length > 1) {
-        mapRef.current.fitBounds(bounds, { padding: [46, 46], maxZoom: 14 });
+      if (sel) focusBounds.push([sel.lat, sel.lng]);
+      else if (next) focusBounds.push([next.lat, next.lng]);
+
+      // Primary road route: agent → next stop only (clear day plan)
+      if (navLat != null && navLng != null && next && !next.visitedToday) {
+        const road = await fetchRoadRoute([
+          [navLat, navLng],
+          [next.lat, next.lng],
+        ]);
+        if (!alive) return;
+        setRoadHint({ distanceM: road.distanceM ?? next.distanceM ?? null, durationSec: road.durationSec });
+        L.polyline(road.path, { color: '#1e40af', weight: 8, opacity: 0.2, lineCap: 'round' }).addTo(group);
+        L.polyline(road.path, { color: '#2563eb', weight: 5, opacity: 0.95, lineCap: 'round' }).addTo(group);
+      } else {
+        setRoadHint({ distanceM: next?.distanceM ?? null, durationSec: null });
       }
 
-      // Road-following route: Agent Arrow -> 1 -> 2 -> 3 -> 4 -> 5
-      if (validStops.length > 0) {
-        const doneStops = validStops.filter((s) => s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
-        const pendingStops = validStops.filter((s) => !s.visitedToday).map((s) => [s.lat, s.lng] as [number, number]);
+      // Remaining plan as thin dashed polyline (stop order, no fake GPS)
+      const pending = validStops.filter((s) => !s.visitedToday);
+      if (pending.length > 1) {
+        const planPts = pending.map((s) => [s.lat, s.lng] as [number, number]);
+        L.polyline(planPts, {
+          color: '#f59e0b',
+          weight: 3,
+          opacity: 0.7,
+          dashArray: '8 8',
+          lineCap: 'round',
+        }).addTo(group);
+      }
 
-        if (navLat != null && navLng != null && pendingStops.length > 0) {
-          pendingStops.unshift([navLat, navLng]);
-        } else if (doneStops.length > 0 && pendingStops.length > 0) {
-          pendingStops.unshift(doneStops[doneStops.length - 1]);
-        }
-
-        if (doneStops.length > 1) {
-          const roadDone = await fetchRoadGeometry(doneStops);
-          if (!alive) return;
-          L.polyline(roadDone, { color: '#059669', weight: 6, opacity: 0.92, lineCap: 'round' }).addTo(group);
-        }
-        if (pendingStops.length > 1) {
-          const roadPending = await fetchRoadGeometry(pendingStops);
-          if (!alive) return;
-          L.polyline(roadPending, { color: '#1e40af', weight: 8, opacity: 0.22, lineCap: 'round' }).addTo(group);
-          L.polyline(roadPending, { color: '#2563eb', weight: 5, opacity: 0.96, lineCap: 'round' }).addTo(group);
-        }
+      const doneStops = validStops.filter((s) => s.visitedToday);
+      if (doneStops.length > 1) {
+        const roadDone = await fetchRoadRoute(doneStops.map((s) => [s.lat, s.lng] as [number, number]));
+        if (!alive) return;
+        L.polyline(roadDone.path, { color: '#059669', weight: 5, opacity: 0.85, lineCap: 'round' }).addTo(group);
       }
 
       if (track.length > 1) {
         L.polyline(
           track.map((t) => [t.lat, t.lng]),
-          { color: '#0ea5e9', weight: 3.5, opacity: 0.75 },
+          { color: '#0ea5e9', weight: 3, opacity: 0.65, dashArray: '4 6' },
         ).addTo(group);
       }
+
+      const viewBounds = focusBounds.length >= 1 ? focusBounds : allBounds;
+      if (sel && focusBounds.length === 1) {
+        mapRef.current.setView([sel.lat, sel.lng], 15, { animate: true });
+      } else if (viewBounds.length === 1) {
+        mapRef.current.setView(viewBounds[0], 14);
+      } else if (viewBounds.length > 1) {
+        mapRef.current.fitBounds(viewBounds, { padding: [48, 48], maxZoom: 15 });
+      }
+      setTimeout(() => mapRef.current?.invalidateSize?.(), 40);
     });
     return () => {
       alive = false;
     };
   }, [stops, agents, track, agentPos, agentName, selectedStopId]);
 
-  const doneCount = stops.filter((s) => s.visitedToday).length;
-  const nextStop = stops.find((s) => s.isNext) || stops.find((s) => !s.visitedToday);
-
   return (
     <div className="rm-card">
       <div className="rm-chain-bar">
         <div className="rm-chain-meta">
-          <b>Yo‘nalish: {doneCount} / {stops.length} bajarildi</b>
+          <div className="rm-progress-block">
+            <b>Yo‘nalish: {doneCount} / {stops.length} bajarildi</b>
+            <div className="rm-progress"><i style={{ width: `${progressPct}%` }} /></div>
+          </div>
           {nextStop ? (
             <span className="rm-next-hint">
-              Navbatdagi nuqta: <b>#{nextStop.step} {nextStop.name}</b>
-              {nextStop.distanceM != null ? ` (${nextStop.distanceM >= 1000 ? `${(nextStop.distanceM / 1000).toFixed(1)} km` : `${nextStop.distanceM} m`})` : ''}
+              Navbatdagi: <b>#{nextStop.step} {nextStop.name}</b>
+              {roadHint.distanceM != null ? ` · ${fmtDistance(roadHint.distanceM)}` : nextStop.distanceM != null ? ` · ${fmtDistance(nextStop.distanceM)}` : ''}
+              {roadHint.durationSec != null ? ` · ${fmtEta(roadHint.durationSec)}` : ''}
             </span>
           ) : stops.length ? (
             <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
@@ -301,7 +345,9 @@ export function RouteMap({
         {nextStop ? (
           <a
             className="btn btn-primary"
-            href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}`}
+            href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}${
+              hasLiveGps ? `&origin=${agentPos!.lat},${agentPos!.lng}` : ''
+            }`}
             target="_blank"
             rel="noreferrer"
           >
@@ -312,11 +358,11 @@ export function RouteMap({
 
       {stops.length > 0 ? (
         <div className="rm-steps" role="list">
-          {stops.slice(0, 12).map((s, idx) => (
+          {stops.slice(0, 16).map((s, idx) => (
             <div className="rm-step-item" key={s.id} role="listitem">
               <button
                 type="button"
-                className={`rm-node ${s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : ''}`}
+                className={`rm-node ${s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : ''} ${selectedStopId === s.id ? 'is-sel' : ''}`}
                 onClick={() => onSelectStop?.(s)}
                 title={s.name}
               >
@@ -325,7 +371,7 @@ export function RouteMap({
                 </span>
                 <span className="rm-node-name">{s.name}</span>
               </button>
-              {idx < Math.min(stops.length, 12) - 1 ? (
+              {idx < Math.min(stops.length, 16) - 1 ? (
                 <span className={`rm-connector ${s.visitedToday ? 'is-done' : ''}`} />
               ) : null}
             </div>
@@ -335,11 +381,19 @@ export function RouteMap({
 
       <div ref={wrapRef} className={`rm-canvas-wrap ${active ? 'is-active' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
+        {!active ? (
+          <div className="rm-map-hint" aria-hidden="true">
+            <Hand size={14} /> Xaritani boshqarish uchun bosing
+          </div>
+        ) : null}
+        {!hasLiveGps ? (
+          <div className="rm-gps-banner">GPS yo‘q — masofa oxirgi joylashuv / taxminiy</div>
+        ) : null}
       </div>
 
       <div className="rm-legend">
-        <span><i className="rm-dot is-agent" /> Agent (➤)</span>
-        <span><i className="rm-dot is-done" /> Borildi (✓)</span>
+        <span><i className="rm-dot is-agent" /> Agent</span>
+        <span><i className="rm-dot is-done" /> Borildi</span>
         <span><i className="rm-dot is-next" /> Navbatdagi</span>
         <span><i className="rm-dot is-wait" /> Rejada</span>
       </div>
