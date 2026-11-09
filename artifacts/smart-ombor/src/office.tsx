@@ -530,13 +530,11 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className="office-sections" role="tablist" aria-label={t('nav.office')}>
+      <div className={`office-sections ${me?.director ? 'is-3' : 'is-4'}`} role="tablist" aria-label={t('nav.office')}>
         <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
         <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
         <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
         {!me?.director && <button type="button" role="tab" aria-selected={section === 'tasks'} className={section === 'tasks' ? 'is-on' : ''} onClick={() => jumpSection('tasks')}>{t('office.sectionTasks')}</button>}
-        {me?.director && <Link href="/office/report" className="office-sections-link">{t('office.report')}</Link>}
-        {me?.director && <Link href="/office/tasks" className="office-sections-link">{t('nav.officeTasks')}</Link>}
       </div>
       <div ref={markRef} id="office-mark" className="office-block">
         <div className="office-pair">
@@ -557,25 +555,19 @@ export function OfficePage() {
             <LogOut size={18} className="office-go-arrow"/>
           </button>
         </div>
-        {(gpsState === 'denied' || (gpsState === 'error' && !gps) || (gpsState === 'pending' && !gps)) && (
-          <div className={`office-gps-banner ${gpsState === 'pending' ? 'is-wait' : 'is-bad'}`}>
-            <div>
-              <b>{gpsState === 'pending' ? t('office.gpsWait') : gpsState === 'denied' ? t('office.gpsNeed') : t('office.gpsOff')}</b>
-              <p>{t('office.gpsBannerBody')}</p>
-            </div>
-            <button type="button" onClick={pingGps}>{t('office.gpsEnable')}</button>
-          </div>
-        )}
         {me && <OfficeMap
           officeLat={me.office.lat} officeLng={me.office.lng}
           radiusM={radiusM}
-          here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
-          gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)} meters={meters}
+          here={inZone}
+          user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null}
+          status={gpsState === 'denied' || (gpsState === 'error' && !gps) ? '' : geoStatus}
+          gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)}
+          meters={meters}
           onNudge={pingGps}
           onEnableGps={pingGps}
         />}
         {ok && <p className="office-ok">{ok}</p>}
-        {note && !camDenied && <p className="office-warn">{note}</p>}
+        {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <p className="office-warn">{note}</p>}
         <h2>{t('office.method')}</h2>
         <p className="lead">{t('office.methodBody')}</p>
         <div className="office-methods">
@@ -590,7 +582,9 @@ export function OfficePage() {
         </div>
         <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
           <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
-          <small>{!canPunch ? geoStatus : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
+          <small>{!canPunch
+            ? (gpsState === 'denied' || !gps ? t('office.lockedGps') : inZone ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) }) : t('office.distFar', { m: Math.round(meters || 0) }))
+            : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
         </button>
       </div>
       <div ref={historyRef} id="office-history" className="office-card office-block">

@@ -317,8 +317,8 @@ export function OfficeMap({
 
   return <div className={`office-map ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>
     <div ref={boxRef} className="office-leaflet"/>
-    <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>
-    {etaMin != null && user && !here && <div className="office-route-chip">
+    {!gpsBlocked && status && <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>}
+    {etaMin != null && user && !here && !gpsBlocked && <div className="office-route-chip">
       <Navigation size={12}/>
       {t('office.etaChip', { min: etaMin })}
     </div>}
