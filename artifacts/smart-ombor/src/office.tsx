@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import {
-  ChevronLeft, Clock, Crosshair, Hand, LogIn, LogOut, MapPin, Minus, Moon, Plus,
-  QrCode, ScanFace, Sun, SwitchCamera, Wallet, X,
+  ChevronLeft, Clock, LogIn, LogOut, MapPin, Moon, QrCode, RefreshCw, ScanFace, Sun, SwitchCamera, Wallet, X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
+import { OfficeMap } from '@/office-map-section';
 import './office.css';
 
 type Punch = { date: string; inAt: string | null; outAt: string | null; workedMs: number };
@@ -85,13 +85,6 @@ function heading(iso: string, weekdays: string, months: string) {
   const cap = label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
   return { weekday, line: `${day} ${cap} ${year}` };
 }
-function lon2tile(lon: number, zoom: number) {
-  return (lon + 180) / 360 * (2 ** zoom);
-}
-function lat2tile(lat: number, zoom: number) {
-  const rad = lat * Math.PI / 180;
-  return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * (2 ** zoom);
-}
 function weekBounds(iso: string) {
   const [y, m, d] = iso.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d, 12));
@@ -105,65 +98,6 @@ function monthDay(iso: string, months: string) {
   const [, month, day] = iso.split('-').map(Number);
   const label = months.split(',')[(month || 1) - 1] || '';
   return `${Number(day)} ${label}`;
-}
-
-function DarkMap({ lat, lng, zoom, name, radiusM, radiusLabel, here, user, status, onZoom, onLocate, onNudge }: {
-  lat: number; lng: number; zoom: number; name: string; radiusM: number; radiusLabel: string; here: boolean;
-  user: { lat: number; lng: number } | null; status: string;
-  onZoom: (next: number) => void; onLocate: () => void; onNudge: () => void;
-}) {
-  const { t } = useI18n();
-  const z = Math.min(18, Math.max(14, zoom));
-  const xf = lon2tile(lng, z);
-  const yf = lat2tile(lat, z);
-  const cx = Math.floor(xf);
-  const cy = Math.floor(yf);
-  const n = 2 ** z;
-  const wrap = (value: number) => ((value % n) + n) % n;
-  const tiles: Array<{ x: number; y: number; left: number; top: number }> = [];
-  for (let dy = -1; dy <= 1; dy += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      tiles.push({ x: wrap(cx + dx), y: cy + dy, left: (dx + 1) * 256, top: (dy + 1) * 256 });
-    }
-  }
-  const left = `calc(50% - ${(xf - (cx - 1)) * 256}px)`;
-  const top = `calc(46% - ${(yf - (cy - 1)) * 256}px)`;
-  const mpp = 156543.03392 * Math.cos((lat * Math.PI) / 180) / (2 ** z);
-  const radiusPx = Math.max(28, Math.min(170, radiusM / Math.max(mpp, 0.01)));
-  let userStyle: { left: string; top: string } | null = null;
-  if (user) {
-    const uxf = lon2tile(user.lng, z);
-    const uyf = lat2tile(user.lat, z);
-    userStyle = {
-      left: `calc(50% + ${(uxf - xf) * 256}px)`,
-      top: `calc(46% + ${(uyf - yf) * 256}px)`,
-    };
-  }
-  return <div className={`office-map ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>
-    <div className="office-map-tiles" style={{ left, top }}>
-      {tiles.map(tile => (
-        <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://tile.openstreetmap.org/${z}/${tile.x}/${tile.y}.png`}/>
-      ))}
-    </div>
-    <div className="office-map-shade"/>
-    <div className={`office-pin ${here ? 'is-here' : ''}`} style={{ width: radiusPx * 2, height: radiusPx * 2 }}>
-      <i/><i/><span><MapPin size={18}/></span>
-    </div>
-    {userStyle && <div className={`office-me ${here ? 'is-here' : ''}`} style={userStyle} title={t('office.you')}>
-      <em/><b>{t('office.you')}</b>
-    </div>}
-    <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>
-    <button type="button" className="office-tap" onClick={onNudge} onDoubleClick={onNudge}><Hand size={14}/> {t('office.dbl')}</button>
-    <div className="office-map-tools">
-      <button type="button" onClick={() => onZoom(z + 1)} aria-label="+"><Plus size={16}/></button>
-      <button type="button" onClick={() => onZoom(z - 1)} aria-label="-"><Minus size={16}/></button>
-      <button type="button" className="is-round" onClick={onLocate} aria-label={t('office.map')}><Crosshair size={16}/></button>
-    </div>
-    <div className="office-map-meta">
-      <b><MapPin size={12}/> {name}</b>
-      <em>{radiusLabel}</em>
-    </div>
-  </div>;
 }
 
 export function OfficePage() {
@@ -186,6 +120,8 @@ export function OfficePage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
   const [zoom, setZoom] = useState(16);
+  const [mapFocus, setMapFocus] = useState<'office' | 'user' | 'both'>('both');
+  const [gpsModalOpen, setGpsModalOpen] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
@@ -211,7 +147,7 @@ export function OfficePage() {
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!navigator.geolocation) { setGpsState('error'); return; }
+    if (!navigator.geolocation) { setGpsState('error'); setGpsModalOpen(true); return; }
     const apply = (pos: GeolocationPosition) => {
       const accuracy = Number(pos.coords.accuracy);
       if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
@@ -221,10 +157,14 @@ export function OfficePage() {
       }
       setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
       setGpsState('ready');
+      setGpsModalOpen(false);
+      setMapFocus('both');
     };
     const fail = (err: GeolocationPositionError) => {
-      if (err.code === err.PERMISSION_DENIED) setGpsState('denied');
-      else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+      if (err.code === err.PERMISSION_DENIED) {
+        setGpsState('denied');
+        setGpsModalOpen(true);
+      } else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
     };
     const id = navigator.geolocation.watchPosition(apply, fail, {
       enableHighAccuracy: true, maximumAge: 2000, timeout: 15000,
@@ -443,9 +383,10 @@ export function OfficePage() {
     await loadTasks();
   };
 
-  const pingGps = () => {
-    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); return; }
+  const pingGps = (focus: 'office' | 'user' | 'both' = 'both') => {
+    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); setGpsModalOpen(true); return; }
     setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
+    setMapFocus(focus);
     navigator.geolocation.getCurrentPosition(
       pos => {
         const accuracy = Number(pos.coords.accuracy);
@@ -456,11 +397,13 @@ export function OfficePage() {
         }
         setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
         setGpsState('ready');
+        setGpsModalOpen(false);
         setNote('');
       },
       err => {
         if (err.code === err.PERMISSION_DENIED) {
           setGpsState('denied');
+          setGpsModalOpen(true);
           setNote(t('office.gpsNeed'));
         } else {
           setGpsState(prev => (prev === 'ready' ? prev : 'error'));
@@ -470,6 +413,14 @@ export function OfficePage() {
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
   };
+
+  const statusBanner = !me
+    ? null
+    : me.today?.inAt && !me.today.outAt
+      ? { tone: 'wait' as const, text: t('office.bannerOut', { name: me.name }) }
+      : me.today?.outAt
+        ? { tone: 'done' as const, text: t('office.bannerDone', { name: me.name }) }
+        : { tone: 'in' as const, text: t('office.bannerIn', { name: me.name }) };
 
   const ctaNeedCam = !camReady;
   const ownTasks = tasks;
@@ -506,6 +457,15 @@ export function OfficePage() {
       </div>
     </section>
     <div className="office-body">
+      {statusBanner && <div className={`office-status-banner is-${statusBanner.tone}`}>
+        <div>
+          <small>{t('office.attend')}</small>
+          <b>{statusBanner.text}</b>
+        </div>
+        <button type="button" disabled={busy} onClick={() => void goPunch()}>
+          <ScanFace size={16}/> {t('office.attend')}
+        </button>
+      </div>}
       <div className="office-clocks">
         <div className="office-clock">
           <div className="office-clock-top"><span className="office-ico"><Clock size={15}/></span>{t('office.now')}</div>
@@ -536,15 +496,45 @@ export function OfficePage() {
           <LogOut size={18} className="office-go-arrow"/>
         </button>
       </div>
-      {me && <DarkMap
-        lat={me.office.lat} lng={me.office.lng} zoom={zoom} name={me.office.name}
+      {me && <OfficeMap
+        officeLat={me.office.lat} officeLng={me.office.lng} zoom={zoom} name={me.office.name}
         radiusM={radiusM} radiusLabel={t('office.radius')}
         here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng } : null} status={geoStatus}
-        onZoom={setZoom} onLocate={pingGps} onNudge={pingGps}
+        gpsDenied={gpsState === 'denied'} meters={meters}
+        focus={mapFocus}
+        onZoom={setZoom}
+        onLocate={() => pingGps('office')}
+        onNudge={() => pingGps('user')}
+        onEnableGps={() => { setGpsModalOpen(true); pingGps('both'); }}
       />}
+      <div className="office-live-strip">
+        <span className={`office-live-dot ${inZone ? 'is-on' : gps ? 'is-away' : ''}`}/>
+        <div>
+          <b>{gps ? t('office.liveGps') : t('office.gpsWait')}</b>
+          <small>{gps ? `${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)} · ±${Math.round(gps.accuracy)} m` : geoStatus}</small>
+        </div>
+        <button type="button" onClick={() => pingGps('both')}><RefreshCw size={14}/> {t('common.refresh')}</button>
+      </div>
       {!inZone && <p className="office-warn">{geoStatus}</p>}
       {ok && <p className="office-ok">{ok}</p>}
       {note && !camDenied && note !== geoStatus && <p className="office-warn">{note}</p>}
+      <article className="office-face-card">
+        <div className="office-face-top">
+          <span className="office-face-avatar"><ScanFace size={28}/></span>
+          <div>
+            <b>Face ID {me?.face ? <em className="is-ok">{t('office.faceLinked')}</em> : <em className="is-off">{t('office.faceEnroll')}</em>}</b>
+            <p>{t('office.faceCardBody')}</p>
+          </div>
+        </div>
+        <div className="office-face-actions">
+          <button type="button" className="is-primary" disabled={busy} onClick={() => void openStage(nextKind, 'face')}>
+            <RefreshCw size={14}/> {me?.face ? t('office.faceReconnect') : t('office.enrollNow')}
+          </button>
+          <button type="button" className={method === 'qr' ? 'is-on' : ''} onClick={() => setMethod('qr')}>
+            <QrCode size={14}/> QR
+          </button>
+        </div>
+      </article>
       <h2>{t('office.method')}</h2>
       <p className="lead">{t('office.methodBody')}</p>
       <div className="office-methods">
@@ -640,6 +630,16 @@ export function OfficePage() {
       <button type="button" className="office-toast-x" onClick={() => setCamDenied(false)}><X size={14}/></button>
       <b>{t('office.deniedTitle')}</b>
       <p>{t('office.deniedBody')}</p>
+    </div>}
+    {gpsModalOpen && <div className="office-gps-modal" role="dialog" aria-modal="true">
+      <div className="office-gps-card">
+        <button type="button" className="office-gps-x" onClick={() => setGpsModalOpen(false)} aria-label={t('common.close')}><X size={16}/></button>
+        <small>1-{t('office.step')}</small>
+        <span className="office-gps-ico"><MapPin size={26}/></span>
+        <b>{t('office.gpsGateTitle')}</b>
+        <p>{t('office.gpsGateBody')}</p>
+        <button type="button" className="office-gps-go" onClick={() => pingGps('both')}>{t('office.gpsEnable')}</button>
+      </div>
     </div>}
   </div>
   </div>;

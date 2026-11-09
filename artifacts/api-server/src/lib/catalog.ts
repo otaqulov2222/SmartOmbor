@@ -995,15 +995,17 @@ export function foldProductName(value: string) {
 }
 
 /**
- * Artikul identity EMAS — old/orqa raqam-matn kartochkani ajratmasin.
+ * Artikul identity FAQAT nomdagi trailing raqamdan (masalan 43937).
+ * MoySklad article maydoni (barcode / tovar kodi nusxasi) identity emas.
  * Rang (R5/R3) alohida bordoRangToken orqali farqlanadi.
  */
 export function bordoIdentityArticle(
-  _name: string,
+  name: string,
   _msArticle?: string | null,
   _productCodeHint = "",
 ): string {
-  return "";
+  const parts = parseBordoName(name);
+  return parts?.article ? compactCode(parts.article) : "";
 }
 
 export function bordoCardArticle(name: string, fallbackArticle = ""): string {
@@ -1050,7 +1052,7 @@ export function bordoParentName(input: {
 export function sameBordoCard(
   name: string,
   input: { factoryCode: string; productCode: string; size: string; groupCode?: string; article?: string; model?: string; color?: string },
-  _extras?: { article?: string | null },
+  extras?: { article?: string | null },
 ) {
   const parts = parseBordoName(name);
   if (!parts) return false;
@@ -1066,10 +1068,14 @@ export function sameBordoCard(
   if (group) {
     if (!parts.groupCode || !sameToken(parts.groupCode, group)) return false;
   }
-  // Rang qattiq: R5 ≠ R3 ≠ bo‘sh. Artikul/old-orqa matn — yo‘q.
+  // Rang qattiq: R5 ≠ R3 ≠ bo‘sh.
   const wantedRang = bordoRangToken(input.model || productModelToken(input.productCode), input.color || "");
   const gotRang = bordoRangToken(parts.model, parts.color);
   if (wantedRang !== gotRang) return false;
+  // Artikul qattiq: "…24-29" ≠ "…24-29 43937". MS barcode/code nusxasi e’tiborsiz.
+  const wanted = compactCode(input.article ?? "");
+  const got = bordoIdentityArticle(name, extras?.article, input.productCode || parts.productCode);
+  if (wanted !== got) return false;
   return true;
 }
 
@@ -1144,7 +1150,7 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
   let raw = foldGlyphs(name).trim().replace(/\s+/g, " ");
   let color = "";
   let model = "";
-  const article = "";
+  let article = "";
   const paren = raw.match(/\(([^)]+)\)\s*$/);
   if (paren && paren.index != null) {
     color = paren[1].trim();
@@ -1166,18 +1172,28 @@ export function parseBordoName(name: string): { factoryCode: string; groupCode: 
       raw = before;
     }
   }
+  // Size dan keyingi 4–7 xonali raqam = artikul (43937). 8+ = barcode — identity emas.
+  const articleTail = raw.match(/\s+(\d{4,7})\s*$/);
+  if (articleTail && articleTail.index != null) {
+    const beforeArticle = raw.slice(0, articleTail.index);
+    if (/\d{1,2}-\d{1,2}/.test(beforeArticle)) {
+      article = articleTail[1];
+      raw = beforeArticle.trim();
+    }
+  }
   const sizeMatches = [...raw.matchAll(/\d{1,2}-\d{1,2}/g)];
   const sizeMatch = [...sizeMatches].reverse().find((item) => BORDO_SIZES.some((size) => compactCode(size) === compactCode(item[0]))) ?? sizeMatches[sizeMatches.length - 1];
   if (!sizeMatch || sizeMatch.index == null) return null;
   const size = normalizeBordoSize(sizeMatch[0]);
-  // Size dan keyingi qolgan matn: faqat R-rang — qolgan junk/artikul IGNORE.
+  // Size dan keyingi qolgan matn: R-rang yoki qisqa artikul.
   let after = raw.slice(sizeMatch.index + sizeMatch[0].length).trim();
   const afterModel = after.match(/^R\s*-?\s*(\d+)\b/i);
   if (afterModel) {
     model = model || `R${afterModel[1]}`;
     after = after.slice(afterModel[0].length).trim();
   }
-  if (!model && after) {
+  if (after && /^\d{4,7}$/.test(after)) article = article || after;
+  else if (!model && after) {
     const asModel = normalizeBordoModel(after);
     if (asModel) model = asModel;
     // aks holda junk — e’tiborsiz
@@ -1316,6 +1332,7 @@ export function listWaybillProducts(
   if (!code) return [];
   const core = coreProductCode(code);
   const wantedRang = bordoRangToken(productModelToken(code), "");
+  const wantedArticle = compactCode(input.article || "");
   // To‘liq katalog fallback yo‘q — GET/matches 504 bermasin. Indeks miss = bo‘sh.
   const pool = waybillIndexFor(catalog).get(core) ?? [];
   if (!pool.length) return [];
@@ -1327,6 +1344,9 @@ export function listWaybillProducts(
     if (!isParentCard(product)) continue;
     if (!productBelongsToFactory(product, input.factoryCode, input.factoryName)) continue;
     const parts = parseBordoName(product.name);
+    const cardArticle = bordoIdentityArticle(product.name, product.article, code || parts?.productCode || "");
+    // Artikul bo‘sh ≠ 43937 — MS barcode/code nusxasi identity emas.
+    if (cardArticle !== wantedArticle) continue;
     if (parts) {
       if (coreProductCode(parts.productCode) !== core) continue;
       if (bordoRangToken(parts.model, parts.color) !== wantedRang) continue;
@@ -1384,6 +1404,7 @@ export function pickPassport(
         coreProductCode(p.productCode),
         compactCode(p.size),
         bordoRangToken(p.model, p.color),
+        bordoIdentityArticle(row.name, row.article, p.productCode),
       ].join("|");
     }),
   );

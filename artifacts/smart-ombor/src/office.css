@@ -239,6 +239,126 @@
   box-shadow: none; opacity: .92;
 }
 .office-cam.is-locked::after { display: none; }
+.office-me.is-edge em {
+  width: 22px; height: 22px;
+  box-shadow: 0 0 0 8px rgb(56 189 248 / .22), 0 10px 22px rgb(14 165 233 / .55);
+}
+.office-map-tools .is-me { background: #0369a1; border-color: rgb(125 211 252 / .45); }
+.office-map-gate {
+  position: absolute; inset: 0; z-index: 6;
+  display: grid; place-content: center; gap: 8px; text-align: center;
+  background: rgb(7 17 31 / .72); backdrop-filter: blur(6px); padding: 18px;
+  color: #e2e8f0;
+}
+.office-map-gate b { font-size: 1rem; }
+.office-map-gate p { margin: 0; color: #cbd5e1; font-size: .86rem; max-width: 260px; }
+.office-map-enable {
+  margin-top: 6px; border: 0; border-radius: 999px; padding: 12px 22px;
+  font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  box-shadow: 0 12px 28px rgb(234 88 12 / .35);
+}
+.office-status-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-radius: 16px; padding: 12px 12px 12px 14px; margin-bottom: 12px;
+  border: 1px solid rgb(255 255 255 / .1);
+  background: linear-gradient(120deg, #3f2a14, #1e293b 55%);
+}
+.office-status-banner.is-in { background: linear-gradient(120deg, #172554, #1e293b 60%); }
+.office-status-banner.is-wait { background: linear-gradient(120deg, #422006, #1e293b 58%); }
+.office-status-banner.is-done { background: linear-gradient(120deg, #052e16, #1e293b 58%); }
+.office-status-banner small { display: block; color: #94a3b8; font-size: .72rem; margin-bottom: 2px; }
+.office-status-banner b { display: block; font-size: .92rem; line-height: 1.25; }
+.office-status-banner button {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  border: 0; border-radius: 12px; padding: 10px 12px; font-weight: 700;
+  color: #fff; background: #2563eb; box-shadow: 0 8px 18px rgb(37 99 235 / .35);
+}
+.office-live-strip {
+  display: flex; align-items: center; gap: 10px;
+  background: #101c31; border: 1px solid var(--o-line);
+  border-radius: 14px; padding: 10px 12px; margin: 0 0 12px;
+}
+.office-live-dot {
+  width: 10px; height: 10px; border-radius: 999px; background: #64748b; flex: none;
+  box-shadow: 0 0 0 4px rgb(100 116 139 / .2);
+}
+.office-live-dot.is-on { background: #34d399; box-shadow: 0 0 0 4px rgb(52 211 153 / .25); }
+.office-live-dot.is-away { background: #f87171; box-shadow: 0 0 0 4px rgb(248 113 113 / .22); }
+.office-live-strip b { display: block; font-size: .86rem; }
+.office-live-strip small { color: var(--o-muted); font-size: .74rem; word-break: break-all; }
+.office-live-strip button {
+  margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 999px; padding: 7px 10px; font-size: .76rem; font-weight: 700;
+  color: #93c5fd; border: 1px solid rgb(147 197 253 / .3); background: transparent;
+}
+.office-face-card {
+  background: linear-gradient(160deg, #15233d, #101c31 55%);
+  border: 1px solid rgb(96 165 250 / .28);
+  border-radius: 18px; padding: 14px; margin: 0 0 14px;
+  box-shadow: 0 14px 30px rgb(15 23 42 / .28);
+}
+.office-face-top { display: flex; gap: 12px; align-items: flex-start; }
+.office-face-avatar {
+  width: 58px; height: 58px; border-radius: 18px; flex: none;
+  display: grid; place-items: center; color: #93c5fd;
+  background: radial-gradient(circle at 30% 25%, #1d4ed8, #0f172a 70%);
+  border: 1px solid rgb(147 197 253 / .25);
+}
+.office-face-top b { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 1rem; }
+.office-face-top em {
+  font-style: normal; font-size: .72rem; font-weight: 800;
+  border-radius: 999px; padding: 3px 8px;
+}
+.office-face-top em.is-ok { background: #052e16; color: #86efac; }
+.office-face-top em.is-off { background: #3f1d0c; color: #fdba74; }
+.office-face-top p { margin: 6px 0 0; color: var(--o-muted); font-size: .84rem; line-height: 1.35; }
+.office-face-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.office-face-actions button {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 12px; padding: 10px 12px; font-weight: 700; font-size: .86rem;
+  border: 1px solid rgb(255 255 255 / .12); background: #0b1524; color: #e2e8f0;
+}
+.office-face-actions .is-primary {
+  background: #1d4ed8; border-color: transparent; color: #fff;
+  box-shadow: 0 8px 18px rgb(29 78 216 / .35);
+}
+.office-face-actions .is-on { border-color: rgb(96 165 250 / .5); color: #93c5fd; }
+.office-gps-modal {
+  position: fixed; inset: 0; z-index: 95;
+  display: grid; place-items: center; padding: 18px;
+  background: rgb(2 6 23 / .72); backdrop-filter: blur(8px);
+}
+.office-gps-card {
+  position: relative; width: min(360px, 100%);
+  background: linear-gradient(165deg, #111827, #0b1220 60%);
+  border: 1px solid rgb(255 255 255 / .1);
+  border-radius: 22px; padding: 22px 18px 18px; text-align: center;
+  box-shadow: 0 30px 80px rgb(0 0 0 / .55);
+}
+.office-gps-x {
+  position: absolute; top: 10px; right: 10px; width: 34px; height: 34px;
+  border-radius: 999px; display: grid; place-items: center; color: #cbd5e1;
+  background: rgb(255 255 255 / .06);
+}
+.office-gps-card > small {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 999px; padding: 4px 10px; margin-bottom: 10px;
+  background: rgb(249 115 22 / .15); color: #fdba74; font-weight: 800; font-size: .72rem;
+}
+.office-gps-ico {
+  width: 56px; height: 56px; margin: 4px auto 10px; border-radius: 18px;
+  display: grid; place-items: center; color: #fdba74;
+  background: radial-gradient(circle at 30% 20%, #9a3412, #1c1917 70%);
+}
+.office-gps-card b { display: block; font-size: 1.2rem; margin-bottom: 6px; }
+.office-gps-card p { margin: 0 0 14px; color: #94a3b8; font-size: .9rem; line-height: 1.4; }
+.office-gps-go {
+  width: 100%; border: 0; border-radius: 14px; padding: 14px 16px;
+  font-weight: 800; font-size: 1rem; color: #fff;
+  background: linear-gradient(135deg, #f97316, #ea580c 60%, #c2410c);
+  box-shadow: 0 14px 30px rgb(234 88 12 / .4);
+}
 .office-stage {
   position: fixed; inset: 0; z-index: 80; background: #000;
   display: flex; flex-direction: column;
