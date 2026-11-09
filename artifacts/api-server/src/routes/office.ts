@@ -10,6 +10,7 @@ import {
   enrollFace,
   faceEnrolled,
   fiksaOf,
+  insideOffice,
   listOfficeTasks,
   officeDistance,
   punch,
@@ -65,8 +66,8 @@ router.post("/office/face", (req, res) => {
   const lng = Number(req.body?.lng);
   const accuracy = Number(req.body?.accuracy);
   const dist = officeDistance(lat, lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || dist > OFFICE_RADIUS_M || (Number.isFinite(accuracy) && accuracy > OFFICE_ACCURACY_M)) {
-    res.status(403).json({ error: "radius", meters: Math.round(dist) });
+  if (!insideOffice(lat, lng, accuracy)) {
+    res.status(403).json({ error: "radius", meters: Math.round(Number.isFinite(dist) ? dist : 0) });
     return;
   }
   try {

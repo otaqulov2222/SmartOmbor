@@ -107,8 +107,9 @@ function monthDay(iso: string, months: string) {
   return `${Number(day)} ${label}`;
 }
 
-function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge }: {
-  lat: number; lng: number; zoom: number; name: string; radius: string; here: boolean;
+function DarkMap({ lat, lng, zoom, name, radiusM, radiusLabel, here, user, status, onZoom, onLocate, onNudge }: {
+  lat: number; lng: number; zoom: number; name: string; radiusM: number; radiusLabel: string; here: boolean;
+  user: { lat: number; lng: number } | null; status: string;
   onZoom: (next: number) => void; onLocate: () => void; onNudge: () => void;
 }) {
   const { t } = useI18n();
@@ -127,15 +128,31 @@ function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge
   }
   const left = `calc(50% - ${(xf - (cx - 1)) * 256}px)`;
   const top = `calc(46% - ${(yf - (cy - 1)) * 256}px)`;
-  return <div className="office-map">
+  const mpp = 156543.03392 * Math.cos((lat * Math.PI) / 180) / (2 ** z);
+  const radiusPx = Math.max(28, Math.min(170, radiusM / Math.max(mpp, 0.01)));
+  let userStyle: { left: string; top: string } | null = null;
+  if (user) {
+    const uxf = lon2tile(user.lng, z);
+    const uyf = lat2tile(user.lat, z);
+    userStyle = {
+      left: `calc(50% + ${(uxf - xf) * 256}px)`,
+      top: `calc(46% + ${(uyf - yf) * 256}px)`,
+    };
+  }
+  return <div className={`office-map ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>
     <div className="office-map-tiles" style={{ left, top }}>
       {tiles.map(tile => (
         <img key={`${z}-${tile.x}-${tile.y}`} alt="" draggable={false} style={{ left: tile.left, top: tile.top }} src={`https://tile.openstreetmap.org/${z}/${tile.x}/${tile.y}.png`}/>
       ))}
     </div>
     <div className="office-map-shade"/>
-    <div className={`office-pin ${here ? 'is-here' : ''}`}><i/><i/><span><MapPin size={18}/></span></div>
-    {here && <div className="office-here">{t('office.here')}</div>}
+    <div className={`office-pin ${here ? 'is-here' : ''}`} style={{ width: radiusPx * 2, height: radiusPx * 2 }}>
+      <i/><i/><span><MapPin size={18}/></span>
+    </div>
+    {userStyle && <div className={`office-me ${here ? 'is-here' : ''}`} style={userStyle} title={t('office.you')}>
+      <em/><b>{t('office.you')}</b>
+    </div>}
+    <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>
     <button type="button" className="office-tap" onClick={onNudge} onDoubleClick={onNudge}><Hand size={14}/> {t('office.dbl')}</button>
     <div className="office-map-tools">
       <button type="button" onClick={() => onZoom(z + 1)} aria-label="+"><Plus size={16}/></button>
@@ -144,7 +161,7 @@ function DarkMap({ lat, lng, zoom, name, radius, here, onZoom, onLocate, onNudge
     </div>
     <div className="office-map-meta">
       <b><MapPin size={12}/> {name}</b>
-      <em>{radius}</em>
+      <em>{radiusLabel}</em>
     </div>
   </div>;
 }
@@ -155,6 +172,7 @@ export function OfficePage() {
   const [me, setMe] = useState<Me | null>(null);
   const [clock, setClock] = useState(tashkentClock());
   const [gps, setGps] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied' | 'error'>('pending');
   const [method, setMethod] = useState<'face' | 'qr'>('face');
   const [stage, setStage] = useState<null | 'face' | 'qr'>(null);
   const [facing, setFacing] = useState<'user' | 'environment'>('user');
@@ -193,12 +211,27 @@ export function OfficePage() {
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!navigator.geolocation) return;
-    const id = navigator.geolocation.watchPosition(
-      pos => setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 }),
-      () => undefined,
-      { enableHighAccuracy: true, maximumAge: 4000, timeout: 12000 },
-    );
+    if (!navigator.geolocation) { setGpsState('error'); return; }
+    const apply = (pos: GeolocationPosition) => {
+      const accuracy = Number(pos.coords.accuracy);
+      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
+      if (!Number.isFinite(accuracy) || accuracy <= 0) {
+        setGpsState('error');
+        return;
+      }
+      setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
+      setGpsState('ready');
+    };
+    const fail = (err: GeolocationPositionError) => {
+      if (err.code === err.PERMISSION_DENIED) setGpsState('denied');
+      else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+    };
+    const id = navigator.geolocation.watchPosition(apply, fail, {
+      enableHighAccuracy: true, maximumAge: 2000, timeout: 15000,
+    });
+    navigator.geolocation.getCurrentPosition(apply, fail, {
+      enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
+    });
     return () => navigator.geolocation.clearWatch(id);
   }, []);
   useEffect(() => {
@@ -215,7 +248,26 @@ export function OfficePage() {
   }, []);
 
   const meters = me && gps ? haversine(gps.lat, gps.lng, me.office.lat, me.office.lng) : null;
-  const inZone = Boolean(me && gps && meters != null && meters <= me.office.radiusM && gps.accuracy <= (me.office.accuracyM || 150));
+  const maxAcc = me?.office.accuracyM || 150;
+  const radiusM = me?.office.radiusM || 100;
+  const gpsAccurate = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= maxAcc);
+  const inZone = Boolean(
+    me && gps && gpsAccurate && meters != null
+    && meters <= radiusM
+    && meters + Math.min(gps.accuracy * 0.5, 45) <= radiusM,
+  );
+  const geoStatus = !me
+    ? t('common.loading')
+    : gpsState === 'denied'
+      ? t('office.gpsNeed')
+      : gpsState === 'pending' || !gps
+        ? t('office.gpsWait')
+        : !gpsAccurate
+          ? t('office.gpsBad', { m: Math.round(gps.accuracy) })
+          : inZone
+            ? t('office.distHere', { m: Math.round(meters || 0) })
+            : t('office.distFar', { m: Math.round(meters || 0) });
+  const canPunch = Boolean(inZone && gps && !busy);
   const worked = me?.today?.inAt
     ? (me.today.outAt ? me.today.workedMs : Date.now() - Date.parse(me.today.inAt))
     : 0;
@@ -234,6 +286,13 @@ export function OfficePage() {
     stream.current = null;
     if (video.current) video.current.srcObject = null;
   };
+
+  useEffect(() => {
+    if (!stage || inZone) return;
+    stopCam();
+    setStage(null);
+    setNote(t('office.distFar', { m: Math.round(meters || 0) }));
+  }, [stage, inZone, meters, t]);
 
   const startCam = async (mode: 'user' | 'environment') => {
     try {
@@ -260,15 +319,24 @@ export function OfficePage() {
   };
 
   const doPunch = async (kind: 'in' | 'out', extra: { faceHash?: string; qrToken?: string }, used: 'face' | 'qr') => {
-    if (!gps) { setNote(t('office.gpsNeed')); return false; }
+    if (!gps || gpsState === 'denied') { setNote(t('office.gpsNeed')); return false; }
+    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return false; }
+    if (!inZone) {
+      setNote(t('office.distFar', { m: Math.round(meters || 0) }));
+      return false;
+    }
     setBusy(true); setNote(''); setOk('');
     const response = await fetch('/api/office/punch', {
       method: 'POST', headers: officeHeaders(),
       body: JSON.stringify({ kind, method: used, lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy, ...extra }),
     });
-    const payload = await response.json().catch(() => ({})) as { error?: string };
+    const payload = await response.json().catch(() => ({})) as { error?: string; meters?: number };
     setBusy(false);
     if (!response.ok) {
+      if (payload.error === 'radius') {
+        setNote(t('office.distFar', { m: Math.round(payload.meters || meters || 0) }));
+        return false;
+      }
       const map: Record<string, TKey> = {
         radius: 'office.far', face: 'office.faceBad', enroll: 'office.needFace', qr: 'office.qrBad',
         'already-in': 'office.alreadyIn', 'already-out': 'office.alreadyOut', 'need-in': 'office.needIn',
@@ -284,13 +352,19 @@ export function OfficePage() {
   };
 
   const confirmFace = async () => {
-    if (!inZone) { setNote(t('office.far')); return; }
+    if (!gps) { setNote(t('office.gpsNeed')); return; }
+    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); closeStage(); return; }
     if (!video.current) { setCamDenied(true); return; }
     const hash = faceHash(video.current);
     if (!hash) { setNote(t('office.faceDark')); return; }
     if (!me?.face) {
-      const response = await fetch('/api/office/face', { method: 'POST', headers: officeHeaders(), body: JSON.stringify({ hash, lat: gps?.lat, lng: gps?.lng, accuracy: gps?.accuracy }) });
-      if (!response.ok) { setNote(t('office.faceFail')); return; }
+      const response = await fetch('/api/office/face', { method: 'POST', headers: officeHeaders(), body: JSON.stringify({ hash, lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy }) });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string; meters?: number };
+        setNote(payload.error === 'radius' ? t('office.distFar', { m: Math.round(payload.meters || meters || 0) }) : t('office.faceFail'));
+        return;
+      }
       await loadMe();
     }
     await doPunch(punchKind.current, { faceHash: hash }, 'face');
@@ -317,8 +391,9 @@ export function OfficePage() {
   };
 
   const openStage = async (kind: 'in' | 'out', used: 'face' | 'qr') => {
-    if (!gps) { setNote(t('office.gpsNeed')); return; }
-    if (!inZone) { setNote(t('office.far')); return; }
+    if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
+    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
     punchKind.current = kind;
     setMethod(used);
     setNote('');
@@ -350,6 +425,9 @@ export function OfficePage() {
   };
 
   const goPunch = async () => {
+    if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
+    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
     if (!camReady) { await askCamera(); return; }
     await openStage(nextKind, method);
   };
@@ -366,10 +444,30 @@ export function OfficePage() {
   };
 
   const pingGps = () => {
+    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); return; }
+    setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
     navigator.geolocation.getCurrentPosition(
-      pos => setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 }),
-      () => setNote(t('office.gpsNeed')),
-      { enableHighAccuracy: true, timeout: 10000 },
+      pos => {
+        const accuracy = Number(pos.coords.accuracy);
+        if (!Number.isFinite(accuracy) || accuracy <= 0) {
+          setGpsState('error');
+          setNote(t('office.gpsBad', { m: 0 }));
+          return;
+        }
+        setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
+        setGpsState('ready');
+        setNote('');
+      },
+      err => {
+        if (err.code === err.PERMISSION_DENIED) {
+          setGpsState('denied');
+          setNote(t('office.gpsNeed'));
+        } else {
+          setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+          setNote(t('office.gpsOff'));
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
   };
 
@@ -421,7 +519,7 @@ export function OfficePage() {
         </div>
       </div>
       <div className="office-pair">
-        <button type="button" className="office-go is-in" disabled={busy} onClick={() => void openStage('in', method)}>
+        <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
           <span>
             <b>{t('office.in')} <Clock size={13}/></b>
             <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
@@ -429,7 +527,7 @@ export function OfficePage() {
           </span>
           <LogIn size={18} className="office-go-arrow"/>
         </button>
-        <button type="button" className="office-go is-out" disabled={busy} onClick={() => void openStage('out', method)}>
+        <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
           <span>
             <b>{t('office.out')} <Clock size={13}/></b>
             <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
@@ -439,11 +537,14 @@ export function OfficePage() {
         </button>
       </div>
       {me && <DarkMap
-        lat={me.office.lat} lng={me.office.lng} zoom={zoom} name={me.office.name} radius={t('office.radius')}
-        here={inZone} onZoom={setZoom} onLocate={pingGps} onNudge={pingGps}
+        lat={me.office.lat} lng={me.office.lng} zoom={zoom} name={me.office.name}
+        radiusM={radiusM} radiusLabel={t('office.radius')}
+        here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng } : null} status={geoStatus}
+        onZoom={setZoom} onLocate={pingGps} onNudge={pingGps}
       />}
+      {!inZone && <p className="office-warn">{geoStatus}</p>}
       {ok && <p className="office-ok">{ok}</p>}
-      {note && !camDenied && <p className="office-warn">{note}</p>}
+      {note && !camDenied && note !== geoStatus && <p className="office-warn">{note}</p>}
       <h2>{t('office.method')}</h2>
       <p className="lead">{t('office.methodBody')}</p>
       <div className="office-methods">
@@ -456,9 +557,9 @@ export function OfficePage() {
           <b>QR Scanner</b><small>{t('office.qrHint')}</small>
         </button>
       </div>
-      <button type="button" className="office-cam" disabled={busy} onClick={() => void goPunch()}>
-        <b>→ {ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
-        <small>{ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
+      <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
+        <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
+        <small>{!canPunch ? geoStatus : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
       </button>
       <div className="office-card">
         <div className="office-card-top">

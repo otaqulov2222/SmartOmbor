@@ -114,6 +114,7 @@
   border: 0; color: #fff; transition: transform .16s ease, filter .16s ease;
 }
 .office-go:hover { transform: translateY(-1px); filter: brightness(1.06); }
+.office-go:disabled { opacity: .42; filter: grayscale(.35); transform: none; cursor: not-allowed; }
 .office-go.is-in { background: linear-gradient(145deg, #10b981, #047857); }
 .office-go.is-out { background: linear-gradient(145deg, #fb7185, #be123c); }
 .office-go b { display: inline-flex; align-items: center; gap: 6px; font-size: .98rem; }
@@ -205,6 +206,39 @@
   font-size: .82rem; font-weight: 700; z-index: 3; pointer-events: none;
   box-shadow: 0 8px 20px rgb(4 120 87 / .25);
 }
+.office-geo-badge {
+  position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+  max-width: calc(100% - 88px); z-index: 4; pointer-events: none;
+  border-radius: 999px; padding: 7px 12px; font-size: .78rem; font-weight: 700;
+  text-align: center; line-height: 1.25; border: 1px solid transparent;
+  backdrop-filter: blur(10px); box-shadow: 0 8px 20px rgb(0 0 0 / .28);
+}
+.office-geo-badge.is-here { background: #ecfdf5; color: #047857; border-color: rgb(16 185 129 / .35); }
+.office-geo-badge.is-away { background: #fef2f2; color: #b91c1c; border-color: rgb(248 113 113 / .4); }
+.office-geo-badge.is-wait { background: rgb(15 23 42 / .88); color: #e2e8f0; border-color: rgb(255 255 255 / .12); }
+.office-me {
+  position: absolute; transform: translate(-50%, -50%); z-index: 5; pointer-events: none;
+  display: grid; justify-items: center; gap: 4px;
+}
+.office-me em {
+  width: 18px; height: 18px; border-radius: 999px; background: #38bdf8;
+  border: 3px solid #fff; box-shadow: 0 0 0 6px rgb(56 189 248 / .28), 0 8px 18px rgb(14 165 233 / .45);
+  display: block;
+}
+.office-me.is-here em {
+  background: #34d399;
+  box-shadow: 0 0 0 6px rgb(52 211 153 / .28), 0 8px 18px rgb(16 185 129 / .45);
+}
+.office-me b {
+  font-size: .68rem; font-weight: 800; color: #fff; letter-spacing: .02em;
+  background: rgb(15 23 42 / .88); border-radius: 999px; padding: 2px 7px;
+  border: 1px solid rgb(255 255 255 / .14);
+}
+.office-cam.is-locked {
+  background: linear-gradient(90deg, #334155, #475569 55%, #64748b);
+  box-shadow: none; opacity: .92;
+}
+.office-cam.is-locked::after { display: none; }
 .office-stage {
   position: fixed; inset: 0; z-index: 80; background: #000;
   display: flex; flex-direction: column;

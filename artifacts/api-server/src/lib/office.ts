@@ -191,8 +191,14 @@ export function officeDistance(lat: number, lng: number) {
 
 export function insideOffice(lat: number, lng: number, accuracy?: number) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-  if (Number.isFinite(accuracy) && Number(accuracy) > OFFICE_ACCURACY_M) return false;
-  return officeDistance(lat, lng) <= OFFICE_RADIUS_M;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  const acc = Number(accuracy);
+  // Real GPS always reports accuracy > 0. Missing/0 means spoofed or stale client payload.
+  if (!Number.isFinite(acc) || acc <= 0 || acc > OFFICE_ACCURACY_M) return false;
+  const dist = officeDistance(lat, lng);
+  // Uncertainty circle must still sit inside the office radius (half-accuracy buffer).
+  if (dist + Math.min(acc * 0.5, 45) > OFFICE_RADIUS_M) return false;
+  return dist <= OFFICE_RADIUS_M;
 }
 
 function hamming(left: string, right: string) {
