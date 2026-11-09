@@ -35,24 +35,13 @@
 }
 .office-sections.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .office-sections button {
-  position: relative; z-index: 1;
   border: 0; border-radius: 10px; padding: 9px 6px;
   font-size: .76rem; font-weight: 700; color: #94a3b8;
   background: transparent; text-align: center;
 }
 .office-sections button.is-on {
-  background: transparent; color: #fff;
-  box-shadow: none;
-}
-.fluid-pill-office {
-  background: #2563eb;
-  border-radius: 10px;
+  background: #2563eb; color: #fff;
   box-shadow: 0 6px 16px rgb(37 99 235 / .35);
-}
-.office-section-pane {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
 }
 .office-block { scroll-margin-top: 64px; }
 .office-gps-banner { display: none; }
@@ -359,13 +348,9 @@
 .office-card-title .is-pay { background: #14532d; color: #86efac; }
 .office-card-title b { display: block; }
 .office-card-title small { color: var(--o-muted); }
-.office-tabs { display: flex; gap: 4px; background: #0b1524; border-radius: 999px; padding: 3px; flex: none; position: relative; }
-.office-tabs button { position: relative; z-index: 1; color: #94a3b8; border-radius: 999px; padding: 6px 10px; font-size: .8rem; background: transparent; border: 0; }
-.office-tabs button.is-on { background: transparent; color: #fff; }
-.fluid-pill-tabs {
-  background: #2563eb;
-  border-radius: 999px;
-}
+.office-tabs { display: flex; gap: 4px; background: #0b1524; border-radius: 999px; padding: 3px; flex: none; }
+.office-tabs button { color: #94a3b8; border-radius: 999px; padding: 6px 10px; font-size: .8rem; }
+.office-tabs button.is-on { background: #2563eb; color: #fff; }
 .office-empty { color: var(--o-muted); font-size: .9rem; padding: 18px 4px; text-align: center; }
 .office-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--o-line); font-size: .9rem; }
 .office-pay { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

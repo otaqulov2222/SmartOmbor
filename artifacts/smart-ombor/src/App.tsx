@@ -40,8 +40,6 @@ import {
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
 import { EmployeesPage } from '@/kpi/employees';
 import { GpsPage } from '@/kpi/gps';
-import { FluidNav } from '@/motion/fluid-pill';
-import { PageTransition } from '@/motion/page-transition';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -376,13 +374,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-top"><BrandMark light/>{!agent && !officeOnly && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
-        <FluidNav
-          className="nav-primary fluid-nav"
-          pillClassName="fluid-pill fluid-pill-nav"
-          axis="y"
-          activeSelector=".nav-item.is-active"
-          watchKey={`${path}|${officeOpen}|${kpiOpen}|${moreOpen}|${effectiveRail}`}
-        >
+        <div className="nav-primary">
           {agent ? <>
             {navItem('/my-kpi')}
             {navItem('/office')}
@@ -417,18 +409,8 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {warehouse && navItem('/stock')}
             <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </>}
-        </FluidNav>
-        {moreOpen && (
-          <FluidNav
-            className="nav-more-panel fluid-nav"
-            pillClassName="fluid-pill fluid-pill-nav"
-            axis="y"
-            activeSelector=".nav-item.is-active"
-            watchKey={`${path}|more`}
-          >
-            {visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}
-          </FluidNav>
-        )}
+        </div>
+        {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
       <div className="sidebar-bottom">
         <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
@@ -436,7 +418,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     </aside>
     <div className="main">
       <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{(director || warehouse) && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
-      <main className="content"><PageTransition routeKey={path}>{children}</PageTransition></main>
+      <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
 }
