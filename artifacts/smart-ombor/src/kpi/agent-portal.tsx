@@ -182,9 +182,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       void kpiFetch('/kpi/agent/location', {
         method: 'POST',
         body: JSON.stringify({ ...next, source: 'live' }),
-      }, mode)
-        .then(() => cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }))
-        .catch(() => undefined);
+      }, mode).catch(() => undefined);
+      // Do NOT invalidate cabinet on every GPS ping — it remounts stop arrays and
+      // aborts in-flight 1→2→3… OSRM draws before amber legs appear.
     };
     navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, {
       enableHighAccuracy: true,

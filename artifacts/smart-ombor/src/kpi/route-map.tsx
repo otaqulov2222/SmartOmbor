@@ -436,6 +436,15 @@ export function RouteMap({
     }
   }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
 
+  const stopsKey = useMemo(
+    () => stops.map((s) => `${s.id}:${s.visitedToday ? 1 : 0}:${s.lat.toFixed(5)},${s.lng.toFixed(5)}`).join('|'),
+    [stops],
+  );
+  // Bucket live GPS so tiny watchPosition noise does not restart OSRM chain
+  const liveBucket = livePos
+    ? `${livePos.lat.toFixed(3)},${livePos.lng.toFixed(3)}`
+    : 'nogps';
+
   // In-app full sequence: done (green) + live→next (blue) + next→…→last (amber)
   useEffect(() => {
     if (!mapReady) return;
@@ -444,121 +453,121 @@ export function RouteMap({
     const layer = routeLayerRef.current;
     if (!L || !layer) return;
 
-    const run = async () => {
-      const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-      if (!valid.length) {
-        layer.clearLayers();
-        setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
-        routeOriginRef.current = null;
-        return;
-      }
-
-      const doneStops = valid.filter((s) => s.visitedToday);
-      const pending = valid.filter((s) => !s.visitedToday);
-      const next = pending[0] || null;
-      const seqKey = `${valid.map((s) => `${s.id}:${s.visitedToday ? 1 : 0}`).join('|')}|n:${next?.id || ''}`;
-
-      const prev = routeOriginRef.current;
-      const movedFar =
-        !prev ||
-        prev.destId !== seqKey ||
-        (livePos != null && haversineM(prev, livePos) > 120);
-
-      if (!movedFar && prev && livePos && next) {
-        setRoadHint((h) => ({
-          distanceM: Math.round(haversineM(livePos, next)),
-          durationSec: h.durationSec,
-          roadOk: h.roadOk,
-        }));
-        return;
-      }
-
-      const drawLeg = (
-        path: Array<[number, number]>,
-        kind: 'done' | 'active' | 'plan',
-        ok: boolean,
-      ) => {
-        if (path.length < 2) return;
-        if (kind === 'done') {
-          L.polyline(path, { color: '#059669', weight: 5, opacity: 0.88, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+    const timer = window.setTimeout(() => {
+      const run = async () => {
+        const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+        if (!valid.length) {
+          layer.clearLayers();
+          setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
+          routeOriginRef.current = null;
           return;
         }
-        if (kind === 'active') {
-          L.polyline(path, { color: '#1e3a8a', weight: 11, opacity: 0.16, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+
+        const doneStops = valid.filter((s) => s.visitedToday);
+        const pending = valid.filter((s) => !s.visitedToday);
+        const next = pending[0] || null;
+        const seqKey = `${stopsKey}|n:${next?.id || ''}|g:${liveBucket}`;
+
+        const prev = routeOriginRef.current;
+        if (prev?.destId === seqKey) {
+          if (livePos && next) {
+            setRoadHint((h) => ({
+              distanceM: Math.round(haversineM(livePos, next)),
+              durationSec: h.durationSec,
+              roadOk: h.roadOk,
+            }));
+          }
+          return;
+        }
+
+        const drawLeg = (
+          path: Array<[number, number]>,
+          kind: 'done' | 'active' | 'plan',
+          ok: boolean,
+        ) => {
+          if (path.length < 2) return;
+          if (kind === 'done') {
+            L.polyline(path, { color: '#059669', weight: 5, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+            return;
+          }
+          if (kind === 'active') {
+            L.polyline(path, { color: '#1e3a8a', weight: 12, opacity: 0.18, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+            L.polyline(path, {
+              color: ok ? '#2563eb' : '#64748b',
+              weight: 6,
+              opacity: 0.96,
+              dashArray: ok ? undefined : '6 8',
+              lineCap: 'round',
+              lineJoin: 'round',
+            }).addTo(layer);
+            return;
+          }
           L.polyline(path, {
-            color: ok ? '#2563eb' : '#64748b',
+            color: '#d97706',
             weight: 5,
-            opacity: 0.95,
-            dashArray: ok ? undefined : '6 8',
+            opacity: 0.92,
+            dashArray: '12 8',
             lineCap: 'round',
             lineJoin: 'round',
           }).addTo(layer);
-          return;
+        };
+
+        const pairs: Array<{ a: [number, number]; b: [number, number]; kind: 'done' | 'active' | 'plan' }> = [];
+        for (let i = 0; i < doneStops.length - 1; i += 1) {
+          pairs.push({
+            a: [doneStops[i].lat, doneStops[i].lng],
+            b: [doneStops[i + 1].lat, doneStops[i + 1].lng],
+            kind: 'done',
+          });
         }
-        L.polyline(path, {
-          color: '#f59e0b',
-          weight: 4,
-          opacity: 0.82,
-          dashArray: '10 8',
-          lineCap: 'round',
-          lineJoin: 'round',
-        }).addTo(layer);
+        if (livePos && next) {
+          pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
+        }
+        for (let i = 0; i < pending.length - 1 && i < 24; i += 1) {
+          pairs.push({
+            a: [pending[i].lat, pending[i].lng],
+            b: [pending[i + 1].lat, pending[i + 1].lng],
+            kind: 'plan',
+          });
+        }
+
+        const roads = await Promise.all(pairs.map((p) => fetchRoadRoute([p.a, p.b])));
+        if (!alive) return;
+
+        layer.clearLayers();
+        let activeOk = false;
+        let activeDist: number | null = null;
+        let activeDur: number | null = null;
+        pairs.forEach((p, idx) => {
+          const road = roads[idx];
+          drawLeg(road.path, p.kind, road.ok);
+          if (p.kind === 'active') {
+            activeOk = road.ok;
+            activeDist = road.distanceM;
+            activeDur = road.durationSec;
+          }
+        });
+
+        routeOriginRef.current = {
+          lat: livePos?.lat ?? valid[0].lat,
+          lng: livePos?.lng ?? valid[0].lng,
+          destId: seqKey,
+        };
+        setRoadHint({
+          distanceM: activeDist ?? (livePos && next ? Math.round(haversineM(livePos, next)) : next?.distanceM ?? null),
+          durationSec: activeDur,
+          roadOk: activeOk,
+        });
       };
 
-      const pairs: Array<{ a: [number, number]; b: [number, number]; kind: 'done' | 'active' | 'plan' }> = [];
-      for (let i = 0; i < doneStops.length - 1; i += 1) {
-        pairs.push({
-          a: [doneStops[i].lat, doneStops[i].lng],
-          b: [doneStops[i + 1].lat, doneStops[i + 1].lng],
-          kind: 'done',
-        });
-      }
-      if (livePos && next) {
-        pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
-      }
-      // Full chain 1→2→3→… (cap 24 legs to protect OSRM)
-      for (let i = 0; i < pending.length - 1 && i < 24; i += 1) {
-        pairs.push({
-          a: [pending[i].lat, pending[i].lng],
-          b: [pending[i + 1].lat, pending[i + 1].lng],
-          kind: 'plan',
-        });
-      }
+      void run();
+    }, 350);
 
-      const roads = await Promise.all(pairs.map((p) => fetchRoadRoute([p.a, p.b])));
-      if (!alive) return;
-
-      layer.clearLayers();
-      let activeOk = false;
-      let activeDist: number | null = null;
-      let activeDur: number | null = null;
-      pairs.forEach((p, idx) => {
-        const road = roads[idx];
-        drawLeg(road.path, p.kind, road.ok);
-        if (p.kind === 'active') {
-          activeOk = road.ok;
-          activeDist = road.distanceM;
-          activeDur = road.durationSec;
-        }
-      });
-
-      if (livePos) {
-        routeOriginRef.current = { lat: livePos.lat, lng: livePos.lng, destId: seqKey };
-      } else {
-        routeOriginRef.current = { lat: valid[0].lat, lng: valid[0].lng, destId: seqKey };
-      }
-      setRoadHint({
-        distanceM: activeDist ?? (livePos && next ? Math.round(haversineM(livePos, next)) : next?.distanceM ?? null),
-        durationSec: activeDur,
-        roadOk: activeOk,
-      });
-    };
-
-    void run();
     return () => {
       alive = false;
+      window.clearTimeout(timer);
     };
-  }, [mapReady, livePos?.lat, livePos?.lng, nextStop?.id, stops]);
+  }, [mapReady, liveBucket, nextStop?.id, stopsKey, stops, livePos]);
 
   // Fit whole sequence when stops load. Skip only while live GPS follow is actively driving the camera.
   useEffect(() => {
