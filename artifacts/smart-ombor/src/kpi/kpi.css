@@ -280,6 +280,7 @@
   display: flex; justify-content: space-between; align-items: center;
   gap: .75rem; padding: .85rem 1rem; border-bottom: 1px solid #eef2f6; flex-wrap: wrap;
 }
+.rm-chain-actions { display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; }
 .rm-chain-meta { display: flex; flex-direction: column; align-items: flex-start; gap: .45rem; min-width: 0; flex: 1; }
 .rm-progress-block { display: grid; gap: .35rem; width: min(100%, 280px); }
 .rm-progress-block b { font-size: .92rem; color: #0f1b2d; }
@@ -332,6 +333,14 @@
   padding: .45rem .65rem; font-size: .78rem; font-weight: 700;
   text-align: center; pointer-events: none;
 }
+.rm-follow-badge {
+  position: absolute; left: 10px; bottom: 12px; z-index: 5;
+  display: inline-flex; align-items: center; gap: .3rem;
+  background: rgba(37, 99, 235, .92); color: #fff;
+  padding: .35rem .65rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 700; pointer-events: none;
+}
+.rm-canvas-wrap.is-follow { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, .28); }
 
 /* Rotating Navigation Arrow for Agent */
 .rm-nav-arrow-wrap {
@@ -560,7 +569,8 @@
   .ag-stop-actions { grid-column: 1 / -1; }
   .ag-stop-actions .btn { flex: 1; justify-content: center; min-height: 2.55rem; }
   .ag-stages { grid-template-columns: 1fr; }
-  .rm-chain-bar .btn { width: 100%; justify-content: center; }
-  .rm-canvas-wrap { height: 320px; }
+  .rm-chain-bar .btn { flex: 1 1 auto; justify-content: center; min-height: 2.45rem; }
+  .rm-chain-actions { width: 100%; }
+  .rm-canvas-wrap { height: 340px; }
   .rm-map-hint { font-size: .72rem; }
 }

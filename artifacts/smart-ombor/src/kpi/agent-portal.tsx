@@ -173,18 +173,27 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         accuracy: pos.coords.accuracy || 0,
         heading: pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
       };
+      // Local map follows immediately (navigator feel)
       setCoords(next);
       const now = Date.now();
-      if (now - lastPosted < 25_000) return;
+      // Server + admin see live trail every ~8s
+      if (now - lastPosted < 8_000) return;
       lastPosted = now;
-      void kpiFetch('/kpi/agent/location', { method: 'POST', body: JSON.stringify(next) }, mode)
+      void kpiFetch('/kpi/agent/location', {
+        method: 'POST',
+        body: JSON.stringify({ ...next, source: 'live' }),
+      }, mode)
         .then(() => cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }))
         .catch(() => undefined);
     };
-    navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, { enableHighAccuracy: true, timeout: 10000 });
+    navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 0,
+    });
     const watchId = navigator.geolocation.watchPosition(sendLoc, () => undefined, {
       enableHighAccuracy: true,
-      maximumAge: 10000,
+      maximumAge: 2000,
       timeout: 15000,
     });
     return () => navigator.geolocation.clearWatch(watchId);
@@ -358,6 +367,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             stops={routeStops as RouteStop[]}
             track={d?.track || []}
             agentName={d?.agent.fullName}
+            follow
             agentPos={
               coords
                 ? { lat: coords.lat, lng: coords.lng, heading: coords.heading }

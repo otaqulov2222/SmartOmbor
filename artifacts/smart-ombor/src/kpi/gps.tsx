@@ -85,7 +85,7 @@ export function GpsPage() {
   const q = useQuery({
     queryKey: ['kpi-gps', agentId],
     queryFn: () => kpiFetch<Overview>(`/kpi/gps/overview${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`),
-    refetchInterval: 15_000,
+    refetchInterval: 8_000,
   });
 
   const saveCoords = useMutation({
@@ -182,11 +182,17 @@ export function GpsPage() {
         </article>
       </div>
 
-      {/* Interactive 1✓ -> 2 -> 3 -> 4 -> 5 Route Map for the selected agent */}
+      {/* Live navigator-style map for selected agent (admin sees same trail) */}
       <RouteMap
         stops={(d?.points || []) as RouteStop[]}
         agents={selectedAgent ? [selectedAgent] : []}
         agentName={selectedAgent?.fullName}
+        agentPos={
+          selectedAgent?.lat != null && selectedAgent?.lng != null
+            ? { lat: selectedAgent.lat, lng: selectedAgent.lng }
+            : null
+        }
+        follow={Boolean(selectedAgent?.lat != null)}
         track={d?.agentTrack || []}
         selectedStopId={selectedStopId}
         onSelectStop={(st) => setSelectedStopId(st.id)}
