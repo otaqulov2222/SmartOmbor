@@ -146,8 +146,11 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
 function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
   const [tab, setTab] = useState<Tab>('today');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  const [focusStopId, setFocusStopId] = useState<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
+  const [gpsHint, setGpsHint] = useState<string | null>(null);
   const stopRefs = useRef<Record<string, HTMLElement | null>>({});
   const cache = useQueryClient();
   const mode = readAgentToken() ? 'agent' : 'admin';
@@ -157,23 +160,39 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     refetchInterval: 45_000,
   });
 
+  const focusStop = (stopId: string) => {
+    setSelectedStopId(stopId);
+    setFocusStopId(stopId);
+    setFocusNonce((n) => n + 1);
+  };
+
   const openNavigator = (stopId?: string | null) => {
-    if (stopId) setSelectedStopId(stopId);
+    if (stopId) focusStop(stopId);
     setTab('today');
     setMapFullscreen(true);
   };
 
   useEffect(() => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setGpsHint('Telefon GPS qo‘llab-quvvatlamaydi.');
+      return;
+    }
     let lastPosted = 0;
+    const onGpsFail = () => {
+      setGpsHint('GPS ruxsati yo‘q yoki o‘chiq. Sozlamadan GPS ni yoqing.');
+    };
     const sendLoc = (pos: GeolocationPosition) => {
+      const accuracy = Number(pos.coords.accuracy);
+      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
+      if (!Number.isFinite(accuracy) || accuracy <= 0) return;
       const next = {
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
-        accuracy: pos.coords.accuracy || 0,
+        accuracy,
         heading: pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
       };
-      // Local map follows immediately (navigator feel)
+      setGpsHint(null);
+      // Local map follows immediately (navigator feel) — only real phone GPS
       setCoords(next);
       const now = Date.now();
       // Server + admin see live trail every ~8s
@@ -186,12 +205,12 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       // Do NOT invalidate cabinet on every GPS ping — it remounts stop arrays and
       // aborts in-flight 1→2→3… OSRM draws before amber legs appear.
     };
-    navigator.geolocation.getCurrentPosition(sendLoc, () => undefined, {
+    navigator.geolocation.getCurrentPosition(sendLoc, onGpsFail, {
       enableHighAccuracy: true,
       timeout: 12000,
       maximumAge: 0,
     });
-    const watchId = navigator.geolocation.watchPosition(sendLoc, () => undefined, {
+    const watchId = navigator.geolocation.watchPosition(sendLoc, onGpsFail, {
       enableHighAccuracy: true,
       maximumAge: 2000,
       timeout: 15000,
@@ -249,6 +268,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       );
     },
     onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }),
+    onError: (err) => {
+      window.alert((err as Error).message || 'Tashrif saqlanmadi');
+    },
   });
 
   const savePin = useMutation({
@@ -291,10 +313,25 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const confirmVisit = async (c: CustomerCard) => {
     try {
-      if (!(coords?.lat != null && coords.accuracy > 0)) await readFreshGps();
-      if (c.distanceM != null && c.distanceM > 800) {
+      const gps = coords?.lat != null && coords.accuracy > 0 ? coords : await readFreshGps();
+      const distLive =
+        Number.isFinite(c.lat) && Number.isFinite(c.lng)
+          ? Math.round(
+              2 *
+                6371000 *
+                Math.asin(
+                  Math.sqrt(
+                    Math.sin((((c.lat - gps.lat) * Math.PI) / 180) / 2) ** 2 +
+                      Math.cos((gps.lat * Math.PI) / 180) *
+                        Math.cos((c.lat * Math.PI) / 180) *
+                        Math.sin((((c.lng - gps.lng) * Math.PI) / 180) / 2) ** 2,
+                  ),
+                ),
+            )
+          : c.distanceM ?? null;
+      if (distLive != null && distLive > 800) {
         const ok = window.confirm(
-          `${c.name} sizdan ~${fmtDist(c.distanceM)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
+          `${c.name} sizdan ~${fmtDist(distLive)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
         );
         if (!ok) return;
       }
@@ -323,7 +360,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             <h1>{d?.agent.fullName || 'Agent'}</h1>
             <p className={`ag-gps-line ${coords ? 'is-on' : ''}`}>
               <Crosshair size={13} />
-              {coords ? `GPS ulangan · ±${Math.round(coords.accuracy || 0)} m` : 'GPS kutilmoqda…'}
+              {coords
+                ? `GPS ulangan · ±${Math.round(coords.accuracy)} m`
+                : gpsHint || 'GPS kutilmoqda…'}
             </p>
           </div>
         </div>
@@ -428,17 +467,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             track={d?.track || []}
             agentName={d?.agent.fullName}
             follow
+            viewer="agent"
             fullscreen={mapFullscreen}
             onFullscreenChange={setMapFullscreen}
             agentPos={
-              coords
-                ? { lat: coords.lat, lng: coords.lng, heading: coords.heading }
-                : d?.agent.lat != null && d?.agent.lng != null
-                  ? { lat: d.agent.lat, lng: d.agent.lng }
-                  : null
+              coords ? { lat: coords.lat, lng: coords.lng, heading: coords.heading } : null
             }
             selectedStopId={selectedStopId}
-            onSelectStop={(st) => setSelectedStopId(st.id)}
+            focusStopId={focusStopId}
+            focusNonce={focusNonce}
+            onSelectStop={(st) => focusStop(st.id)}
           />
 
           <div className="ag-section-head">
@@ -454,7 +492,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   key={c.id}
                   ref={(node) => { stopRefs.current[c.id] = node; }}
                   className={`ag-stop ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next-stop' : hasDebt ? 'is-due' : ''} ${selected ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedStopId(c.id)}
+                  onClick={() => focusStop(c.id)}
                 >
                   <div className={`ag-stop-num ${c.visitedToday ? 'is-done' : c.isNext ? 'is-next' : ''}`}>
                     {c.visitedToday ? '✓' : c.step}
@@ -481,7 +519,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                     </div>
                   </div>
                   <div className="ag-stop-amount">
-                    <span>Olinishi kerak</span>
+                    <span>{hasDebt ? 'Olinishi kerak' : 'Qarz yo‘q'}</span>
                     <strong className={hasDebt ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                   </div>
                   <div className="ag-stop-actions" onClick={(e) => e.stopPropagation()}>

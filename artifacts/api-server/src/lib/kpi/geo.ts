@@ -99,8 +99,8 @@ export function orderRouteStops<
     .filter((s) => s.visitedToday)
     .sort((a, b) => String(a.visitedAt || "").localeCompare(String(b.visitedAt || "")));
 
-  const unvisitedDebtors = stops.filter((s) => !s.visitedToday && Number(s.debt || 0) > 0);
-  const unvisitedOthers = stops.filter((s) => !s.visitedToday && Number(s.debt || 0) <= 0);
+  // Single nearest-neighbor pool for ALL unvisited (debt does not jump the queue)
+  const unvisited = stops.filter((s) => !s.visitedToday);
 
   let curLat =
     startLat != null && Number.isFinite(startLat)
@@ -115,45 +115,38 @@ export function orderRouteStops<
         ? visited[visited.length - 1].lng
         : 69.2401;
 
-  const greedySort = (pool: T[]) => {
-    const rem = [...pool];
-    const out: T[] = [];
-    while (rem.length) {
-      let bestIdx = 0;
-      let bestDist = Infinity;
-      for (let i = 0; i < rem.length; i += 1) {
-        const d = distanceMeters(curLat, curLng, rem[i].lat, rem[i].lng);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
+  const rem = [...unvisited];
+  const greedy: T[] = [];
+  while (rem.length) {
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < rem.length; i += 1) {
+      const d = distanceMeters(curLat, curLng, rem[i].lat, rem[i].lng);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
       }
-      const [picked] = rem.splice(bestIdx, 1);
-      curLat = picked.lat;
-      curLng = picked.lng;
-      out.push(picked);
     }
-    return out;
-  };
+    const [picked] = rem.splice(bestIdx, 1);
+    curLat = picked.lat;
+    curLng = picked.lng;
+    greedy.push(picked);
+  }
 
-  const ordered = [...visited, ...greedySort(unvisitedDebtors), ...greedySort(unvisitedOthers)];
+  const ordered = [...visited, ...greedy];
   let nextAssigned = false;
   const hasStart = startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng);
 
   return ordered.map((item, idx) => {
     const isNext = !item.visitedToday && !nextAssigned;
     if (isNext) nextAssigned = true;
-    // Leg distance: agent → first pending, then stop → stop along the ordered route
+    // Agent→customer when live start known (Bordim distance guard); else stop→stop leg
     let distanceM: number | null = null;
-    if (idx === 0) {
-      distanceM = hasStart ? distanceMeters(startLat as number, startLng as number, item.lat, item.lng) : null;
-    } else {
+    if (hasStart) {
+      distanceM = distanceMeters(startLat as number, startLng as number, item.lat, item.lng);
+    } else if (idx > 0) {
       const prev = ordered[idx - 1];
       distanceM = distanceMeters(prev.lat, prev.lng, item.lat, item.lng);
-    }
-    // For the next stop, always show distance from the live agent when available
-    if (isNext && hasStart) {
-      distanceM = distanceMeters(startLat as number, startLng as number, item.lat, item.lng);
     }
     return {
       ...item,

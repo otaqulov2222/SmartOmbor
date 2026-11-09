@@ -27,6 +27,7 @@ import {
   logoutAgent,
   requireKpiAdmin,
   requireKpiAgent,
+  requireKpiAgentOrAdmin,
 } from "../lib/kpi/auth";
 import {
   cancelOrderKpi,
@@ -36,7 +37,7 @@ import {
   snapshotPolicy,
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
-import { inferCoordinates, orderRouteStops } from "../lib/kpi/geo";
+import { distanceMeters, inferCoordinates, orderRouteStops } from "../lib/kpi/geo";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 
@@ -1023,7 +1024,7 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .from(kpiLocationEventsTable)
       .where(eq(kpiLocationEventsTable.agentId, agent.id))
       .orderBy(desc(kpiLocationEventsTable.recordedAt))
-      .limit(60);
+      .limit(500);
     const latestAgentLoc = locRows[0] ?? null;
     const todayTrack = locRows
       .filter((l) => tashkentDate(l.recordedAt) === today)
@@ -1157,6 +1158,16 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       res.status(400).json({ error: "Bordim uchun jonli GPS kerak. Telefon GPS ni yoqing." });
       return;
     }
+    const assigns = await db
+      .select()
+      .from(kpiCustomerAssignmentsTable)
+      .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
+    const allowed = new Set(assigns.map((a) => a.customerId));
+    const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
+    if (!cust || (!allowed.has(customerId) && cust.createdByAgentId !== agent.id)) {
+      res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
+      return;
+    }
     const lat = String(latN.toFixed(6));
     const lng = String(lngN.toFixed(6));
     const [row] = await db
@@ -1179,8 +1190,18 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
       source: "visit",
     });
-    // Always refresh store pin from on-site visit (turns approximate → exact)
-    await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
+    // Refresh store pin only when empty or agent is near existing pin (avoid distant overwrite)
+    const existingLat = cust.lat != null && cust.lat !== "" ? Number(cust.lat) : NaN;
+    const existingLng = cust.lng != null && cust.lng !== "" ? Number(cust.lng) : NaN;
+    const hasStorePin =
+      Number.isFinite(existingLat) &&
+      Number.isFinite(existingLng) &&
+      Math.abs(existingLat) > 1 &&
+      Math.abs(existingLng) > 1;
+    const nearStore = hasStorePin ? distanceMeters(latN, lngN, existingLat, existingLng) <= 800 : true;
+    if (!hasStorePin || nearStore) {
+      await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
+    }
     res.status(201).json(row);
   } catch (error) {
     next(error);
@@ -1233,7 +1254,7 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
     const agent = getKpiAgent(res);
     const lat = Number(req.body?.lat);
     const lng = Number(req.body?.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 1 || Math.abs(lng) < 1) {
       res.status(400).json({ error: "lat/lng kerak." });
       return;
     }
@@ -1253,8 +1274,8 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
   }
 });
 
-/** Road geometry proxy (agent + staff). Avoids client SSL/CORS failures to public OSRM. */
-router.get("/kpi/route", requireKpiAgent(), async (req, res, next) => {
+/** Road geometry proxy (agent + staff/admin). Avoids client SSL/CORS failures to public OSRM. */
+router.get("/kpi/route", requireKpiAgentOrAdmin(), async (req, res, next) => {
   try {
     const fromLat = Number(req.query.fromLat);
     const fromLng = Number(req.query.fromLng);
@@ -1343,32 +1364,24 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       }
     }
 
-    const locEvents = await db
-      .select()
-      .from(kpiLocationEventsTable)
-      .orderBy(desc(kpiLocationEventsTable.recordedAt))
-      .limit(400);
     const visits = await db
       .select()
       .from(kpiVisitsTable)
       .orderBy(desc(kpiVisitsTable.createdAt))
-      .limit(300);
+      .limit(800);
 
-    const todayVisits = visits.filter((v) => tashkentDate(v.createdAt) === dateFilter);
-    const visitedByCustomer = new Map<string, { at: string; lat: string | null; lng: string | null; notes: string }>();
-    for (const v of todayVisits) {
-      if (!visitedByCustomer.has(v.customerId)) {
-        visitedByCustomer.set(v.customerId, {
-          at: v.createdAt.toISOString(),
-          lat: v.lat,
-          lng: v.lng,
-          notes: v.notes,
-        });
-      }
-    }
+    const todayVisits = visits.filter(
+      (v) => tashkentDate(v.createdAt) === dateFilter && v.status === "done",
+    );
 
-    const lastLocByAgent = new Map<string, typeof locEvents[number]>();
-    for (const ev of locEvents) {
+    // Wide recent window so each agent still has a last ping (was capped at 400 globally)
+    const recentLocEvents = await db
+      .select()
+      .from(kpiLocationEventsTable)
+      .orderBy(desc(kpiLocationEventsTable.recordedAt))
+      .limit(2500);
+    const lastLocByAgent = new Map<string, (typeof recentLocEvents)[number]>();
+    for (const ev of recentLocEvents) {
       if (!lastLocByAgent.has(ev.agentId)) lastLocByAgent.set(ev.agentId, ev);
     }
 
@@ -1376,7 +1389,9 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
 
     const agentPins = agents.map((a) => {
       const last = lastLocByAgent.get(a.id);
-      const myVisits = todayVisits.filter((v) => v.agentId === a.id);
+      const myVisitCustomers = new Set(
+        todayVisits.filter((v) => v.agentId === a.id).map((v) => v.customerId),
+      );
       const myCustomers = customers.filter(
         (c) => (assignByCustomer.get(c.id) || c.createdByAgentId) === a.id,
       );
@@ -1388,11 +1403,11 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         phone: a.phone,
         lat: last?.lat ? Number(last.lat) : null,
         lng: last?.lng ? Number(last.lng) : null,
-        accuracyM: last?.accuracyM ? Number(last.accuracyM) : null,
+        accuracyM: last?.accuracyM != null ? Number(last.accuracyM) : null,
         lastSeenAt: last?.recordedAt ? last.recordedAt.toISOString() : null,
         customersCount: myCustomers.length,
         debtorsCount: myDebtors.length,
-        visitedToday: myVisits.length,
+        visitedToday: myVisitCustomers.size,
       };
     });
 
@@ -1402,6 +1417,20 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       agentPins.find((a) => a.customersCount > 0)?.id ||
       agentPins[0]?.id ||
       "";
+
+    // Visited flags for selected agent's map only (not other agents' visits)
+    const visitedByCustomer = new Map<string, { at: string; lat: string | null; lng: string | null; notes: string }>();
+    for (const v of todayVisits) {
+      if (activeAgentId && v.agentId !== activeAgentId) continue;
+      if (!visitedByCustomer.has(v.customerId)) {
+        visitedByCustomer.set(v.customerId, {
+          at: v.createdAt.toISOString(),
+          lat: v.lat,
+          lng: v.lng,
+          notes: v.notes,
+        });
+      }
+    }
 
     const selectedAgentLoc = activeAgentId ? lastLocByAgent.get(activeAgentId) : null;
     const rawPoints = customers
@@ -1414,7 +1443,8 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
         const debt = debtByCustomer.get(c.id) || "0.00";
-        const geo = inferCoordinates(c.id, c.name, c.address, c.lat || visit?.lat, c.lng || visit?.lng);
+        // Prefer saved store coords; do not promote visit-only GPS to exactGps
+        const geo = inferCoordinates(c.id, c.name, c.address, c.lat, c.lng);
         return {
           id: c.id,
           name: c.name,
@@ -1438,12 +1468,18 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       selectedAgentLoc ? Number(selectedAgentLoc.lng) : null,
     );
 
-    const agentTrack = activeAgentId
-      ? locEvents
-          .filter((e) => e.agentId === activeAgentId && tashkentDate(e.recordedAt) === dateFilter)
-          .reverse()
-          .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }))
+    const agentTrackRows = activeAgentId
+      ? await db
+          .select()
+          .from(kpiLocationEventsTable)
+          .where(eq(kpiLocationEventsTable.agentId, activeAgentId))
+          .orderBy(desc(kpiLocationEventsTable.recordedAt))
+          .limit(500)
       : [];
+    const agentTrack = agentTrackRows
+      .filter((e) => tashkentDate(e.recordedAt) === dateFilter)
+      .reverse()
+      .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }));
 
     const routeLog = todayVisits
       .filter((v) => !activeAgentId || v.agentId === activeAgentId)

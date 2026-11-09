@@ -75,10 +75,19 @@ function fmtTime(iso: string | null) {
   }
 }
 
+/** Agent counts as "live" only if last ping is fresh (5 min). */
+function isAgentLive(lastSeenAt: string | null | undefined, lat: number | null | undefined, lng: number | null | undefined) {
+  if (lat == null || lng == null || !lastSeenAt) return false;
+  const age = Date.now() - new Date(lastSeenAt).getTime();
+  return Number.isFinite(age) && age >= 0 && age <= 5 * 60_000;
+}
+
 export function GpsPage() {
   const cache = useQueryClient();
   const [agentId, setAgentId] = useState('');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  const [focusStopId, setFocusStopId] = useState<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [sub, setSub] = useState<'points' | 'agents' | 'route'>('points');
   const [coordEdit, setCoordEdit] = useState<{ id: string; lat: string; lng: string; address: string } | null>(null);
@@ -113,9 +122,18 @@ export function GpsPage() {
 
   const d = q.data;
   const currentAgentId = agentId || d?.selectedAgentId || '';
-  const liveAgents = (d?.agents || []).filter((a) => a.lat != null && a.lng != null);
+  const liveAgents = (d?.agents || []).filter((a) => isAgentLive(a.lastSeenAt, a.lat, a.lng));
   const visitedCount = (d?.points || []).filter((p) => p.visitedToday).length;
   const selectedAgent = (d?.agents || []).find((a) => a.id === currentAgentId);
+  const selectedLive = selectedAgent
+    ? isAgentLive(selectedAgent.lastSeenAt, selectedAgent.lat, selectedAgent.lng)
+    : false;
+
+  const focusStop = (stopId: string) => {
+    setSelectedStopId(stopId);
+    setFocusStopId(stopId);
+    setFocusNonce((n) => n + 1);
+  };
 
   return (
     <div className="kpi-page" data-testid="page-gps">
@@ -133,7 +151,7 @@ export function GpsPage() {
       {/* Clickable Agent Selector Pills (one agent at a time) */}
       <div className="gps-agent-strip">
         {(d?.agents || []).map((a) => {
-          const isOnline = a.lat != null && a.lng != null;
+          const isOnline = isAgentLive(a.lastSeenAt, a.lat, a.lng);
           const isActive = currentAgentId === a.id;
           return (
             <button
@@ -148,6 +166,7 @@ export function GpsPage() {
               </span>
               <small>
                 ✓ {a.visitedToday} / {a.customersCount} nuqta
+                {a.lastSeenAt && !isOnline ? ` · oxirgi ${fmtTime(a.lastSeenAt)}` : ''}
               </small>
             </button>
           );
@@ -192,17 +211,20 @@ export function GpsPage() {
       {/* Live navigator-style map for selected agent (admin sees same trail) */}
       <RouteMap
         stops={(d?.points || []) as RouteStop[]}
-        agents={selectedAgent ? [selectedAgent] : []}
+        agents={selectedAgent && selectedLive ? [selectedAgent] : []}
         agentName={selectedAgent?.fullName}
+        viewer="admin"
         agentPos={
-          selectedAgent?.lat != null && selectedAgent?.lng != null
+          selectedLive && selectedAgent?.lat != null && selectedAgent?.lng != null
             ? { lat: selectedAgent.lat, lng: selectedAgent.lng }
             : null
         }
-        follow={Boolean(selectedAgent?.lat != null)}
+        follow={selectedLive}
         track={d?.agentTrack || []}
         selectedStopId={selectedStopId}
-        onSelectStop={(st) => setSelectedStopId(st.id)}
+        focusStopId={focusStopId}
+        focusNonce={focusNonce}
+        onSelectStop={(st) => focusStop(st.id)}
         onSelectAgent={(id) => setAgentId(id)}
         fullscreen={mapFullscreen}
         onFullscreenChange={setMapFullscreen}
@@ -336,8 +358,10 @@ export function GpsPage() {
                 <tr key={a.id}>
                   <td data-label="Agent"><b>{a.fullName}</b></td>
                   <td data-label="Oxirgi GPS">
-                    {a.lat != null && a.lng != null ? (
+                    {isAgentLive(a.lastSeenAt, a.lat, a.lng) ? (
                       <span className="kpi-chip ok">Faol · {fmtTime(a.lastSeenAt)}</span>
+                    ) : a.lat != null && a.lng != null ? (
+                      <span className="kpi-chip">Eski · {fmtTime(a.lastSeenAt)}</span>
                     ) : (
                       <span className="kpi-chip">Telefon GPS kutilmoqda</span>
                     )}

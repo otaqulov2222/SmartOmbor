@@ -180,8 +180,11 @@ export function RouteMap({
   agentPos,
   agentName,
   selectedStopId,
+  focusStopId = null,
+  focusNonce = 0,
   follow = true,
   fullscreen = false,
+  viewer = 'agent',
   onFullscreenChange,
   onSelectStop,
   onSelectAgent,
@@ -192,8 +195,12 @@ export function RouteMap({
   agentPos?: LatLng | null;
   agentName?: string;
   selectedStopId?: string | null;
+  /** When focusNonce bumps with focusStopId, pan map to that stop */
+  focusStopId?: string | null;
+  focusNonce?: number;
   follow?: boolean;
   fullscreen?: boolean;
+  viewer?: 'agent' | 'admin';
   onFullscreenChange?: (open: boolean) => void;
   onSelectStop?: (stop: RouteStop) => void;
   onSelectAgent?: (agentId: string) => void;
@@ -207,10 +214,13 @@ export function RouteMap({
   const trackLayerRef = useRef<any>(null);
   const agentMarkerRef = useRef<any>(null);
   const routeOriginRef = useRef<{ lat: number; lng: number; destId: string } | null>(null);
+  const routeDrawGenRef = useRef(0);
   const followRef = useRef(follow);
   const userPanRef = useRef(false);
+  const livePosRef = useRef<LatLng | null>(null);
   const onSelectStopRef = useRef(onSelectStop);
   const onSelectAgentRef = useRef(onSelectAgent);
+  const lastFocusNonceRef = useRef(0);
 
   const [mapReady, setMapReady] = useState(false);
   const [active, setActive] = useState(false);
@@ -260,6 +270,24 @@ export function RouteMap({
   }, [agentPos?.lat, agentPos?.lng, agentPos?.heading, primaryAgent?.lat, primaryAgent?.lng, primaryAgent?.heading]);
 
   const hasLiveGps = Boolean(livePos);
+  livePosRef.current = livePos;
+
+  useEffect(() => {
+    if (!mapReady || !focusStopId || !focusNonce) return;
+    if (lastFocusNonceRef.current === focusNonce) return;
+    const stop = stops.find((s) => s.id === focusStopId);
+    if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return;
+    lastFocusNonceRef.current = focusNonce;
+    const map = mapRef.current;
+    if (!map) return;
+    userPanRef.current = true;
+    setFollowOn(false);
+    const pts: Array<[number, number]> = [[stop.lat, stop.lng]];
+    const live = livePosRef.current;
+    if (live) pts.push([live.lat, live.lng]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
+    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
+  }, [mapReady, focusStopId, focusNonce, stops]);
 
   useEffect(() => {
     const onOrient = (e: DeviceOrientationEvent) => {
@@ -449,6 +477,7 @@ export function RouteMap({
   useEffect(() => {
     if (!mapReady) return;
     let alive = true;
+    const runId = ++routeDrawGenRef.current;
     const L = LRef.current;
     const layer = routeLayerRef.current;
     if (!L || !layer) return;
@@ -457,6 +486,7 @@ export function RouteMap({
       const run = async () => {
         const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
         if (!valid.length) {
+          if (runId !== routeDrawGenRef.current) return;
           layer.clearLayers();
           setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
           routeOriginRef.current = null;
@@ -523,7 +553,7 @@ export function RouteMap({
         if (livePos && next) {
           pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
         }
-        for (let i = 0; i < pending.length - 1 && i < 24; i += 1) {
+        for (let i = 0; i < pending.length - 1; i += 1) {
           pairs.push({
             a: [pending[i].lat, pending[i].lng],
             b: [pending[i + 1].lat, pending[i + 1].lng],
@@ -532,7 +562,7 @@ export function RouteMap({
         }
 
         const roads = await Promise.all(pairs.map((p) => fetchRoadRoute([p.a, p.b])));
-        if (!alive) return;
+        if (!alive || runId !== routeDrawGenRef.current) return;
 
         layer.clearLayers();
         let activeOk = false;
@@ -756,7 +786,11 @@ export function RouteMap({
       <div ref={wrapRef} className={`rm-canvas-wrap ${active || isFullscreen ? 'is-active' : ''} ${followOn ? 'is-follow' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
         {!hasLiveGps ? (
-          <div className="rm-gps-banner">GPS yo‘q — telefon GPS ni yoqing.</div>
+          <div className="rm-gps-banner">
+            {viewer === 'admin'
+              ? 'Agent GPS yo‘q — agent telefonda GPS yoqilganda jonli ko‘rinadi.'
+              : 'GPS yo‘q — telefon GPS ni yoqing.'}
+          </div>
         ) : null}
         {approxNext ? (
           <div className="rm-gps-banner is-warn">Taxminiy joy — «Bordim» yoki admin orqali aniq GPS saqlang.</div>

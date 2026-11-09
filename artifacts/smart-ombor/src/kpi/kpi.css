@@ -743,5 +743,5 @@
   .ag-stats { gap: .4rem; }
   .ag-stat strong { font-size: .9rem; }
   .rm-chain-actions { grid-template-columns: 1fr 1fr; }
-  .rm-btn-label { max-width: 7.5ch; overflow: hidden; text-overflow: ellipsis; }
+  .rm-btn-label { max-width: none; overflow: visible; white-space: normal; line-height: 1.15; }
 }

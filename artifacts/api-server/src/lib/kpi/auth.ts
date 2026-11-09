@@ -208,6 +208,67 @@ export function requireKpiAgent() {
   };
 }
 
+/** Agent session OR KPI admin — used by shared proxies like /kpi/route. */
+export function requireKpiAgentOrAdmin() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    void (async () => {
+      try {
+        const token = bearer(req);
+        const agent = await resolveAgentToken(token);
+        if (agent) {
+          res.locals.kpiAgent = agent;
+          next();
+          return;
+        }
+        const { localActor } = await import("../../routes/local-auth");
+        const local = localActor(req);
+        if (local && ADMIN_SET.has(local.role)) {
+          res.locals.actor = {
+            id: local.id,
+            name: local.name,
+            email: `${local.login}@local`,
+            role: local.role as AppRole,
+          };
+          next();
+          return;
+        }
+        if (local) {
+          const loginKey = local.login.trim().toLowerCase();
+          const nameKey = local.name.trim().toLowerCase();
+          const all = await db.select().from(kpiAgentsTable);
+          const match =
+            all.find((a) => a.login.toLowerCase() === loginKey) ||
+            all.find((a) => a.fullName.toLowerCase() === nameKey);
+          if (match) {
+            res.locals.kpiAgent = {
+              id: match.id,
+              fullName: match.fullName,
+              login: match.login,
+              status: match.status,
+              territoryId: match.territoryId,
+            };
+            next();
+            return;
+          }
+        }
+        try {
+          const actor = await ensureAppUser(req);
+          if (ADMIN_SET.has(actor.role)) {
+            res.locals.actor = actor;
+            next();
+            return;
+          }
+        } catch {
+          /* not a Clerk session */
+        }
+        res.status(401).json({ error: "Marshrut uchun agent yoki admin sessiyasi kerak." });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  };
+}
+
 export function getKpiAgent(res: Response): KpiAgentActor {
   const agent = res.locals.kpiAgent as KpiAgentActor | undefined;
   if (!agent) throw new Error("KPI agent missing");
