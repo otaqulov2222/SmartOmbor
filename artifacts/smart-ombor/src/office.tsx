@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import {
-  ChevronLeft, Clock, LogIn, LogOut, MapPin, Moon, QrCode, RefreshCw, ScanFace, Sun, SwitchCamera, Wallet, X,
+  ChevronLeft, Clock, LogIn, LogOut, Moon, QrCode, ScanFace, Sun, SwitchCamera, Wallet, X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
@@ -120,8 +120,6 @@ export function OfficePage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
   const [zoom, setZoom] = useState(16);
-  const [mapFocus, setMapFocus] = useState<'office' | 'user' | 'both'>('both');
-  const [gpsModalOpen, setGpsModalOpen] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
@@ -147,7 +145,7 @@ export function OfficePage() {
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!navigator.geolocation) { setGpsState('error'); setGpsModalOpen(true); return; }
+    if (!navigator.geolocation) { setGpsState('error'); return; }
     const apply = (pos: GeolocationPosition) => {
       const accuracy = Number(pos.coords.accuracy);
       if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
@@ -157,14 +155,10 @@ export function OfficePage() {
       }
       setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
       setGpsState('ready');
-      setGpsModalOpen(false);
-      setMapFocus('both');
     };
     const fail = (err: GeolocationPositionError) => {
-      if (err.code === err.PERMISSION_DENIED) {
-        setGpsState('denied');
-        setGpsModalOpen(true);
-      } else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+      if (err.code === err.PERMISSION_DENIED) setGpsState('denied');
+      else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
     };
     const id = navigator.geolocation.watchPosition(apply, fail, {
       enableHighAccuracy: true, maximumAge: 2000, timeout: 15000,
@@ -383,10 +377,9 @@ export function OfficePage() {
     await loadTasks();
   };
 
-  const pingGps = (focus: 'office' | 'user' | 'both' = 'both') => {
-    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); setGpsModalOpen(true); return; }
+  const pingGps = () => {
+    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); return; }
     setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
-    setMapFocus(focus);
     navigator.geolocation.getCurrentPosition(
       pos => {
         const accuracy = Number(pos.coords.accuracy);
@@ -397,13 +390,11 @@ export function OfficePage() {
         }
         setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
         setGpsState('ready');
-        setGpsModalOpen(false);
         setNote('');
       },
       err => {
         if (err.code === err.PERMISSION_DENIED) {
           setGpsState('denied');
-          setGpsModalOpen(true);
           setNote(t('office.gpsNeed'));
         } else {
           setGpsState(prev => (prev === 'ready' ? prev : 'error'));
@@ -413,14 +404,6 @@ export function OfficePage() {
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
   };
-
-  const statusBanner = !me
-    ? null
-    : me.today?.inAt && !me.today.outAt
-      ? { tone: 'wait' as const, text: t('office.bannerOut', { name: me.name }) }
-      : me.today?.outAt
-        ? { tone: 'done' as const, text: t('office.bannerDone', { name: me.name }) }
-        : { tone: 'in' as const, text: t('office.bannerIn', { name: me.name }) };
 
   const ctaNeedCam = !camReady;
   const ownTasks = tasks;
@@ -457,15 +440,6 @@ export function OfficePage() {
       </div>
     </section>
     <div className="office-body">
-      {statusBanner && <div className={`office-status-banner is-${statusBanner.tone}`}>
-        <div>
-          <small>{t('office.attend')}</small>
-          <b>{statusBanner.text}</b>
-        </div>
-        <button type="button" disabled={busy} onClick={() => void goPunch()}>
-          <ScanFace size={16}/> {t('office.attend')}
-        </button>
-      </div>}
       <div className="office-clocks">
         <div className="office-clock">
           <div className="office-clock-top"><span className="office-ico"><Clock size={15}/></span>{t('office.now')}</div>
@@ -501,40 +475,13 @@ export function OfficePage() {
         radiusM={radiusM} radiusLabel={t('office.radius')}
         here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng } : null} status={geoStatus}
         gpsDenied={gpsState === 'denied'} meters={meters}
-        focus={mapFocus}
         onZoom={setZoom}
-        onLocate={() => pingGps('office')}
-        onNudge={() => pingGps('user')}
-        onEnableGps={() => { setGpsModalOpen(true); pingGps('both'); }}
+        onLocate={pingGps}
+        onNudge={pingGps}
+        onEnableGps={pingGps}
       />}
-      <div className="office-live-strip">
-        <span className={`office-live-dot ${inZone ? 'is-on' : gps ? 'is-away' : ''}`}/>
-        <div>
-          <b>{gps ? t('office.liveGps') : t('office.gpsWait')}</b>
-          <small>{gps ? `${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)} · ±${Math.round(gps.accuracy)} m` : geoStatus}</small>
-        </div>
-        <button type="button" onClick={() => pingGps('both')}><RefreshCw size={14}/> {t('common.refresh')}</button>
-      </div>
-      {!inZone && <p className="office-warn">{geoStatus}</p>}
       {ok && <p className="office-ok">{ok}</p>}
-      {note && !camDenied && note !== geoStatus && <p className="office-warn">{note}</p>}
-      <article className="office-face-card">
-        <div className="office-face-top">
-          <span className="office-face-avatar"><ScanFace size={28}/></span>
-          <div>
-            <b>Face ID {me?.face ? <em className="is-ok">{t('office.faceLinked')}</em> : <em className="is-off">{t('office.faceEnroll')}</em>}</b>
-            <p>{t('office.faceCardBody')}</p>
-          </div>
-        </div>
-        <div className="office-face-actions">
-          <button type="button" className="is-primary" disabled={busy} onClick={() => void openStage(nextKind, 'face')}>
-            <RefreshCw size={14}/> {me?.face ? t('office.faceReconnect') : t('office.enrollNow')}
-          </button>
-          <button type="button" className={method === 'qr' ? 'is-on' : ''} onClick={() => setMethod('qr')}>
-            <QrCode size={14}/> QR
-          </button>
-        </div>
-      </article>
+      {note && !camDenied && <p className="office-warn">{note}</p>}
       <h2>{t('office.method')}</h2>
       <p className="lead">{t('office.methodBody')}</p>
       <div className="office-methods">
@@ -630,16 +577,6 @@ export function OfficePage() {
       <button type="button" className="office-toast-x" onClick={() => setCamDenied(false)}><X size={14}/></button>
       <b>{t('office.deniedTitle')}</b>
       <p>{t('office.deniedBody')}</p>
-    </div>}
-    {gpsModalOpen && <div className="office-gps-modal" role="dialog" aria-modal="true">
-      <div className="office-gps-card">
-        <button type="button" className="office-gps-x" onClick={() => setGpsModalOpen(false)} aria-label={t('common.close')}><X size={16}/></button>
-        <small>1-{t('office.step')}</small>
-        <span className="office-gps-ico"><MapPin size={26}/></span>
-        <b>{t('office.gpsGateTitle')}</b>
-        <p>{t('office.gpsGateBody')}</p>
-        <button type="button" className="office-gps-go" onClick={() => pingGps('both')}>{t('office.gpsEnable')}</button>
-      </div>
     </div>}
   </div>
   </div>;

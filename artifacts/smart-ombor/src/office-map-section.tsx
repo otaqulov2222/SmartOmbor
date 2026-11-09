@@ -1,4 +1,4 @@
-import { Crosshair, Hand, MapPin, Minus, Navigation, Plus, Radar } from 'lucide-react';
+import { Crosshair, Hand, MapPin, Minus, Plus, Radar } from 'lucide-react';
 import { useI18n } from '@/i18n';
 
 function lon2tile(lon: number, zoom: number) {
@@ -25,23 +25,18 @@ function zoomToFit(lat1: number, lng1: number, lat2: number, lng2: number) {
 
 export function OfficeMap({
   officeLat, officeLng, zoom, name, radiusM, radiusLabel, here, user, status, gpsDenied, meters,
-  onZoom, onLocate, onNudge, onEnableGps, focus,
+  onZoom, onLocate, onNudge, onEnableGps,
 }: {
   officeLat: number; officeLng: number; zoom: number; name: string; radiusM: number; radiusLabel: string;
   here: boolean; user: { lat: number; lng: number } | null; status: string; gpsDenied: boolean; meters: number | null;
   onZoom: (next: number) => void; onLocate: () => void; onNudge: () => void; onEnableGps: () => void;
-  focus: 'office' | 'user' | 'both';
 }) {
   const { t } = useI18n();
   const far = Boolean(user && meters != null && meters > radiusM * 1.5);
-  const autoZ = user && (focus === 'both' || far)
-    ? zoomToFit(officeLat, officeLng, user.lat, user.lng)
-    : Math.min(18, Math.max(14, zoom));
-  const z = focus === 'both' || far ? autoZ : Math.min(18, Math.max(14, zoom));
-  const centerLat = user && (focus === 'both' || far) ? (officeLat + user.lat) / 2
-    : focus === 'user' && user ? user.lat : officeLat;
-  const centerLng = user && (focus === 'both' || far) ? (officeLng + user.lng) / 2
-    : focus === 'user' && user ? user.lng : officeLng;
+  const autoZ = user && far ? zoomToFit(officeLat, officeLng, user.lat, user.lng) : Math.min(18, Math.max(14, zoom));
+  const z = far ? autoZ : Math.min(18, Math.max(14, zoom));
+  const centerLat = user && far ? (officeLat + user.lat) / 2 : officeLat;
+  const centerLng = user && far ? (officeLng + user.lng) / 2 : officeLng;
 
   const xf = lon2tile(centerLng, z);
   const yf = lat2tile(centerLat, z);
@@ -63,15 +58,11 @@ export function OfficeMap({
   const toPx = (lat: number, lng: number) => {
     const tx = lon2tile(lng, z);
     const ty = lat2tile(lat, z);
-    return {
-      x: (tx - xf) * 256,
-      y: (ty - yf) * 256,
-    };
+    return { x: (tx - xf) * 256, y: (ty - yf) * 256 };
   };
   const officePx = toPx(officeLat, officeLng);
   const userPx = user ? toPx(user.lat, user.lng) : null;
 
-  // Keep markers visible: clamp to map frame edges with padding.
   const clampMarker = (x: number, y: number) => {
     const maxX = 150; const maxY = 78;
     const ax = Math.abs(x); const ay = Math.abs(y);
@@ -105,7 +96,7 @@ export function OfficeMap({
       style={{ left: `calc(50% + ${userPos.x}px)`, top: `calc(46% + ${userPos.y}px)` }}
       title={t('office.you')}
     >
-      <em/><b>{t('office.you')}{meters != null ? ` · ${Math.round(meters)} m` : ''}</b>
+      <em/><b>{t('office.you')}</b>
     </div>}
     <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>
     {gpsDenied && <div className="office-map-gate">
@@ -121,7 +112,6 @@ export function OfficeMap({
       <button type="button" onClick={() => onZoom(z + 1)} aria-label="+"><Plus size={16}/></button>
       <button type="button" onClick={() => onZoom(z - 1)} aria-label="-"><Minus size={16}/></button>
       <button type="button" className="is-round" onClick={onLocate} aria-label={t('office.map')}><Crosshair size={16}/></button>
-      {user && <button type="button" className="is-round is-me" onClick={onNudge} aria-label={t('office.you')}><Navigation size={16}/></button>}
     </div>
     <div className="office-map-meta">
       <b><MapPin size={12}/> {name}</b>
