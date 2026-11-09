@@ -90,15 +90,21 @@ export function GpsPage() {
   });
 
   const saveCoords = useMutation({
-    mutationFn: (payload: { id: string; lat: string; lng: string; address: string }) =>
-      kpiFetch(`/kpi/customers/${payload.id}`, {
+    mutationFn: (payload: { id: string; lat: string; lng: string; address: string }) => {
+      const lat = Number(payload.lat);
+      const lng = Number(payload.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 1 || Math.abs(lng) < 1) {
+        return Promise.reject(new Error('Aniq lat/lng kiriting (taxminiy pinni saqlamang).'));
+      }
+      return kpiFetch(`/kpi/customers/${payload.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          lat: payload.lat ? Number(payload.lat) : null,
-          lng: payload.lng ? Number(payload.lng) : null,
+          lat: Number(lat.toFixed(6)),
+          lng: Number(lng.toFixed(6)),
           address: payload.address,
         }),
-      }),
+      });
+    },
     onSuccess: () => {
       setCoordEdit(null);
       void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
@@ -290,7 +296,13 @@ export function GpsPage() {
                             <button
                               type="button"
                               className="btn"
-                              onClick={() => setCoordEdit({ id: p.id, lat: String(p.lat), lng: String(p.lng), address: p.address || '' })}
+                              onClick={() => setCoordEdit({
+                                id: p.id,
+                                // Never prefill inferred/fake pins as if they were exact
+                                lat: p.exactGps ? String(p.lat) : '',
+                                lng: p.exactGps ? String(p.lng) : '',
+                                address: p.address || '',
+                              })}
                             >
                               Tahrir
                             </button>

@@ -155,8 +155,9 @@ export function OfficePage() {
 
   applyGps.current = (pos: GeolocationPosition) => {
     if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
-    let accuracy = Number(pos.coords.accuracy);
-    if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
+    const accuracy = Number(pos.coords.accuracy);
+    // Do not invent accuracy — fake 80m bypasses anti-spoof and breaks davomat checks
+    if (!Number.isFinite(accuracy) || accuracy <= 0) return;
     const heading = Number(pos.coords.heading);
     gpsFails.current = 0;
     setGps({

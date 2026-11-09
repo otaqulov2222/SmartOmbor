@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CheckCircle2, Clock, Compass, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
+  CheckCircle2, Clock, Compass, Crosshair, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
   Sparkles, TrendingUp, Users, Wallet,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -199,22 +199,70 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     return () => navigator.geolocation.clearWatch(watchId);
   }, [mode, cache]);
 
+  const readFreshGps = () =>
+    new Promise<{ lat: number; lng: number; accuracy: number; heading: number | null }>((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Telefon GPS qo‘llab-quvvatlamaydi.'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const accuracy = Number(pos.coords.accuracy);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            reject(new Error('GPS koordinata olinmadi.'));
+            return;
+          }
+          if (!Number.isFinite(accuracy) || accuracy <= 0) {
+            reject(new Error('GPS aniqlik (accuracy) yo‘q. Biroz kutib qayta urinib ko‘ring.'));
+            return;
+          }
+          const heading = pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null;
+          const next = { lat, lng, accuracy, heading };
+          setCoords(next);
+          resolve(next);
+        },
+        () => reject(new Error('GPS ruxsati yo‘q yoki o‘chiq. Sozlamadan GPS ni yoqing.')),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      );
+    });
+
   const markVisit = useMutation({
-    mutationFn: (customerId: string) =>
-      kpiFetch(
+    mutationFn: async (customerId: string) => {
+      const gps = coords?.lat != null && coords?.lng != null && coords.accuracy > 0
+        ? coords
+        : await readFreshGps();
+      return kpiFetch(
         '/kpi/agent/visit',
         {
           method: 'POST',
           body: JSON.stringify({
             customerId,
-            lat: coords?.lat ?? null,
-            lng: coords?.lng ?? null,
-            accuracy: coords?.accuracy ?? null,
+            lat: gps.lat,
+            lng: gps.lng,
+            accuracy: gps.accuracy,
             notes: 'Borildi / gaplashildi',
           }),
         },
         mode,
-      ),
+      );
+    },
+    onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }),
+  });
+
+  const savePin = useMutation({
+    mutationFn: async (customerId: string) => {
+      const gps = await readFreshGps();
+      return kpiFetch(
+        `/kpi/agent/customers/${customerId}/pin`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy }),
+        },
+        mode,
+      );
+    },
     onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-cabinet'] }),
   });
 
@@ -241,14 +289,28 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [selectedStopId, tab]);
 
-  const confirmVisit = (c: CustomerCard) => {
-    if (c.distanceM != null && c.distanceM > 800 && coords) {
-      const ok = window.confirm(
-        `${c.name} sizdan ~${fmtDist(c.distanceM)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
-      );
-      if (!ok) return;
+  const confirmVisit = async (c: CustomerCard) => {
+    try {
+      if (!(coords?.lat != null && coords.accuracy > 0)) await readFreshGps();
+      if (c.distanceM != null && c.distanceM > 800) {
+        const ok = window.confirm(
+          `${c.name} sizdan ~${fmtDist(c.distanceM)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
+        );
+        if (!ok) return;
+      }
+      markVisit.mutate(c.id);
+    } catch (err) {
+      window.alert((err as Error).message || 'GPS olinmadi');
     }
-    markVisit.mutate(c.id);
+  };
+
+  const confirmPin = async (c: CustomerCard) => {
+    try {
+      await savePin.mutateAsync(c.id);
+      window.alert(`${c.name} uchun aniq GPS saqlandi.`);
+    } catch (err) {
+      window.alert((err as Error).message || 'GPS saqlanmadi');
+    }
   };
 
   return (
@@ -430,6 +492,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                     >
                       <MapPin size={15} /> Xaritada
                     </button>
+                    {!c.exactGps ? (
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={savePin.isPending}
+                        onClick={() => void confirmPin(c)}
+                      >
+                        <Crosshair size={15} /> GPS saqlash
+                      </button>
+                    ) : null}
                     {c.visitedToday ? (
                       <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi</span>
                     ) : (
@@ -437,7 +509,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                         type="button"
                         className="btn btn-primary"
                         disabled={markVisit.isPending}
-                        onClick={() => confirmVisit(c)}
+                        onClick={() => void confirmVisit(c)}
                       >
                         <CheckCircle2 size={15} /> Bordim
                       </button>

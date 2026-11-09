@@ -1014,7 +1014,7 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .limit(100);
     const todayVisitMap = new Map<string, { at: string; lat: string | null; lng: string | null }>();
     for (const v of visits) {
-      if (v.createdAt.toISOString().slice(0, 10) === today && v.status === "done" && !todayVisitMap.has(v.customerId)) {
+      if (tashkentDate(v.createdAt) === today && v.status === "done" && !todayVisitMap.has(v.customerId)) {
         todayVisitMap.set(v.customerId, { at: v.createdAt.toISOString(), lat: v.lat, lng: v.lng });
       }
     }
@@ -1026,7 +1026,7 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .limit(60);
     const latestAgentLoc = locRows[0] ?? null;
     const todayTrack = locRows
-      .filter((l) => l.recordedAt.toISOString().slice(0, 10) === today)
+      .filter((l) => tashkentDate(l.recordedAt) === today)
       .reverse()
       .map((l) => ({ lat: Number(l.lat), lng: Number(l.lng), at: l.recordedAt.toISOString() }));
 
@@ -1089,7 +1089,8 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
     const rawCustomerCards = myCustomers.map((c) => {
       const debt = debtByCustomer.get(c.id) || "0.00";
       const v = todayVisitMap.get(c.id);
-      const geo = inferCoordinates(c.id, c.name, c.address, v?.lat || c.lat, v?.lng || c.lng);
+      // Prefer saved store GPS over one-off visit coords for the map pin
+      const geo = inferCoordinates(c.id, c.name, c.address, c.lat || v?.lat, c.lng || v?.lng);
       return {
         id: c.id,
         name: c.name,
@@ -1150,8 +1151,14 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       res.status(400).json({ error: "customerId kerak." });
       return;
     }
-    const lat = req.body?.lat != null && Number.isFinite(Number(req.body.lat)) ? String(Number(req.body.lat).toFixed(6)) : null;
-    const lng = req.body?.lng != null && Number.isFinite(Number(req.body.lng)) ? String(Number(req.body.lng).toFixed(6)) : null;
+    const latN = Number(req.body?.lat);
+    const lngN = Number(req.body?.lng);
+    if (!Number.isFinite(latN) || !Number.isFinite(lngN) || Math.abs(latN) < 1 || Math.abs(lngN) < 1) {
+      res.status(400).json({ error: "Bordim uchun jonli GPS kerak. Telefon GPS ni yoqing." });
+      return;
+    }
+    const lat = String(latN.toFixed(6));
+    const lng = String(lngN.toFixed(6));
     const [row] = await db
       .insert(kpiVisitsTable)
       .values({
@@ -1165,21 +1172,57 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
         notes,
       })
       .returning();
-    if (lat && lng) {
-      await db.insert(kpiLocationEventsTable).values({
-        agentId: agent.id,
-        lat,
-        lng,
-        accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
-        source: "visit",
-      });
-      // If customer has no coordinates yet, save visit spot as store location
-      const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
-      if (cust && (!cust.lat || !cust.lng)) {
-        await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
-      }
-    }
+    await db.insert(kpiLocationEventsTable).values({
+      agentId: agent.id,
+      lat,
+      lng,
+      accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
+      source: "visit",
+    });
+    // Always refresh store pin from on-site visit (turns approximate → exact)
+    await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
     res.status(201).json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Save exact store GPS without marking the visit done. */
+router.post("/kpi/agent/customers/:id/pin", requireKpiAgent(), async (req, res, next) => {
+  try {
+    const agent = getKpiAgent(res);
+    const customerId = String(req.params.id);
+    const latN = Number(req.body?.lat);
+    const lngN = Number(req.body?.lng);
+    if (!customerId) {
+      res.status(400).json({ error: "customerId kerak." });
+      return;
+    }
+    if (!Number.isFinite(latN) || !Number.isFinite(lngN) || Math.abs(latN) < 1 || Math.abs(lngN) < 1) {
+      res.status(400).json({ error: "lat/lng kerak. Telefon GPS ni yoqing." });
+      return;
+    }
+    const assigns = await db
+      .select()
+      .from(kpiCustomerAssignmentsTable)
+      .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
+    const allowed = new Set(assigns.map((a) => a.customerId));
+    const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
+    if (!cust || (!allowed.has(customerId) && cust.createdByAgentId !== agent.id)) {
+      res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
+      return;
+    }
+    const lat = String(latN.toFixed(6));
+    const lng = String(lngN.toFixed(6));
+    const [row] = await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId)).returning();
+    await db.insert(kpiLocationEventsTable).values({
+      agentId: agent.id,
+      lat,
+      lng,
+      accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
+      source: "pin",
+    });
+    res.json({ ok: true, customer: row });
   } catch (error) {
     next(error);
   }
@@ -1311,7 +1354,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .orderBy(desc(kpiVisitsTable.createdAt))
       .limit(300);
 
-    const todayVisits = visits.filter((v) => v.createdAt.toISOString().slice(0, 10) === dateFilter);
+    const todayVisits = visits.filter((v) => tashkentDate(v.createdAt) === dateFilter);
     const visitedByCustomer = new Map<string, { at: string; lat: string | null; lng: string | null; notes: string }>();
     for (const v of todayVisits) {
       if (!visitedByCustomer.has(v.customerId)) {
@@ -1371,7 +1414,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
         const debt = debtByCustomer.get(c.id) || "0.00";
-        const geo = inferCoordinates(c.id, c.name, c.address, visit?.lat || c.lat, visit?.lng || c.lng);
+        const geo = inferCoordinates(c.id, c.name, c.address, c.lat || visit?.lat, c.lng || visit?.lng);
         return {
           id: c.id,
           name: c.name,
@@ -1397,7 +1440,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
 
     const agentTrack = activeAgentId
       ? locEvents
-          .filter((e) => e.agentId === activeAgentId && e.recordedAt.toISOString().slice(0, 10) === dateFilter)
+          .filter((e) => e.agentId === activeAgentId && tashkentDate(e.recordedAt) === dateFilter)
           .reverse()
           .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }))
       : [];
