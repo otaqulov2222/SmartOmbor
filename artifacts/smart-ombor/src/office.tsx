@@ -105,7 +105,7 @@ export function OfficePage() {
   const [, setLocation] = useLocation();
   const [me, setMe] = useState<Me | null>(null);
   const [clock, setClock] = useState(tashkentClock());
-  const [gps, setGps] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [gps, setGps] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
   const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied' | 'error'>('pending');
   const [method, setMethod] = useState<'face' | 'qr'>('face');
   const [stage, setStage] = useState<null | 'face' | 'qr'>(null);
@@ -153,7 +153,13 @@ export function OfficePage() {
         setGpsState('error');
         return;
       }
-      setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
+      const heading = Number(pos.coords.heading);
+      setGps({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy,
+        heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
+      });
       setGpsState('ready');
     };
     const fail = (err: GeolocationPositionError) => {
@@ -388,7 +394,13 @@ export function OfficePage() {
           setNote(t('office.gpsBad', { m: 0 }));
           return;
         }
-        setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy });
+        const heading = Number(pos.coords.heading);
+        setGps({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy,
+          heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
+        });
         setGpsState('ready');
         setNote('');
       },
@@ -473,7 +485,7 @@ export function OfficePage() {
       {me && <OfficeMap
         officeLat={me.office.lat} officeLng={me.office.lng} zoom={zoom} name={me.office.name}
         radiusM={radiusM} radiusLabel={t('office.radius')}
-        here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng } : null} status={geoStatus}
+        here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
         gpsDenied={gpsState === 'denied'} meters={meters}
         onZoom={setZoom}
         onLocate={pingGps}

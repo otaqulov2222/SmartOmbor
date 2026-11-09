@@ -125,6 +125,9 @@
   position: relative; border-radius: 20px; overflow: hidden; height: 236px;
   border: 1px solid var(--o-line); margin-bottom: 16px; background: #0b1524;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / .04);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .office-map-tiles {
   position: absolute; width: 768px; height: 768px; pointer-events: none;
@@ -157,12 +160,7 @@
   0% { transform: scale(.86); opacity: .55; }
   100% { transform: scale(1.18); opacity: 0; }
 }
-.office-tap {
-  position: absolute; left: 50%; top: 68%; transform: translate(-50%, 0);
-  background: rgb(15 23 42 / .88); color: #e2e8f0; border-radius: 999px; padding: 6px 10px;
-  font-size: .78rem; display: inline-flex; align-items: center; gap: 6px; z-index: 3;
-  border: 1px solid rgb(255 255 255 / .08); backdrop-filter: blur(8px);
-}
+.office-tap { display: none; }
 .office-map-tools {
   position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; z-index: 3;
 }
@@ -220,27 +218,85 @@
   position: absolute; transform: translate(-50%, -50%); z-index: 5; pointer-events: none;
   display: grid; justify-items: center; gap: 4px;
 }
-.office-me em {
-  width: 18px; height: 18px; border-radius: 999px; background: #38bdf8;
-  border: 3px solid #fff; box-shadow: 0 0 0 6px rgb(56 189 248 / .28), 0 8px 18px rgb(14 165 233 / .45);
-  display: block;
+.office-me-nav {
+  position: relative; width: 48px; height: 48px;
+  display: grid; place-items: center;
 }
-.office-me.is-here em {
-  background: #34d399;
-  box-shadow: 0 0 0 6px rgb(52 211 153 / .28), 0 8px 18px rgb(16 185 129 / .45);
+.office-me-pulse {
+  position: absolute; inset: 2px; border-radius: 999px;
+  background: rgb(37 99 235 / .22);
+  animation: office-me-pulse 2s ease-out infinite;
 }
+.office-me.is-here .office-me-pulse { background: rgb(16 185 129 / .22); }
+.office-me-cone {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: conic-gradient(from -32deg at 50% 50%, rgb(37 99 235 / .42) 0deg, rgb(37 99 235 / 0) 64deg, transparent 360deg);
+  transition: transform .2s linear;
+}
+.office-me.is-here .office-me-cone {
+  background: conic-gradient(from -32deg at 50% 50%, rgb(16 185 129 / .42) 0deg, rgb(16 185 129 / 0) 64deg, transparent 360deg);
+}
+.office-me-arrow {
+  position: relative; z-index: 2;
+  width: 30px; height: 30px; border-radius: 999px;
+  background: linear-gradient(145deg, #2563eb, #1d4ed8);
+  border: 2.5px solid #fff;
+  box-shadow: 0 6px 16px rgb(29 78 216 / .45);
+  display: grid; place-items: center;
+  transition: transform .2s linear;
+}
+.office-me.is-here .office-me-arrow {
+  background: linear-gradient(145deg, #10b981, #059669);
+  box-shadow: 0 6px 16px rgb(5 150 105 / .45);
+}
+.office-me.is-here .office-me-arrow svg path { stroke: #047857; }
 .office-me b {
   font-size: .68rem; font-weight: 800; color: #fff; letter-spacing: .02em;
   background: rgb(15 23 42 / .88); border-radius: 999px; padding: 2px 7px;
   border: 1px solid rgb(255 255 255 / .14);
+}
+@keyframes office-me-pulse {
+  0% { transform: scale(.75); opacity: .9; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+.office-route {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: visible;
+}
+.office-route-glow {
+  fill: none; stroke: rgb(37 99 235 / .35); stroke-width: 10; stroke-linecap: round; stroke-linejoin: round;
+}
+.office-route-line {
+  fill: none; stroke: #3b82f6; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 10 8;
+}
+.office-route-line.is-here { stroke: #34d399; stroke-dasharray: none; }
+.office-route-chip {
+  position: absolute; left: 50%; top: 44px; transform: translateX(-50%);
+  z-index: 4; display: inline-flex; align-items: center; gap: 6px;
+  background: rgb(15 23 42 / .92); color: #93c5fd; border: 1px solid rgb(147 197 253 / .3);
+  border-radius: 999px; padding: 6px 11px; font-size: .76rem; font-weight: 700;
+  pointer-events: none; white-space: nowrap;
+}
+.office-map-actions {
+  position: absolute; left: 50%; bottom: 42px; transform: translate(-50%, 0);
+  display: flex; gap: 6px; z-index: 4;
+}
+.office-map-actions button {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgb(15 23 42 / .9); color: #e2e8f0; border-radius: 999px; padding: 7px 11px;
+  font-size: .76rem; font-weight: 700; border: 1px solid rgb(255 255 255 / .1);
+  backdrop-filter: blur(8px);
+}
+.office-map-actions button.is-on {
+  background: #1d4ed8; border-color: transparent; color: #fff;
 }
 .office-cam.is-locked {
   background: linear-gradient(90deg, #334155, #475569 55%, #64748b);
   box-shadow: none; opacity: .92;
 }
 .office-cam.is-locked::after { display: none; }
-.office-me.is-edge em {
-  width: 22px; height: 22px;
+.office-me.is-edge .office-me-arrow {
+  width: 34px; height: 34px;
   box-shadow: 0 0 0 8px rgb(56 189 248 / .22), 0 10px 22px rgb(14 165 233 / .55);
 }
 .office-map-gate {
