@@ -29,7 +29,11 @@ import {
 const router: IRouter = Router();
 
 function directorOf(role: string) {
-  return role === "super_admin" || role === "manager" || role === "sales_admin" || role === "warehouse_manager";
+  return role === "super_admin"
+    || role === "manager"
+    || role === "sales_admin"
+    || role === "warehouse_manager"
+    || role === "warehouse_staff";
 }
 
 function punchView(row: ReturnType<typeof todayPunch>) {

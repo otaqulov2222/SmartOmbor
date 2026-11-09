@@ -119,7 +119,8 @@ function isDirector(role?: string | null) {
   return role === 'super_admin' || role === 'manager' || role === 'sales_admin';
 }
 function canManageOffice(role?: string | null) {
-  return isDirector(role) || role === 'warehouse_manager';
+  // Ombor xodimi ham Davomat ichida Hisobot + Topshiriqlarni ko‘rsin.
+  return isDirector(role) || isWarehouse(role);
 }
 function isWarehouse(role?: string | null) {
   return role === 'warehouse_manager' || role === 'warehouse_staff';
@@ -141,7 +142,6 @@ function pathAllowedForRole(path: string, role?: string | null) {
   if (isAgentRole(role)) return path === '/my-kpi' || path === '/office';
   if (isEmployeeCabinet(role)) return path === '/office';
   if (isWarehouse(role)) {
-    if (path === '/office/report' || path === '/office/tasks') return role === 'warehouse_manager';
     return warehouseAllowedHrefs.has(path);
   }
   return true;

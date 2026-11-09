@@ -228,6 +228,7 @@ export function requireOfficeDirector(req: Request, res: Response): Account | nu
     && current.role !== "manager"
     && current.role !== "sales_admin"
     && current.role !== "warehouse_manager"
+    && current.role !== "warehouse_staff"
   ) {
     res.status(403).json({ error: "forbidden" });
     return null;
