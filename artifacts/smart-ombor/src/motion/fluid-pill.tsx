@@ -20,8 +20,8 @@ import { usePrefersReducedMotion } from './reduced-motion';
 /** GSAP-equivalent curves for slideFill lead/trail */
 const EASE_LEAD: [number, number, number, number] = [0.16, 1, 0.3, 1]; // power4.out
 const EASE_TRAIL: [number, number, number, number] = [0.65, 0, 0.35, 1]; // power3.inOut
-const LEAD_DURATION = 0.25;
-const TRAIL_DURATION = 0.55;
+const LEAD_DURATION = 0.28;
+const TRAIL_DURATION = 0.62;
 
 type Axis = 'x' | 'y';
 

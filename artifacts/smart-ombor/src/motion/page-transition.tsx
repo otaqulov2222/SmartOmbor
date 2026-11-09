@@ -1,8 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ReactNode } from 'react';
 
-const EXIT = { opacity: 0, scale: 0.98, y: -4 };
-const ENTER_FROM = { opacity: 0, scale: 0.98, y: 6, filter: 'blur(4px)' };
+const EXIT = { opacity: 0, scale: 0.97, y: -8 };
+const ENTER_FROM = { opacity: 0, scale: 0.97, y: 14, filter: 'blur(6px)' };
 const ENTER_TO = { opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' };
 
 type PageTransitionProps = {
@@ -30,12 +30,12 @@ export function PageTransition({ routeKey, className = 'page-enter', children }:
         initial={ENTER_FROM}
         animate={{
           ...ENTER_TO,
-          transition: { duration: 0.3, ease: [0.2, 0.8, 0.2, 1] },
+          transition: { duration: 0.34, ease: [0.2, 0.8, 0.2, 1] },
         }}
         exit={{
           ...EXIT,
-          filter: 'blur(0px)',
-          transition: { duration: 0.15, ease: [0.4, 0, 1, 1] },
+          filter: 'blur(2px)',
+          transition: { duration: 0.18, ease: [0.4, 0, 1, 1] },
         }}
         style={{ willChange: 'opacity, transform, filter' }}
       >

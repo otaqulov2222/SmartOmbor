@@ -1604,17 +1604,30 @@ function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
 }
 
 /* ---------- routing ---------- */
-function RouteFrame({ title, children }: { title: string; children: ReactNode }) {
+/** Persistent workspace: shell stays mounted so FluidPill + PageTransition can animate between routes. */
+function WorkspaceRoutes() {
   const [location] = useLocation();
+  const { t } = useI18n();
   const [sessionTick, setSessionTick] = useState(0);
   useEffect(() => {
     const refresh = () => setSessionTick(value => value + 1);
     window.addEventListener('smart-ombor-auth', refresh);
     return () => window.removeEventListener('smart-ombor-auth', refresh);
   }, []);
-  const body = <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>{children}</ErrorBoundary>;
   const signedIn = Boolean(readLocalSession()) || sessionTick < 0;
   const localRole = readLocalSession()?.role;
+  const current = navigation.find(entry => entry.href === location);
+  const title = current ? t(current.key) : t('brand.name');
+  const pages = (
+    <ErrorBoundary resetKey={location} FallbackComponent={ErrorFallback}>
+      <Switch>
+        {pageRoutes.map(route => (
+          <Route key={route.path ?? '*'} path={route.path}>{route.element}</Route>
+        ))}
+      </Switch>
+    </ErrorBoundary>
+  );
+
   if (!clerkPubKey) {
     if (!signedIn) {
       const next = `${window.location.pathname}${window.location.search}`;
@@ -1623,18 +1636,14 @@ function RouteFrame({ title, children }: { title: string; children: ReactNode })
     }
     if (isEmployeeCabinet(localRole)) {
       if (location !== '/office') return <Redirect to="/office"/>;
-      return <LocalShell title={title}>{body}</LocalShell>;
+      return <LocalShell title={title}>{pages}</LocalShell>;
     }
     if (!pathAllowedForRole(location, localRole)) {
       return <Redirect to={homeForRole(localRole)}/>;
     }
-    return <LocalShell title={title}>{body}</LocalShell>;
+    return <LocalShell title={title}>{pages}</LocalShell>;
   }
-  return <WorkspaceGate><AppShell title={title}>{body}</AppShell></WorkspaceGate>;
-}
-function ProtectedRoute({ titleKey, children }: { titleKey: TKey; children: ReactNode }) {
-  const [location] = useLocation(); const { t } = useI18n();
-  return <RouteFrame key={location} title={t(titleKey)}>{children}</RouteFrame>;
+  return <WorkspaceGate><AppShell title={title}>{pages}</AppShell></WorkspaceGate>;
 }
 function SignedInHome() {
   const back = sessionStorage.getItem(RETURN_PATH) || '';
@@ -1681,7 +1690,6 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/audit', titleKey: 'nav.audit', element: <AuditPage/> },
   { titleKey: 'notFound.title', element: <NotFoundPage/> },
 ];
-const appRoutes = pageRoutes.map(r => <Route key={r.path ?? '*'} path={r.path}><ProtectedRoute titleKey={r.titleKey}>{r.element}</ProtectedRoute></Route>);
 function LocalRoutes() {
   return <Switch>
     <Route path="/" component={LocalHome}/>
@@ -1689,7 +1697,7 @@ function LocalRoutes() {
     <Route path="/sign-up/*?" component={LocalSignInNotice}/>
     <Route path="/zavod" component={FactoryPortal}/>
     <Route path="/agent" component={AgentPortal}/>
-    {appRoutes}
+    <Route component={WorkspaceRoutes}/>
   </Switch>;
 }
 function ClerkRoutes() {
@@ -1703,7 +1711,7 @@ function ClerkRoutes() {
       <Route path="/sign-up/*?" component={SignUpPage}/>
       <Route path="/zavod" component={FactoryPortal}/>
       <Route path="/agent" component={AgentPortal}/>
-      {appRoutes}
+      <Route component={WorkspaceRoutes}/>
     </Switch>
   </ClerkProvider>;
 }
