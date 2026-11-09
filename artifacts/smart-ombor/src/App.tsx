@@ -1586,7 +1586,7 @@ function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
 }
 
 /* ---------- routing ---------- */
-/** Persistent workspace: shell stays mounted so FluidPill + PageTransition can animate between routes. */
+/** Persistent workspace shell — stays mounted across authenticated page routes. */
 function WorkspaceRoutes() {
   const [location] = useLocation();
   const { t } = useI18n();
