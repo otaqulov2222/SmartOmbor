@@ -339,9 +339,11 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const [moreOpen, setMoreOpen] = useState(inMore);
+  const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
   const [kpiOpen, setKpiOpen] = useState(inKpiNav);
   useEffect(() => { localStorage.setItem('smart-ombor-nav', rail ? 'icons' : 'full'); }, [rail]);
   useEffect(() => { setMoreOpen(inMore); }, [inMore]);
+  useEffect(() => { setOfficeOpen(inOfficeNav); }, [inOfficeNav]);
   useEffect(() => { if (inKpiNav) setKpiOpen(true); }, [inKpiNav]);
   const current = navigation.find(x => x.href === path);
   const alerts = useQuery<{ pending: number; revision?: number }>({
@@ -375,42 +377,25 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
         <div className="nav-primary">
           {agent ? <>
             {navItem('/my-kpi')}
-            <div className="nav-office-group" aria-label={t('nav.office')}>
-              <div className="nav-item nav-more is-open is-static" title={t('nav.office')}>
-                <Fingerprint size={18} strokeWidth={1.9}/>
-                <span>{t('nav.office')}</span>
-              </div>
-              <div className="nav-office-sub">
-                {navItem('/office')}
-              </div>
-            </div>
+            {navItem('/office')}
           </> : officeOnly ? <>
-            <div className="nav-office-group" aria-label={t('nav.office')}>
-              <div className="nav-item nav-more is-open is-static" title={t('nav.office')}>
-                <Fingerprint size={18} strokeWidth={1.9}/>
-                <span>{t('nav.office')}</span>
-              </div>
-              <div className="nav-office-sub">
-                {navItem('/office')}
-              </div>
-            </div>
+            {navItem('/office')}
           </> : <>
             {navItem('/dashboard')}
             {navItem('/products')}
             {director && navItem('/employees')}
-            <div className="nav-office-group" aria-label={t('nav.office')}>
-              <div className={`nav-item nav-more is-open is-static ${inOfficeNav ? 'is-active' : ''}`} title={t('nav.office')} data-testid="button-navigation-office">
-                <Fingerprint size={18} strokeWidth={1.9}/>
-                <span>{t('nav.office')}</span>
-              </div>
-              <div className="nav-office-sub">
-                {navItem('/office')}
-                {officeManager && navItem('/office/report')}
-                {officeManager && navItem('/office/tasks')}
-              </div>
-            </div>
+            <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
+              <Fingerprint size={18} strokeWidth={1.9}/>
+              <span>{t('nav.office')}</span>
+              <ChevronDown size={16} className="nav-more-chevron"/>
+            </button>
+            {officeOpen && <div className="nav-office-sub">
+              {navItem('/office')}
+              {officeManager && navItem('/office/report')}
+              {officeManager && navItem('/office/tasks')}
+            </div>}
             {director && <>
-              <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setMoreOpen(false); }} data-testid="button-navigation-kpi">
+              <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
                 <Gauge size={18} strokeWidth={1.9}/>
                 <span>{t('nav.group.kpi')}</span>
                 <ChevronDown size={16} className="nav-more-chevron"/>
@@ -422,7 +407,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {director && navItem('/gps')}
             {navItem('/partners')}
             {warehouse && navItem('/stock')}
-            <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
+            <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </>}
         </div>
         {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
@@ -432,7 +417,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       </div>
     </aside>
     <div className="main">
-      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{(director || warehouse) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
+      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{(director || warehouse) && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
