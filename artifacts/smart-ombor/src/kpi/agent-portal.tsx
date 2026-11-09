@@ -85,13 +85,6 @@ function fmtDist(m: number | null | undefined) {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 }
 
-/** Today's route: debtors + already visited today, keeping server nearest-neighbor order. */
-function buildRouteStops(customers: CustomerCard[]): CustomerCard[] {
-  const hasDebtors = customers.some((c) => Number(c.debt) > 0);
-  if (!hasDebtors) return customers;
-  return customers.filter((c) => Number(c.debt) > 0 || c.visitedToday);
-}
-
 export function AgentPortal() {
   const [tokenTick, setTokenTick] = useState(0);
   const hasToken = Boolean(readAgentToken() || readStaffToken());
@@ -153,6 +146,7 @@ function AgentLogin({ onOk }: { onOk: () => void }) {
 function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLogout?: () => void }) {
   const [tab, setTab] = useState<Tab>('today');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
   const stopRefs = useRef<Record<string, HTMLElement | null>>({});
   const cache = useQueryClient();
@@ -162,6 +156,12 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     queryFn: () => kpiFetch<CabinetData>('/kpi/agent/cabinet', {}, mode),
     refetchInterval: 45_000,
   });
+
+  const openNavigator = (stopId?: string | null) => {
+    if (stopId) setSelectedStopId(stopId);
+    setTab('today');
+    setMapFullscreen(true);
+  };
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -220,9 +220,10 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const d = q.data;
   const s = d?.summary;
-  const routeStops = useMemo(() => buildRouteStops(d?.customers || []), [d?.customers]);
+  // Full day route = ALL assigned customers (1→2→3…), server already nearest-neighbor ordered
+  const routeStops = useMemo(() => d?.customers || [], [d?.customers]);
   const nextStop = routeStops.find((c) => c.isNext) || routeStops.find((c) => !c.visitedToday) || null;
-  const targetCount = s ? (s.debtorsCount || s.customersCount || 1) : 1;
+  const targetCount = s ? (s.customersCount || 1) : 1;
   const visitPct = s ? Math.min(100, Math.round((s.visitedToday / targetCount) * 100)) : 0;
 
   useEffect(() => {
@@ -313,9 +314,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
               <span>Bugungi reja</span>
               <span className="ag-stat-ico"><Users size={18} /></span>
             </div>
-            <strong>{s.visitedToday} / {s.debtorsCount || s.customersCount}</strong>
+            <strong>{s.visitedToday} / {s.customersCount}</strong>
             <div className="ag-bar"><i style={{ width: `${visitPct}%` }} /></div>
-            <small>{s.customersCount} ta mijoz</small>
+            <small>{s.customersCount} ta nuqta · {s.debtorsCount} qarzdor</small>
           </article>
         </section>
       ) : null}
@@ -353,12 +354,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={() => {
-                  setSelectedStopId(nextStop.id);
-                  document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }}
+                onClick={() => openNavigator(nextStop.id)}
               >
-                <Navigation size={15} /> Xaritada ko‘rish
+                <Navigation size={15} /> Navigator (to‘liq ekran)
               </button>
             </div>
           ) : null}
@@ -368,6 +366,8 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             track={d?.track || []}
             agentName={d?.agent.fullName}
             follow
+            fullscreen={mapFullscreen}
+            onFullscreenChange={setMapFullscreen}
             agentPos={
               coords
                 ? { lat: coords.lat, lng: coords.lng, heading: coords.heading }
@@ -381,7 +381,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
           <div className="ag-section-head">
             <h2>Marshrut nuqtalari</h2>
-            <p>1 → {routeStops.length} · eng yaqin qarzdordan boshlanadi</p>
+            <p>1 → {routeStops.length} · barcha mijozlar ketma-ket · eng yaqindan</p>
           </div>
           <div className="ag-stops">
             {routeStops.map((c) => {
@@ -426,10 +426,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                     <button
                       type="button"
                       className="btn"
-                      onClick={() => {
-                        setSelectedStopId(c.id);
-                        document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }}
+                      onClick={() => openNavigator(c.id)}
                     >
                       <MapPin size={15} /> Xaritada
                     </button>
@@ -543,13 +540,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   <button
                     type="button"
                     className="btn"
-                    onClick={() => {
-                      setTab('today');
-                      setSelectedStopId(c.id);
-                      setTimeout(() => {
-                        document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }, 60);
-                    }}
+                    onClick={() => openNavigator(c.id)}
                   >
                     <MapPin size={15} /> Xaritada
                   </button>

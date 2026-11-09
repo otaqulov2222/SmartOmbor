@@ -321,9 +321,30 @@
 .rm-connector { width: 28px; height: 3px; background: #cbd5e1; display: inline-block; margin: 0 4px; }
 .rm-connector.is-done { background: #10b981; }
 
-.rm-canvas-wrap { position: relative; width: 100%; height: 390px; cursor: pointer; }
+.rm-canvas-wrap { position: relative; width: 100%; height: min(58vh, 520px); min-height: 360px; cursor: pointer; }
 .rm-canvas-wrap.is-active { outline: 2px solid #2563eb; outline-offset: -2px; cursor: grab; }
 .rm-canvas { width: 100%; height: 100%; background: #e2e8f0; z-index: 1; }
+
+.rm-card.is-fullscreen {
+  position: fixed; inset: 0; z-index: 12000;
+  border-radius: 0; border: 0; box-shadow: none;
+  display: grid; grid-template-rows: auto auto auto 1fr auto;
+  background: #0b1220;
+}
+.rm-card.is-fullscreen .rm-chain-bar,
+.rm-card.is-fullscreen .rm-steps,
+.rm-card.is-fullscreen .rm-legend {
+  background: #fff;
+}
+.rm-card.is-fullscreen .rm-canvas-wrap {
+  height: auto; min-height: 0; flex: 1;
+}
+.rm-fs-top {
+  display: flex; justify-content: space-between; align-items: center; gap: .75rem;
+  padding: .85rem 1rem; background: #0f1b2d; color: #fff;
+}
+.rm-fs-top b { display: block; font-size: 1rem; }
+.rm-fs-top span { display: block; font-size: .8rem; opacity: .85; margin-top: .15rem; }
 .rm-canvas .leaflet-control-attribution { display: none !important; }
 .rm-map-hint {
   position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);

@@ -1,4 +1,4 @@
-import { CheckCircle2, Crosshair, Map as MapIcon, Navigation, Route } from 'lucide-react';
+import { CheckCircle2, Crosshair, Maximize2, Minimize2, Map as MapIcon, Navigation, Route, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { kpiFetch, readAgentToken } from './api';
 
@@ -181,6 +181,8 @@ export function RouteMap({
   agentName,
   selectedStopId,
   follow = true,
+  fullscreen = false,
+  onFullscreenChange,
   onSelectStop,
   onSelectAgent,
 }: {
@@ -191,6 +193,8 @@ export function RouteMap({
   agentName?: string;
   selectedStopId?: string | null;
   follow?: boolean;
+  fullscreen?: boolean;
+  onFullscreenChange?: (open: boolean) => void;
   onSelectStop?: (stop: RouteStop) => void;
   onSelectAgent?: (agentId: string) => void;
 }) {
@@ -211,6 +215,12 @@ export function RouteMap({
   const [mapReady, setMapReady] = useState(false);
   const [active, setActive] = useState(false);
   const [followOn, setFollowOn] = useState(follow);
+  const [fsLocal, setFsLocal] = useState(false);
+  const isFullscreen = onFullscreenChange ? fullscreen : fsLocal;
+  const setFullscreen = (open: boolean) => {
+    if (onFullscreenChange) onFullscreenChange(open);
+    else setFsLocal(open);
+  };
   const [roadHint, setRoadHint] = useState<{ distanceM: number | null; durationSec: number | null; roadOk: boolean }>({
     distanceM: null,
     durationSec: null,
@@ -506,7 +516,8 @@ export function RouteMap({
       if (livePos && next) {
         pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
       }
-      for (let i = 0; i < pending.length - 1 && i < 8; i += 1) {
+      // Full chain 1→2→3→… (cap 24 legs to protect OSRM)
+      for (let i = 0; i < pending.length - 1 && i < 24; i += 1) {
         pairs.push({
           a: [pending[i].lat, pending[i].lng],
           b: [pending[i + 1].lat, pending[i + 1].lng],
@@ -592,6 +603,39 @@ export function RouteMap({
     else if (bounds.length > 1) map.fitBounds(bounds, { padding: [44, 44], maxZoom: 14 });
   };
 
+  // Fullscreen navigator: lock scroll + resize Leaflet to show whole 1→N chain
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    if (isFullscreen) {
+      document.body.style.overflow = 'hidden';
+      setActive(true);
+    } else {
+      document.body.style.overflow = prev || '';
+    }
+    const t = window.setTimeout(() => {
+      try {
+        mapRef.current?.invalidateSize?.(true);
+        if (!isFullscreen) return;
+        const map = mapRef.current;
+        if (!map) return;
+        const bounds: Array<[number, number]> = [];
+        if (livePos) bounds.push([livePos.lat, livePos.lng]);
+        for (const s of stops) {
+          if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
+        }
+        if (bounds.length === 1) map.setView(bounds[0], 14);
+        else if (bounds.length > 1) map.fitBounds(bounds, { padding: [36, 36], maxZoom: 14 });
+      } catch {
+        /* ignore */
+      }
+    }, 120);
+    return () => {
+      document.body.style.overflow = prev || '';
+      window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFullscreen]);
+
   const focusNext = () => {
     if (!nextStop) return;
     onSelectStop?.(nextStop);
@@ -615,8 +659,18 @@ export function RouteMap({
   };
 
   return (
-    <div className="rm-card">
-      {agentName ? (
+    <div className={`rm-card ${isFullscreen ? 'is-fullscreen' : ''}`}>
+      {isFullscreen ? (
+        <div className="rm-fs-top">
+          <div>
+            <b>{agentName || 'Navigator'}</b>
+            <span>{doneCount}/{stops.length} · {nextStop ? `#${nextStop.step} ${nextStop.name}` : 'tugadi'}</span>
+          </div>
+          <button type="button" className="btn btn-primary" onClick={() => setFullscreen(false)}>
+            <X size={16} /> Yopish
+          </button>
+        </div>
+      ) : agentName ? (
         <div className="rm-agent-banner">
           <b>{agentName}</b>
           <span>{hasLiveGps ? 'Jonli joylashuv' : 'GPS kutilmoqda'} · {doneCount}/{stops.length} nuqta</span>
@@ -641,7 +695,7 @@ export function RouteMap({
         </div>
         <div className="rm-chain-actions">
           <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
-            <Crosshair size={14} /> {followOn ? 'Kuzatuv' : 'Agentga qarat'}
+            <Crosshair size={14} /> {followOn ? 'Kuzatuv' : 'Menga qarat'}
           </button>
           <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
             <Route size={14} /> Butun marshrut
@@ -651,12 +705,20 @@ export function RouteMap({
               <MapIcon size={14} /> #{nextStop.step} xaritada
             </button>
           ) : null}
+          <button
+            type="button"
+            className={`btn ${isFullscreen ? '' : 'btn-primary'}`}
+            onClick={() => setFullscreen(!isFullscreen)}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isFullscreen ? 'Kichik' : 'To‘liq ekran'}
+          </button>
         </div>
       </div>
 
       {stops.length > 0 ? (
         <div className="rm-steps" role="list">
-          {stops.slice(0, 16).map((s, idx) => (
+          {stops.map((s, idx) => (
             <div className="rm-step-item" key={s.id} role="listitem">
               <button
                 type="button"
@@ -669,7 +731,7 @@ export function RouteMap({
                 </span>
                 <span className="rm-node-name">{s.name}</span>
               </button>
-              {idx < Math.min(stops.length, 16) - 1 ? (
+              {idx < stops.length - 1 ? (
                 <span className={`rm-connector ${s.visitedToday ? 'is-done' : ''}`} />
               ) : null}
             </div>
@@ -677,7 +739,7 @@ export function RouteMap({
         </div>
       ) : null}
 
-      <div ref={wrapRef} className={`rm-canvas-wrap ${active ? 'is-active' : ''} ${followOn ? 'is-follow' : ''}`}>
+      <div ref={wrapRef} className={`rm-canvas-wrap ${active || isFullscreen ? 'is-active' : ''} ${followOn ? 'is-follow' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
         {!hasLiveGps ? (
           <div className="rm-gps-banner">GPS yo‘q — joylashuv kutilmoqda. Telefon GPS ni yoqing.</div>
@@ -691,10 +753,10 @@ export function RouteMap({
       </div>
 
       <div className="rm-legend">
-        <span><i className="rm-dot is-agent" /> Agent (jonli)</span>
+        <span><i className="rm-dot is-agent" /> Siz (jonli)</span>
         <span><i className="rm-dot is-done" /> Borildi</span>
         <span><i className="rm-dot is-next" /> Hozirgi yo‘l</span>
-        <span><i className="rm-dot is-wait" /> Keyingi 2→3→4…</span>
+        <span><i className="rm-dot is-wait" /> 1→2→3→… yo‘nalish</span>
       </div>
     </div>
   );

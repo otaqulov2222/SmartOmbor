@@ -79,6 +79,7 @@ export function GpsPage() {
   const cache = useQueryClient();
   const [agentId, setAgentId] = useState('');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
   const [sub, setSub] = useState<'points' | 'agents' | 'route'>('points');
   const [coordEdit, setCoordEdit] = useState<{ id: string; lat: string; lng: string; address: string } | null>(null);
 
@@ -197,6 +198,8 @@ export function GpsPage() {
         selectedStopId={selectedStopId}
         onSelectStop={(st) => setSelectedStopId(st.id)}
         onSelectAgent={(id) => setAgentId(id)}
+        fullscreen={mapFullscreen}
+        onFullscreenChange={setMapFullscreen}
       />
 
       <div className="kpi-seg">
@@ -279,7 +282,7 @@ export function GpsPage() {
                               className="btn btn-primary"
                               onClick={() => {
                                 setSelectedStopId(p.id);
-                                document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                setMapFullscreen(true);
                               }}
                             >
                               <MapPin size={14} /> Xaritada
@@ -338,9 +341,7 @@ export function GpsPage() {
                         setAgentId(a.id);
                         setSelectedStopId(null);
                         setSub('points');
-                        setTimeout(() => {
-                          document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 60);
+                        setMapFullscreen(true);
                       }}
                     >
                       <RouteIcon size={14} /> Marshrutini ochish
