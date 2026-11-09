@@ -350,16 +350,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   {Number(nextStop.debt) > 0 ? ` · olish: ${uzs(nextStop.debt)}` : ''}
                 </small>
               </div>
-              <a
+              <button
+                type="button"
                 className="btn btn-primary"
-                href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}${
-                  coords ? `&origin=${coords.lat},${coords.lng}` : ''
-                }`}
-                target="_blank"
-                rel="noreferrer"
+                onClick={() => {
+                  setSelectedStopId(nextStop.id);
+                  document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
               >
-                <Navigation size={15} /> Yo‘l
-              </a>
+                <Navigation size={15} /> Xaritada ko‘rish
+              </button>
             </div>
           ) : null}
 
@@ -423,16 +423,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                     <strong className={hasDebt ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                   </div>
                   <div className="ag-stop-actions" onClick={(e) => e.stopPropagation()}>
-                    <a
+                    <button
+                      type="button"
                       className="btn"
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}${
-                        coords ? `&origin=${coords.lat},${coords.lng}` : ''
-                      }`}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={() => {
+                        setSelectedStopId(c.id);
+                        document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }}
                     >
-                      <Navigation size={15} /> Yo‘nalish
-                    </a>
+                      <MapPin size={15} /> Xaritada
+                    </button>
                     {c.visitedToday ? (
                       <span className="ag-done-pill"><CheckCircle2 size={16} /> Bajarildi</span>
                     ) : (
@@ -540,14 +540,19 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                   <strong className={Number(c.debt) > 0 ? 'is-warn' : 'is-ok'}>{uzs(c.debt)}</strong>
                 </div>
                 <div className="ag-stop-actions">
-                  <a
+                  <button
+                    type="button"
                     className="btn"
-                    href={`https://www.google.com/maps/dir/?api=1&destination=${c.lat},${c.lng}`}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => {
+                      setTab('today');
+                      setSelectedStopId(c.id);
+                      setTimeout(() => {
+                        document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 60);
+                    }}
                   >
-                    <MapPin size={15} /> Xarita
-                  </a>
+                    <MapPin size={15} /> Xaritada
+                  </button>
                 </div>
               </article>
             ))}

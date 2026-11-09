@@ -274,7 +274,14 @@ export function GpsPage() {
                           </>
                         ) : (
                           <>
-                            <button type="button" className="btn btn-primary" onClick={() => setSelectedStopId(p.id)}>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => {
+                                setSelectedStopId(p.id);
+                                document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }}
+                            >
                               <MapPin size={14} /> Xaritada
                             </button>
                             <button
@@ -327,7 +334,14 @@ export function GpsPage() {
                     <button
                       type="button"
                       className="btn btn-primary"
-                      onClick={() => { setAgentId(a.id); setSub('points'); }}
+                      onClick={() => {
+                        setAgentId(a.id);
+                        setSelectedStopId(null);
+                        setSub('points');
+                        setTimeout(() => {
+                          document.querySelector('.rm-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 60);
+                      }}
                     >
                       <RouteIcon size={14} /> Marshrutini ochish
                     </button>

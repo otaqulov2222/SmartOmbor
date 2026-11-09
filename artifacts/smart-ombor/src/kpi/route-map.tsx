@@ -1,4 +1,4 @@
-import { CheckCircle2, Crosshair, ExternalLink, Navigation } from 'lucide-react';
+import { CheckCircle2, Crosshair, Map as MapIcon, Navigation, Route } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { kpiFetch, readAgentToken } from './api';
 
@@ -426,7 +426,7 @@ export function RouteMap({
     }
   }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
 
-  // Road route agent → next
+  // In-app full sequence: done (green) + live→next (blue) + next→…→last (amber)
   useEffect(() => {
     if (!mapReady) return;
     let alive = true;
@@ -435,69 +435,175 @@ export function RouteMap({
     if (!L || !layer) return;
 
     const run = async () => {
-      if (!livePos || !nextStop || nextStop.visitedToday) {
+      const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+      if (!valid.length) {
         layer.clearLayers();
-        setRoadHint({ distanceM: nextStop?.distanceM ?? null, durationSec: null, roadOk: false });
+        setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
         routeOriginRef.current = null;
         return;
       }
 
+      const doneStops = valid.filter((s) => s.visitedToday);
+      const pending = valid.filter((s) => !s.visitedToday);
+      const next = pending[0] || null;
+      const seqKey = `${valid.map((s) => `${s.id}:${s.visitedToday ? 1 : 0}`).join('|')}|n:${next?.id || ''}`;
+
       const prev = routeOriginRef.current;
       const movedFar =
         !prev ||
-        prev.destId !== nextStop.id ||
-        haversineM(prev, livePos) > 90;
+        prev.destId !== seqKey ||
+        (livePos != null && haversineM(prev, livePos) > 120);
 
-      if (!movedFar && prev) {
+      if (!movedFar && prev && livePos && next) {
         setRoadHint((h) => ({
-          distanceM: Math.round(haversineM(livePos, nextStop)),
+          distanceM: Math.round(haversineM(livePos, next)),
           durationSec: h.durationSec,
           roadOk: h.roadOk,
         }));
         return;
       }
 
-      const road = await fetchRoadRoute([
-        [livePos.lat, livePos.lng],
-        [nextStop.lat, nextStop.lng],
-      ]);
+      const drawLeg = (
+        path: Array<[number, number]>,
+        kind: 'done' | 'active' | 'plan',
+        ok: boolean,
+      ) => {
+        if (path.length < 2) return;
+        if (kind === 'done') {
+          L.polyline(path, { color: '#059669', weight: 5, opacity: 0.88, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+          return;
+        }
+        if (kind === 'active') {
+          L.polyline(path, { color: '#1e3a8a', weight: 11, opacity: 0.16, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+          L.polyline(path, {
+            color: ok ? '#2563eb' : '#64748b',
+            weight: 5,
+            opacity: 0.95,
+            dashArray: ok ? undefined : '6 8',
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(layer);
+          return;
+        }
+        L.polyline(path, {
+          color: '#f59e0b',
+          weight: 4,
+          opacity: 0.82,
+          dashArray: '10 8',
+          lineCap: 'round',
+          lineJoin: 'round',
+        }).addTo(layer);
+      };
+
+      const pairs: Array<{ a: [number, number]; b: [number, number]; kind: 'done' | 'active' | 'plan' }> = [];
+      for (let i = 0; i < doneStops.length - 1; i += 1) {
+        pairs.push({
+          a: [doneStops[i].lat, doneStops[i].lng],
+          b: [doneStops[i + 1].lat, doneStops[i + 1].lng],
+          kind: 'done',
+        });
+      }
+      if (livePos && next) {
+        pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
+      }
+      for (let i = 0; i < pending.length - 1 && i < 8; i += 1) {
+        pairs.push({
+          a: [pending[i].lat, pending[i].lng],
+          b: [pending[i + 1].lat, pending[i + 1].lng],
+          kind: 'plan',
+        });
+      }
+
+      const roads = await Promise.all(pairs.map((p) => fetchRoadRoute([p.a, p.b])));
       if (!alive) return;
-      routeOriginRef.current = { lat: livePos.lat, lng: livePos.lng, destId: nextStop.id };
-      setRoadHint({
-        distanceM: road.distanceM ?? Math.round(haversineM(livePos, nextStop)),
-        durationSec: road.durationSec,
-        roadOk: road.ok,
-      });
+
       layer.clearLayers();
-      const style = road.ok
-        ? { color: '#2563eb', weight: 5, opacity: 0.95 }
-        : { color: '#64748b', weight: 4, opacity: 0.75, dashArray: '6 8' };
-      L.polyline(road.path, { color: '#1e3a8a', weight: 10, opacity: 0.16, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
-      L.polyline(road.path, { ...style, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+      let activeOk = false;
+      let activeDist: number | null = null;
+      let activeDur: number | null = null;
+      pairs.forEach((p, idx) => {
+        const road = roads[idx];
+        drawLeg(road.path, p.kind, road.ok);
+        if (p.kind === 'active') {
+          activeOk = road.ok;
+          activeDist = road.distanceM;
+          activeDur = road.durationSec;
+        }
+      });
+
+      if (livePos) {
+        routeOriginRef.current = { lat: livePos.lat, lng: livePos.lng, destId: seqKey };
+      } else {
+        routeOriginRef.current = { lat: valid[0].lat, lng: valid[0].lng, destId: seqKey };
+      }
+      setRoadHint({
+        distanceM: activeDist ?? (livePos && next ? Math.round(haversineM(livePos, next)) : next?.distanceM ?? null),
+        durationSec: activeDur,
+        roadOk: activeOk,
+      });
     };
 
     void run();
     return () => {
       alive = false;
     };
-  }, [mapReady, livePos?.lat, livePos?.lng, nextStop?.id, nextStop?.lat, nextStop?.lng, nextStop?.visitedToday, nextStop?.distanceM]);
+  }, [mapReady, livePos?.lat, livePos?.lng, nextStop?.id, stops]);
 
-  // Initial fit when not following
+  // Fit whole sequence once when stops load / agent changes (if not following)
   useEffect(() => {
     if (!mapReady) return;
     const map = mapRef.current;
     if (!map || followOn) return;
     const bounds: Array<[number, number]> = [];
     if (livePos) bounds.push([livePos.lat, livePos.lng]);
-    if (nextStop) bounds.push([nextStop.lat, nextStop.lng]);
-    else {
-      for (const s of stops) {
-        if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
-      }
+    for (const s of stops) {
+      if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
     }
     if (bounds.length === 1) map.setView(bounds[0], 14);
-    else if (bounds.length > 1) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
-  }, [mapReady, stops.length, nextStop?.id, followOn]); // eslint-disable-line react-hooks/exhaustive-deps
+    else if (bounds.length > 1) map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14 });
+  }, [mapReady, stops.length, agentName, followOn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pan to selected stop inside the app map
+  useEffect(() => {
+    if (!mapReady || !selectedStopId) return;
+    const stop = stops.find((s) => s.id === selectedStopId);
+    if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return;
+    const map = mapRef.current;
+    if (!map) return;
+    userPanRef.current = true;
+    setFollowOn(false);
+    const pts: Array<[number, number]> = [[stop.lat, stop.lng]];
+    if (livePos) pts.push([livePos.lat, livePos.lng]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
+    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
+  }, [selectedStopId, mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fitWholeRoute = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    userPanRef.current = true;
+    setFollowOn(false);
+    const bounds: Array<[number, number]> = [];
+    if (livePos) bounds.push([livePos.lat, livePos.lng]);
+    for (const s of stops) {
+      if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
+    }
+    if (bounds.length === 1) map.setView(bounds[0], 14);
+    else if (bounds.length > 1) map.fitBounds(bounds, { padding: [44, 44], maxZoom: 14 });
+  };
+
+  const focusNext = () => {
+    if (!nextStop) return;
+    onSelectStop?.(nextStop);
+    const map = mapRef.current;
+    if (!map) return;
+    userPanRef.current = true;
+    setFollowOn(false);
+    const pts: Array<[number, number]> = [[nextStop.lat, nextStop.lng]];
+    if (livePos) pts.push([livePos.lat, livePos.lng]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
+    else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
+  };
 
   const recenter = () => {
     userPanRef.current = false;
@@ -510,6 +616,12 @@ export function RouteMap({
 
   return (
     <div className="rm-card">
+      {agentName ? (
+        <div className="rm-agent-banner">
+          <b>{agentName}</b>
+          <span>{hasLiveGps ? 'Jonli joylashuv' : 'GPS kutilmoqda'} · {doneCount}/{stops.length} nuqta</span>
+        </div>
+      ) : null}
       <div className="rm-chain-bar">
         <div className="rm-chain-meta">
           <div className="rm-progress-block">
@@ -522,7 +634,6 @@ export function RouteMap({
               {roadHint.distanceM != null ? ` · ${fmtDistance(roadHint.distanceM)}` : ''}
               {roadHint.durationSec != null ? ` · ${fmtEta(roadHint.durationSec)}` : ''}
               {approxNext ? ' · taxminiy joy' : ''}
-              {!roadHint.roadOk && hasLiveGps ? ' · to‘g‘ri chiziq (OSRM yo‘q)' : ''}
             </span>
           ) : stops.length ? (
             <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
@@ -530,19 +641,15 @@ export function RouteMap({
         </div>
         <div className="rm-chain-actions">
           <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
-            <Crosshair size={14} /> {followOn ? 'Kuzatuv yoqilgan' : 'Menga qarat'}
+            <Crosshair size={14} /> {followOn ? 'Kuzatuv' : 'Agentga qarat'}
+          </button>
+          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
+            <Route size={14} /> Butun marshrut
           </button>
           {nextStop ? (
-            <a
-              className="btn btn-primary"
-              href={`https://www.google.com/maps/dir/?api=1&destination=${nextStop.lat},${nextStop.lng}${
-                livePos ? `&origin=${livePos.lat},${livePos.lng}&travelmode=driving` : ''
-              }`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Navigation size={14} /> Navigator <ExternalLink size={13} />
-            </a>
+            <button type="button" className="btn btn-primary" onClick={focusNext}>
+              <MapIcon size={14} /> #{nextStop.step} xaritada
+            </button>
           ) : null}
         </div>
       </div>
@@ -586,8 +693,8 @@ export function RouteMap({
       <div className="rm-legend">
         <span><i className="rm-dot is-agent" /> Agent (jonli)</span>
         <span><i className="rm-dot is-done" /> Borildi</span>
-        <span><i className="rm-dot is-next" /> Navbatdagi</span>
-        <span><i className="rm-dot is-wait" /> Rejada</span>
+        <span><i className="rm-dot is-next" /> Hozirgi yo‘l</span>
+        <span><i className="rm-dot is-wait" /> Keyingi 2→3→4…</span>
       </div>
     </div>
   );
