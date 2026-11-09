@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { Crosshair, Hand, MapPin, Minus, Navigation, Plus, Radar } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Crosshair, LocateFixed, Minus, Navigation, Plus, Radar } from 'lucide-react';
 import { useI18n } from '@/i18n';
 
 function lon2tile(lon: number, zoom: number) {
@@ -19,7 +19,7 @@ function zoomToFit(lat1: number, lng1: number, lat2: number, lng2: number) {
   const dist = haversine(lat1, lng1, lat2, lng2);
   if (dist < 60) return 17;
   const midLat = (lat1 + lat2) / 2;
-  const mppNeeded = dist / 140;
+  const mppNeeded = dist / 150;
   const z = Math.log2((156543.03392 * Math.cos(midLat * Math.PI / 180)) / Math.max(mppNeeded, 0.5));
   return Math.min(17, Math.max(11, Math.floor(z)));
 }
@@ -37,12 +37,12 @@ type Focus = 'fit' | 'me' | 'office';
 type RoutePoint = { lat: number; lng: number };
 
 export function OfficeMap({
-  officeLat, officeLng, zoom, name, radiusM, radiusLabel, here, user, status, gpsDenied, meters,
+  officeLat, officeLng, zoom, radiusM, here, user, status, gpsBlocked, meters,
   onZoom, onLocate, onNudge, onEnableGps,
 }: {
-  officeLat: number; officeLng: number; zoom: number; name: string; radiusM: number; radiusLabel: string;
+  officeLat: number; officeLng: number; zoom: number; radiusM: number;
   here: boolean; user: { lat: number; lng: number; heading?: number | null } | null; status: string;
-  gpsDenied: boolean; meters: number | null;
+  gpsBlocked: boolean; meters: number | null;
   onZoom: (next: number) => void; onLocate: () => void; onNudge: () => void; onEnableGps: () => void;
 }) {
   const { t } = useI18n();
@@ -50,15 +50,16 @@ export function OfficeMap({
   const [focus, setFocus] = useState<Focus>('fit');
   const [heading, setHeading] = useState<number | null>(null);
   const [route, setRoute] = useState<RoutePoint[]>([]);
-  const [routeMeta, setRouteMeta] = useState<{ meters: number; minutes: number } | null>(null);
-  const [size, setSize] = useState({ w: 360, h: 220 });
+  const [etaMin, setEtaMin] = useState<number | null>(null);
+  const [size, setSize] = useState({ w: 360, h: 260 });
   const lastTap = useRef(0);
   const orientReady = useRef(false);
+  const sawUser = useRef(false);
 
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return;
-    const sync = () => setSize({ w: el.clientWidth || 360, h: el.clientHeight || 220 });
+    const sync = () => setSize({ w: el.clientWidth || 360, h: el.clientHeight || 260 });
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
@@ -70,6 +71,13 @@ export function OfficeMap({
       setHeading(normDeg(user.heading));
     }
   }, [user?.heading]);
+
+  useEffect(() => {
+    if (user && !sawUser.current) {
+      sawUser.current = true;
+      setFocus('fit');
+    }
+  }, [user]);
 
   const ensureOrientation = async () => {
     if (orientReady.current) return;
@@ -104,9 +112,9 @@ export function OfficeMap({
   }, []);
 
   useEffect(() => {
-    if (!user || gpsDenied) {
+    if (!user || gpsBlocked) {
       setRoute([]);
-      setRouteMeta(null);
+      setEtaMin(null);
       return;
     }
     const ctrl = new AbortController();
@@ -119,10 +127,10 @@ export function OfficeMap({
           const coords = leg?.geometry?.coordinates;
           if (!leg || !coords?.length) {
             setRoute([{ lat: user.lat, lng: user.lng }, { lat: officeLat, lng: officeLng }]);
-            setRouteMeta(meters != null ? { meters: Math.round(meters), minutes: Math.max(1, Math.round(meters / 80)) } : null);
+            setEtaMin(meters != null ? Math.max(1, Math.round(meters / 80)) : null);
             return;
           }
-          const step = Math.max(1, Math.floor(coords.length / 80));
+          const step = Math.max(1, Math.floor(coords.length / 90));
           const points: RoutePoint[] = [];
           for (let i = 0; i < coords.length; i += step) {
             points.push({ lng: coords[i][0], lat: coords[i][1] });
@@ -132,21 +140,18 @@ export function OfficeMap({
             points.push({ lng: last[0], lat: last[1] });
           }
           setRoute(points);
-          setRouteMeta({
-            meters: Math.round(leg.distance),
-            minutes: Math.max(1, Math.round(leg.duration / 60)),
-          });
+          setEtaMin(Math.max(1, Math.round(leg.duration / 60)));
         })
         .catch(() => {
           setRoute([{ lat: user.lat, lng: user.lng }, { lat: officeLat, lng: officeLng }]);
-          setRouteMeta(meters != null ? { meters: Math.round(meters), minutes: Math.max(1, Math.round(meters / 80)) } : null);
+          setEtaMin(meters != null ? Math.max(1, Math.round(meters / 80)) : null);
         });
-    }, 250);
+    }, 200);
     return () => {
       ctrl.abort();
       window.clearTimeout(timer);
     };
-  }, [user?.lat, user?.lng, officeLat, officeLng, gpsDenied, meters]);
+  }, [user?.lat, user?.lng, officeLat, officeLng, gpsBlocked, meters]);
 
   const far = Boolean(user && meters != null && meters > radiusM * 1.5);
   let z: number;
@@ -162,6 +167,10 @@ export function OfficeMap({
     centerLng = officeLng;
   } else if (user && far) {
     z = zoomToFit(officeLat, officeLng, user.lat, user.lng);
+    centerLat = (officeLat + user.lat) / 2;
+    centerLng = (officeLng + user.lng) / 2;
+  } else if (user) {
+    z = Math.min(18, Math.max(15, zoom));
     centerLat = (officeLat + user.lat) / 2;
     centerLng = (officeLng + user.lng) / 2;
   } else {
@@ -183,16 +192,16 @@ export function OfficeMap({
     }
   }
   const left = `calc(50% - ${(xf - (cx - 1)) * 256}px)`;
-  const top = `calc(46% - ${(yf - (cy - 1)) * 256}px)`;
+  const top = `calc(48% - ${(yf - (cy - 1)) * 256}px)`;
   const mpp = 156543.03392 * Math.cos((centerLat * Math.PI) / 180) / (2 ** z);
-  const radiusPx = Math.max(22, Math.min(160, radiusM / Math.max(mpp, 0.01)));
+  const radiusPx = Math.max(18, Math.min(140, radiusM / Math.max(mpp, 0.01)));
 
   const toPx = (lat: number, lng: number) => {
     const tx = lon2tile(lng, z);
     const ty = lat2tile(lat, z);
     return {
       x: size.w * 0.5 + (tx - xf) * 256,
-      y: size.h * 0.46 + (ty - yf) * 256,
+      y: size.h * 0.48 + (ty - yf) * 256,
     };
   };
   const officeScreen = toPx(officeLat, officeLng);
@@ -208,28 +217,21 @@ export function OfficeMap({
     void ensureOrientation();
     onNudge();
   };
-  const goToOffice = () => {
-    setFocus('office');
-    onLocate();
-  };
-  const goFit = () => setFocus('fit');
-
-  const onMapTap = (event: ReactPointerEvent<HTMLDivElement> | MouseEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest('button')) return;
-    const now = Date.now();
-    if (now - lastTap.current < 350) {
-      event.preventDefault();
-      goToMe();
-      lastTap.current = 0;
-      return;
-    }
-    lastTap.current = now;
-  };
 
   return <div
     ref={mapRef}
     className={`office-map ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}
-    onPointerUp={onMapTap}
+    onPointerUp={(event) => {
+      if ((event.target as HTMLElement).closest('button')) return;
+      const now = Date.now();
+      if (now - lastTap.current < 350) {
+        event.preventDefault();
+        goToMe();
+        lastTap.current = 0;
+        return;
+      }
+      lastTap.current = now;
+    }}
     onDoubleClick={(event) => { event.preventDefault(); goToMe(); }}
   >
     <div className="office-map-tiles" style={{ left, top }}>
@@ -250,13 +252,14 @@ export function OfficeMap({
         left: officeScreen.x,
         top: officeScreen.y,
       }}
+      aria-hidden
     >
-      <i/><i/><span><MapPin size={18}/></span>
+      <i/><i/><span/>
     </div>
     {userScreen && <div
       className={`office-me ${here ? 'is-here' : ''}`}
       style={{ left: userScreen.x, top: userScreen.y }}
-      title={t('office.you')}
+      aria-label={t('office.you')}
     >
       <div className="office-me-nav" aria-hidden>
         <i className="office-me-pulse"/>
@@ -267,35 +270,23 @@ export function OfficeMap({
           </svg>
         </span>
       </div>
-      <b>{t('office.you')}</b>
     </div>}
     <div className={`office-geo-badge ${here ? 'is-here' : user ? 'is-away' : 'is-wait'}`}>{status}</div>
-    {routeMeta && user && !here && <div className="office-route-chip">
+    {etaMin != null && user && !here && <div className="office-route-chip">
       <Navigation size={12}/>
-      {t('office.routeChip', { m: routeMeta.meters, min: routeMeta.minutes })}
+      {t('office.etaChip', { min: etaMin })}
     </div>}
-    {gpsDenied && <div className="office-map-gate">
+    {gpsBlocked && <div className="office-map-gate">
       <Radar size={22}/>
       <b>{t('office.gpsGateTitle')}</b>
       <p>{t('office.gpsGateBody')}</p>
       <button type="button" className="office-map-enable" onClick={(e) => { e.stopPropagation(); onEnableGps(); }}>{t('office.gpsEnable')}</button>
     </div>}
-    {!gpsDenied && <div className="office-map-actions">
-      <button type="button" className={focus === 'me' ? 'is-on' : ''} onClick={(e) => { e.stopPropagation(); goToMe(); }}>
-        <Hand size={14}/> {t('office.toMe')}
-      </button>
-      <button type="button" className={focus === 'fit' ? 'is-on' : ''} onClick={(e) => { e.stopPropagation(); goFit(); }}>
-        <Navigation size={14}/> {t('office.toRoute')}
-      </button>
-    </div>}
     <div className="office-map-tools">
-      <button type="button" onClick={(e) => { e.stopPropagation(); onZoom(Math.min(18, z + 1)); setFocus(prev => prev === 'fit' ? 'office' : prev); }} aria-label="+"><Plus size={16}/></button>
-      <button type="button" onClick={(e) => { e.stopPropagation(); onZoom(Math.max(11, z - 1)); setFocus(prev => prev === 'fit' ? 'office' : prev); }} aria-label="-"><Minus size={16}/></button>
-      <button type="button" className="is-round" onClick={(e) => { e.stopPropagation(); goToOffice(); }} aria-label={t('office.map')}><Crosshair size={16}/></button>
-    </div>
-    <div className="office-map-meta">
-      <b><MapPin size={12}/> {name}</b>
-      <em>{radiusLabel}</em>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onZoom(Math.min(18, z + 1)); setFocus(prev => (prev === 'fit' ? 'office' : prev)); }} aria-label="+"><Plus size={16}/></button>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onZoom(Math.max(11, z - 1)); setFocus(prev => (prev === 'fit' ? 'office' : prev)); }} aria-label="-"><Minus size={16}/></button>
+      <button type="button" className="is-round" onClick={(e) => { e.stopPropagation(); goToMe(); }} aria-label={t('office.toMe')}><LocateFixed size={16}/></button>
+      <button type="button" className="is-round" onClick={(e) => { e.stopPropagation(); setFocus('fit'); onLocate(); }} aria-label={t('office.toRoute')}><Crosshair size={16}/></button>
     </div>
   </div>;
 }

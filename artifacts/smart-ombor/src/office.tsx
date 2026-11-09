@@ -146,14 +146,15 @@ export function OfficePage() {
   }, []);
   useEffect(() => {
     if (!navigator.geolocation) { setGpsState('error'); return; }
+    let cancelled = false;
+    let fails = 0;
     const apply = (pos: GeolocationPosition) => {
-      const accuracy = Number(pos.coords.accuracy);
+      if (cancelled) return;
       if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
-      if (!Number.isFinite(accuracy) || accuracy <= 0) {
-        setGpsState('error');
-        return;
-      }
+      let accuracy = Number(pos.coords.accuracy);
+      if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
       const heading = Number(pos.coords.heading);
+      fails = 0;
       setGps({
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
@@ -161,18 +162,34 @@ export function OfficePage() {
         heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
       });
       setGpsState('ready');
+      setNote('');
     };
     const fail = (err: GeolocationPositionError) => {
-      if (err.code === err.PERMISSION_DENIED) setGpsState('denied');
-      else setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+      if (cancelled) return;
+      if (err.code === err.PERMISSION_DENIED) {
+        setGpsState('denied');
+        return;
+      }
+      fails += 1;
+      // Timeout / temporary GPS miss — keep waiting; only hard-error after several misses with no fix.
+      setGpsState(prev => {
+        if (prev === 'ready') return prev;
+        return fails >= 3 ? 'error' : 'pending';
+      });
     };
     const id = navigator.geolocation.watchPosition(apply, fail, {
-      enableHighAccuracy: true, maximumAge: 2000, timeout: 15000,
+      enableHighAccuracy: true, maximumAge: 5000, timeout: 25000,
     });
-    navigator.geolocation.getCurrentPosition(apply, fail, {
-      enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
-    });
-    return () => navigator.geolocation.clearWatch(id);
+    // Fast first fix (high accuracy), then coarse fallback so map is not stuck.
+    navigator.geolocation.getCurrentPosition(apply, () => {
+      navigator.geolocation.getCurrentPosition(apply, fail, {
+        enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000,
+      });
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 8_000 });
+    return () => {
+      cancelled = true;
+      navigator.geolocation.clearWatch(id);
+    };
   }, []);
   useEffect(() => {
     const perm = (navigator as Navigator & { permissions?: { query: (q: { name: string }) => Promise<{ state: string }> } }).permissions;
@@ -200,10 +217,10 @@ export function OfficePage() {
     ? t('common.loading')
     : gpsState === 'denied'
       ? t('office.gpsNeed')
-      : gpsState === 'pending' || !gps
-        ? t('office.gpsWait')
-        : !gpsAccurate
-          ? t('office.gpsBad', { m: Math.round(gps.accuracy) })
+      : gpsState === 'error' && !gps
+        ? t('office.gpsOff')
+        : !gps
+          ? t('office.gpsWait')
           : inZone
             ? t('office.distHere', { m: Math.round(meters || 0) })
             : t('office.distFar', { m: Math.round(meters || 0) });
@@ -386,35 +403,37 @@ export function OfficePage() {
   const pingGps = () => {
     if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); return; }
     setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        const accuracy = Number(pos.coords.accuracy);
-        if (!Number.isFinite(accuracy) || accuracy <= 0) {
-          setGpsState('error');
-          setNote(t('office.gpsBad', { m: 0 }));
-          return;
-        }
-        const heading = Number(pos.coords.heading);
-        setGps({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy,
-          heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
-        });
-        setGpsState('ready');
-        setNote('');
-      },
-      err => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setGpsState('denied');
-          setNote(t('office.gpsNeed'));
-        } else {
-          setGpsState(prev => (prev === 'ready' ? prev : 'error'));
+    const ok = (pos: GeolocationPosition) => {
+      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
+      let accuracy = Number(pos.coords.accuracy);
+      if (!Number.isFinite(accuracy) || accuracy <= 0) accuracy = 80;
+      const heading = Number(pos.coords.heading);
+      setGps({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy,
+        heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
+      });
+      setGpsState('ready');
+      setNote('');
+    };
+    const bad = (err: GeolocationPositionError) => {
+      if (err.code === err.PERMISSION_DENIED) {
+        setGpsState('denied');
+        setNote(t('office.gpsNeed'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(ok, () => {
+        setGpsState(prev => {
+          if (prev === 'ready') return prev;
           setNote(t('office.gpsOff'));
-        }
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
-    );
+          return 'error';
+        });
+      }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000 });
+    };
+    navigator.geolocation.getCurrentPosition(ok, bad, {
+      enableHighAccuracy: true, maximumAge: 0, timeout: 10_000,
+    });
   };
 
   const ctaNeedCam = !camReady;
@@ -483,10 +502,10 @@ export function OfficePage() {
         </button>
       </div>
       {me && <OfficeMap
-        officeLat={me.office.lat} officeLng={me.office.lng} zoom={zoom} name={me.office.name}
-        radiusM={radiusM} radiusLabel={t('office.radius')}
+        officeLat={me.office.lat} officeLng={me.office.lng} zoom={zoom}
+        radiusM={radiusM}
         here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
-        gpsDenied={gpsState === 'denied'} meters={meters}
+        gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)} meters={meters}
         onZoom={setZoom}
         onLocate={pingGps}
         onNudge={pingGps}
