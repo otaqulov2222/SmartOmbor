@@ -105,9 +105,9 @@ const moreGroups: { key: TKey; hrefs: string[] }[] = [
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const warehouseAllowedHrefs = new Set([
   '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
-  '/scanner', '/recommendations', '/office', '/tasks', '/partners',
+  '/scanner', '/recommendations', '/office', '/office/report', '/office/tasks', '/tasks', '/partners',
 ]);
-const warehousePrimaryHrefs = ['/dashboard', '/partners', '/products', '/stock'];
+const warehousePrimaryHrefs = ['/dashboard', '/partners', '/products', '/stock', '/office'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/scanner', '/receipts', '/transfers', '/inventory', '/tasks', '/recommendations'] },
 ];
@@ -117,6 +117,9 @@ const roleOptions: Array<AppUserRole | 'sales_admin' | 'agent'> = ['super_admin'
 /* ---------- role access ---------- */
 function isDirector(role?: string | null) {
   return role === 'super_admin' || role === 'manager' || role === 'sales_admin';
+}
+function canManageOffice(role?: string | null) {
+  return isDirector(role) || role === 'warehouse_manager';
 }
 function isWarehouse(role?: string | null) {
   return role === 'warehouse_manager' || role === 'warehouse_staff';
@@ -138,7 +141,7 @@ function pathAllowedForRole(path: string, role?: string | null) {
   if (isAgentRole(role)) return path === '/my-kpi' || path === '/office';
   if (isEmployeeCabinet(role)) return path === '/office';
   if (isWarehouse(role)) {
-    if (path === '/office/report' || path === '/office/tasks') return false;
+    if (path === '/office/report' || path === '/office/tasks') return role === 'warehouse_manager';
     return warehouseAllowedHrefs.has(path);
   }
   return true;
@@ -324,6 +327,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
   const role = readLocalSession()?.role || '';
   const director = isDirector(role);
+  const officeManager = canManageOffice(role);
   const warehouse = isWarehouse(role);
   const agent = isAgentRole(role);
   const officeOnly = isEmployeeCabinet(role);
@@ -387,8 +391,8 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             </button>
             {officeOpen && <div className="nav-office-sub">
               {navItem('/office')}
-              {director && navItem('/office/report')}
-              {director && navItem('/office/tasks')}
+              {officeManager && navItem('/office/report')}
+              {officeManager && navItem('/office/tasks')}
             </div>}
             {director && <>
               <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">

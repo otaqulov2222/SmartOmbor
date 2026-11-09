@@ -119,7 +119,12 @@ export function OfficePage() {
   const [history, setHistory] = useState<Punch[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
+  const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'tasks'>('mark');
   const video = useRef<HTMLVideoElement>(null);
+  const markRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const payRef = useRef<HTMLDivElement>(null);
+  const tasksRef = useRef<HTMLDivElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
   const punchKind = useRef<'in' | 'out'>('in');
@@ -144,9 +149,13 @@ export function OfficePage() {
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!navigator.geolocation) { setGpsState('error'); return; }
+    if (!window.isSecureContext || !navigator.geolocation) {
+      setGpsState('error');
+      return;
+    }
     let cancelled = false;
     let fails = 0;
+    let watchId: number | null = null;
     const apply = (pos: GeolocationPosition) => {
       if (cancelled) return;
       if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
@@ -170,24 +179,52 @@ export function OfficePage() {
         return;
       }
       fails += 1;
-      // Timeout / temporary GPS miss — keep waiting; only hard-error after several misses with no fix.
       setGpsState(prev => {
         if (prev === 'ready') return prev;
         return fails >= 3 ? 'error' : 'pending';
       });
     };
-    const id = navigator.geolocation.watchPosition(apply, fail, {
-      enableHighAccuracy: true, maximumAge: 5000, timeout: 25000,
-    });
-    // Fast first fix (high accuracy), then coarse fallback so map is not stuck.
-    navigator.geolocation.getCurrentPosition(apply, () => {
-      navigator.geolocation.getCurrentPosition(apply, fail, {
-        enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000,
+    const startWatch = () => {
+      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+      watchId = navigator.geolocation.watchPosition(apply, fail, {
+        enableHighAccuracy: true, maximumAge: 5000, timeout: 25000,
       });
-    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 8_000 });
+    };
+    const requestFix = () => {
+      navigator.geolocation.getCurrentPosition(apply, () => {
+        navigator.geolocation.getCurrentPosition(apply, fail, {
+          enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000,
+        });
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 });
+    };
+    startWatch();
+    requestFix();
+    const onWake = () => { if (!cancelled) requestFix(); };
+    window.addEventListener('focus', onWake);
+    document.addEventListener('visibilitychange', onWake);
+    const perm = (navigator as Navigator & { permissions?: { query: (q: { name: PermissionName }) => Promise<PermissionStatus> } }).permissions;
+    let permStatus: PermissionStatus | null = null;
+    const onPerm = () => {
+      if (!permStatus) return;
+      if (permStatus.state === 'denied') setGpsState('denied');
+      if (permStatus.state === 'granted') {
+        setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
+        requestFix();
+        startWatch();
+      }
+    };
+    void perm?.query({ name: 'geolocation' as PermissionName }).then(status => {
+      if (cancelled) return;
+      permStatus = status;
+      status.addEventListener('change', onPerm);
+      onPerm();
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
-      navigator.geolocation.clearWatch(id);
+      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+      window.removeEventListener('focus', onWake);
+      document.removeEventListener('visibilitychange', onWake);
+      permStatus?.removeEventListener('change', onPerm);
     };
   }, []);
   useEffect(() => {
@@ -400,8 +437,13 @@ export function OfficePage() {
   };
 
   const pingGps = () => {
-    if (!navigator.geolocation) { setGpsState('error'); setNote(t('office.gpsOff')); return; }
+    if (!window.isSecureContext || !navigator.geolocation) {
+      setGpsState('error');
+      setNote(t('office.gpsOff'));
+      return;
+    }
     setGpsState(prev => (prev === 'ready' ? prev : 'pending'));
+    setNote('');
     const ok = (pos: GeolocationPosition) => {
       if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
       let accuracy = Number(pos.coords.accuracy);
@@ -428,11 +470,17 @@ export function OfficePage() {
           setNote(t('office.gpsOff'));
           return 'error';
         });
-      }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 12_000 });
+      }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000 });
     };
     navigator.geolocation.getCurrentPosition(ok, bad, {
-      enableHighAccuracy: true, maximumAge: 0, timeout: 10_000,
+      enableHighAccuracy: true, maximumAge: 0, timeout: 12_000,
     });
+  };
+
+  const jumpSection = (id: 'mark' | 'history' | 'pay' | 'tasks') => {
+    setSection(id);
+    const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : id === 'pay' ? payRef.current : tasksRef.current;
+    node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const ctaNeedCam = !camReady;
@@ -482,51 +530,70 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className="office-pair">
-        <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
-          <span>
-            <b>{t('office.in')} <Clock size={13}/></b>
-            <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
-            <small>{t('office.plan', { time: me?.office.start || '09:00' })}</small>
-          </span>
-          <LogIn size={18} className="office-go-arrow"/>
-        </button>
-        <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
-          <span>
-            <b>{t('office.out')} <Clock size={13}/></b>
-            <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
-            <small>{t('office.plan', { time: me?.office.end || '18:00' })}</small>
-          </span>
-          <LogOut size={18} className="office-go-arrow"/>
+      <div className="office-sections" role="tablist" aria-label={t('nav.office')}>
+        <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
+        <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
+        <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
+        {!me?.director && <button type="button" role="tab" aria-selected={section === 'tasks'} className={section === 'tasks' ? 'is-on' : ''} onClick={() => jumpSection('tasks')}>{t('office.sectionTasks')}</button>}
+        {me?.director && <Link href="/office/report" className="office-sections-link">{t('office.report')}</Link>}
+        {me?.director && <Link href="/office/tasks" className="office-sections-link">{t('nav.officeTasks')}</Link>}
+      </div>
+      <div ref={markRef} id="office-mark" className="office-block">
+        <div className="office-pair">
+          <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
+            <span>
+              <b>{t('office.in')} <Clock size={13}/></b>
+              <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
+              <small>{t('office.plan', { time: me?.office.start || '09:00' })}</small>
+            </span>
+            <LogIn size={18} className="office-go-arrow"/>
+          </button>
+          <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
+            <span>
+              <b>{t('office.out')} <Clock size={13}/></b>
+              <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
+              <small>{t('office.plan', { time: me?.office.end || '18:00' })}</small>
+            </span>
+            <LogOut size={18} className="office-go-arrow"/>
+          </button>
+        </div>
+        {(gpsState === 'denied' || (gpsState === 'error' && !gps) || (gpsState === 'pending' && !gps)) && (
+          <div className={`office-gps-banner ${gpsState === 'pending' ? 'is-wait' : 'is-bad'}`}>
+            <div>
+              <b>{gpsState === 'pending' ? t('office.gpsWait') : gpsState === 'denied' ? t('office.gpsNeed') : t('office.gpsOff')}</b>
+              <p>{t('office.gpsBannerBody')}</p>
+            </div>
+            <button type="button" onClick={pingGps}>{t('office.gpsEnable')}</button>
+          </div>
+        )}
+        {me && <OfficeMap
+          officeLat={me.office.lat} officeLng={me.office.lng}
+          radiusM={radiusM}
+          here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
+          gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)} meters={meters}
+          onNudge={pingGps}
+          onEnableGps={pingGps}
+        />}
+        {ok && <p className="office-ok">{ok}</p>}
+        {note && !camDenied && <p className="office-warn">{note}</p>}
+        <h2>{t('office.method')}</h2>
+        <p className="lead">{t('office.methodBody')}</p>
+        <div className="office-methods">
+          <button type="button" className={`office-method ${method === 'face' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('face'); }}>
+            <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
+            <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
+          </button>
+          <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
+            <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
+            <b>QR Scanner</b><small>{t('office.qrHint')}</small>
+          </button>
+        </div>
+        <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
+          <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
+          <small>{!canPunch ? geoStatus : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
         </button>
       </div>
-      {me && <OfficeMap
-        officeLat={me.office.lat} officeLng={me.office.lng}
-        radiusM={radiusM}
-        here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
-        gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)} meters={meters}
-        onNudge={pingGps}
-        onEnableGps={pingGps}
-      />}
-      {ok && <p className="office-ok">{ok}</p>}
-      {note && !camDenied && <p className="office-warn">{note}</p>}
-      <h2>{t('office.method')}</h2>
-      <p className="lead">{t('office.methodBody')}</p>
-      <div className="office-methods">
-        <button type="button" className={`office-method ${method === 'face' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('face'); }}>
-          <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
-          <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
-        </button>
-        <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
-          <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
-          <b>QR Scanner</b><small>{t('office.qrHint')}</small>
-        </button>
-      </div>
-      <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
-        <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
-        <small>{!canPunch ? geoStatus : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
-      </button>
-      <div className="office-card">
+      <div ref={historyRef} id="office-history" className="office-card office-block">
         <div className="office-card-top">
           <div className="office-card-title">
             <span className="is-clock"><Clock size={16}/></span>
@@ -538,7 +605,7 @@ export function OfficePage() {
         </div>
         {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
       </div>
-      <div className="office-card">
+      <div ref={payRef} id="office-pay" className="office-card office-block">
         <div className="office-card-top">
           <div className="office-card-title">
             <span className="is-pay"><Wallet size={16}/></span>
@@ -556,7 +623,7 @@ export function OfficePage() {
         </div>
         {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
       </div>
-      {!me?.director && <>
+      {!me?.director && <div ref={tasksRef} id="office-tasks" className="office-block">
         <h2>{t('office.myTasks')}</h2>
         <p className="lead">{t('office.tasksBody')}</p>
         {ownTasks.length ? ownTasks.map(task => {
@@ -579,8 +646,7 @@ export function OfficePage() {
             </div>
           </article>;
         }) : <p className="office-empty">{t('office.noTasks')}</p>}
-      </>}
-      {me?.director && <Link href="/office/report" className="office-report">{t('office.report')}</Link>}
+      </div>}
     </div>
     {stage && <div className="office-stage">
       <video ref={video} className="is-on" playsInline muted autoPlay/>

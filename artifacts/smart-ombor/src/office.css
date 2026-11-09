@@ -20,15 +20,52 @@
   margin: 0 auto;
   background: var(--o-bg);
   color: var(--o-ink);
-  padding: 0 0 28px;
+  padding: 0 0 48px;
   border-radius: 24px;
   box-shadow: 0 20px 50px rgb(15 23 42 / .18);
-  overflow: hidden;
+  overflow: visible;
+}
+.office-hero { overflow: hidden; border-radius: 24px 24px 0 0; }
+.office-sections {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px;
+  position: sticky; top: 0; z-index: 12;
+  margin: 0 0 12px; padding: 6px;
+  background: rgb(7 17 31 / .92); border: 1px solid var(--o-line);
+  border-radius: 14px; backdrop-filter: blur(10px);
+}
+.office-sections button, .office-sections-link {
+  border: 0; border-radius: 10px; padding: 9px 6px;
+  font-size: .76rem; font-weight: 700; color: #94a3b8;
+  background: transparent; text-align: center; text-decoration: none;
+}
+.office-sections button.is-on {
+  background: #2563eb; color: #fff;
+  box-shadow: 0 6px 16px rgb(37 99 235 / .35);
+}
+.office-sections-link {
+  background: #13233f; color: #93c5fd;
+}
+.office-block { scroll-margin-top: 64px; }
+.office-gps-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-radius: 16px; padding: 12px; margin-bottom: 10px;
+  border: 1px solid transparent;
+}
+.office-gps-banner.is-bad {
+  background: #451a1a; border-color: rgb(248 113 113 / .35); color: #fecaca;
+}
+.office-gps-banner.is-wait {
+  background: #0f2744; border-color: rgb(96 165 250 / .3); color: #bfdbfe;
+}
+.office-gps-banner b { display: block; font-size: .88rem; }
+.office-gps-banner p { margin: 3px 0 0; font-size: .76rem; opacity: .9; }
+.office-gps-banner button {
+  flex: none; border: 0; border-radius: 999px; padding: 10px 14px;
+  background: linear-gradient(135deg, #f97316, #ea580c); color: #fff; font-weight: 800;
 }
 .office * { box-sizing: border-box; }
 .office-hero {
   position: relative;
-  overflow: hidden;
   min-height: 248px;
   padding: 14px 16px 86px;
 }
@@ -386,7 +423,12 @@
   .office-body { padding: 0 12px; }
   .office-methods, .office-pair { gap: 8px; }
   .office-cam { min-height: 3.1rem; }
-  .office-map { height: 200px; }
+  .office-map { height: 260px; }
+  .office-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .office {
+    border-radius: 0; padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+  .office-hero { border-radius: 0; }
   .office-card-top { flex-wrap: wrap; }
   .office-tabs { flex-wrap: wrap; }
   .office-stage-top { top: calc(12px + env(safe-area-inset-top)); }

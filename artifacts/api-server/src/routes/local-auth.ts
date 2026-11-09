@@ -223,7 +223,12 @@ export function requireOfficeDirector(req: Request, res: Response): Account | nu
     res.status(401).json({ error: "invalid" });
     return null;
   }
-  if (current.role !== "super_admin" && current.role !== "manager") {
+  if (
+    current.role !== "super_admin"
+    && current.role !== "manager"
+    && current.role !== "sales_admin"
+    && current.role !== "warehouse_manager"
+  ) {
     res.status(403).json({ error: "forbidden" });
     return null;
   }
