@@ -119,7 +119,6 @@ export function OfficePage() {
   const [history, setHistory] = useState<Punch[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
-  const [zoom, setZoom] = useState(16);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
@@ -502,12 +501,10 @@ export function OfficePage() {
         </button>
       </div>
       {me && <OfficeMap
-        officeLat={me.office.lat} officeLng={me.office.lng} zoom={zoom}
+        officeLat={me.office.lat} officeLng={me.office.lng}
         radiusM={radiusM}
         here={inZone} user={gps ? { lat: gps.lat, lng: gps.lng, heading: gps.heading } : null} status={geoStatus}
         gpsBlocked={gpsState === 'denied' || (gpsState === 'error' && !gps)} meters={meters}
-        onZoom={setZoom}
-        onLocate={pingGps}
         onNudge={pingGps}
         onEnableGps={pingGps}
       />}
