@@ -4,12 +4,12 @@ import type { Cell, Sheet } from '@/lib/xlsx';
 export type ExportKind =
   | 'dashboard' | 'products' | 'stock' | 'warehouses' | 'receipts' | 'transfers'
   | 'inventory' | 'documents' | 'sales' | 'nonMoving' | 'factories' | 'branches' | 'recommendations'
-  | 'audit' | 'tasks';
+  | 'audit';
 
 export type Period = 'today' | 'days7' | 'thisMonth' | 'all';
 export type ExportFormat = 'xlsx' | 'pdf';
 
-export const PERIOD_KINDS: ExportKind[] = ['dashboard', 'receipts', 'transfers', 'inventory', 'documents', 'sales', 'audit', 'tasks'];
+export const PERIOD_KINDS: ExportKind[] = ['dashboard', 'receipts', 'transfers', 'inventory', 'documents', 'sales', 'audit'];
 
 type Product = {
   id: string; name: string; code: string | null; article: string | null; barcodes: string[];
@@ -133,7 +133,6 @@ export const KIND_META: Record<ExportKind, { title: TKey; detail: TKey; period: 
   branches: { title: 'report.branches', detail: 'reports.line.branches', period: false },
   recommendations: { title: 'report.recommendations', detail: 'reports.line.recommendations', period: false },
   audit: { title: 'report.audit', detail: 'reports.line.audit', period: true },
-  tasks: { title: 'report.tasks', detail: 'reports.line.tasks', period: true },
 };
 
 function productRow(lang: Lang, p: Product): Cell[] {
@@ -268,10 +267,6 @@ export async function buildReport(kind: ExportKind, period: Period, lang: Lang):
     const rows = items.filter(e => inPeriod(e.createdAt, period));
     sheets.push(sheet(t(lang, 'report.audit'), [t(lang, 'audit.col.time'), t(lang, 'common.action'), t(lang, 'audit.col.object'), t(lang, 'audit.col.actor'), t(lang, 'audit.col.details')],
       rows.map(e => [formatDateTime(e.createdAt), e.action, `${e.entityType} ${e.entityId || ''}`.trim(), e.actor, e.details || ''])));
-  } else if (kind === 'tasks') {
-    const items = await getJson<Array<{ id: string; title: string; description: string | null; status: string; priority: string; assignedTo: string | null; dueDate: string | null }>>('/api/tasks') || [];
-    sheets.push(sheet(t(lang, 'report.tasks'), [t(lang, 'tasks.name'), t(lang, 'common.status'), t(lang, 'col.priority'), t(lang, 'col.assignee'), t(lang, 'col.dueDate'), t(lang, 'col.description')],
-      items.map(x => [x.title, status(lang, x.status), status(lang, x.priority), x.assignedTo || '', formatDate(x.dueDate), x.description || ''])));
   }
 
   const rowCount = sheets.reduce((sum, s) => sum + s.rows.length, 0);

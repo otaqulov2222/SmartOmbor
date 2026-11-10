@@ -5,13 +5,11 @@ import {
   OFFICE_LAT,
   OFFICE_LNG,
   OFFICE_RADIUS_M,
-  createOfficeTask,
   currentQrToken,
   enrollFace,
   faceEnrolled,
   fiksaOf,
   insideOffice,
-  listOfficeTasks,
   officeDistance,
   punch,
   punchesFor,
@@ -22,7 +20,6 @@ import {
   tabelRange,
   todayBoard,
   todayPunch,
-  updateOfficeTask,
   workedMs,
 } from "../lib/office";
 
@@ -185,65 +182,6 @@ router.get("/office/people", (req, res) => {
   res.json({
     items: listLocalPeople(),
   });
-});
-
-router.get("/office/tasks", (req, res) => {
-  const user = requireLocalUser(req, res);
-  if (!user) return;
-  const director = directorOf(user.role);
-  const people = listLocalPeople();
-  const names = new Map(people.map((row) => [row.id, row.name]));
-  res.json({
-    items: listOfficeTasks(user.id, director).map((task) => ({
-      ...task,
-      assignees: task.assignedTo.map((id) => ({ id, name: names.get(id) || id })),
-      late: task.status !== "done" && `${task.dueDate} ${task.dueTime}` < `${tashkentParts().date} ${tashkentParts().hm}`,
-    })),
-  });
-});
-
-router.post("/office/tasks", (req, res) => {
-  const user = requireOfficeDirector(req, res);
-  if (!user) return;
-  try {
-    const known = new Set(listLocalPeople().map((row) => row.id));
-    const assigned = (Array.isArray(req.body?.assignedTo) ? req.body.assignedTo.map((id: unknown) => String(id)) : [String(req.body?.assignedTo ?? "")]).filter((id: string) => known.has(id));
-    const task = createOfficeTask({
-      title: String(req.body?.title ?? ""),
-      description: String(req.body?.description ?? ""),
-      assignedTo: assigned,
-      dueDate: String(req.body?.dueDate ?? ""),
-      dueTime: String(req.body?.dueTime ?? "18:00"),
-      priority: String(req.body?.priority ?? "normal") as "low" | "normal" | "high" | "urgent",
-      remind: req.body?.remind == null ? undefined : Boolean(req.body.remind),
-      remindBefore: String(req.body?.remindBefore ?? ""),
-      recurring: String(req.body?.recurring ?? ""),
-      acceptDeadline: Boolean(req.body?.acceptDeadline),
-      visibility: String(req.body?.visibility ?? "shared"),
-      comment: String(req.body?.comment ?? ""),
-      createdBy: user.id,
-      splitAssignees: req.body?.splitAssignees !== false,
-    });
-    res.status(201).json(Array.isArray(task) ? { items: task, item: task[0] } : task);
-  } catch (error) {
-    const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
-    res.status(status).json({ error: error instanceof Error ? error.message : "task" });
-  }
-});
-
-router.patch("/office/tasks/:id", (req, res) => {
-  const user = requireLocalUser(req, res);
-  if (!user) return;
-  try {
-    const task = updateOfficeTask(String(req.params.id), user.id, directorOf(user.role), {
-      status: req.body?.status,
-      note: req.body?.note,
-    });
-    res.json(task);
-  } catch (error) {
-    const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
-    res.status(status).json({ error: error instanceof Error ? error.message : "task" });
-  }
 });
 
 export default router;

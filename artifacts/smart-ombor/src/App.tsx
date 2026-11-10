@@ -6,22 +6,22 @@ import { shadcn } from '@clerk/themes';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, ArrowRight, Banknote, BarChart3, Box, ChartColumn,
-  CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck, ClipboardList,
+  CheckCheck, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert, ClipboardCheck,
   Clock3, Eye, EyeOff, Factory, FileBarChart, FileText, Filter, Fingerprint, Gauge, Handshake, LayoutDashboard, ListChecks, LogOut, MapPin, Menu, MoreHorizontal, Repeat,
   Layers, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, ScanBarcode, SlidersHorizontal,
-  UserRound, Users, Wallet, Warehouse, X,
+  Users, Wallet, Warehouse, X,
 } from 'lucide-react';
 import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useSearch } from 'wouter';
 import {
-  getGetDashboardQueryKey, getGetMoyskladStatusQueryKey, getListTasksQueryKey, getListUsersQueryKey,
-  useCreateTask, useGetCurrentUser, useGetDashboard,
+  getGetDashboardQueryKey, getGetMoyskladStatusQueryKey, getListUsersQueryKey,
+  useGetCurrentUser, useGetDashboard,
   useGetMoyskladStatus, useGetNonMovingProducts, useGetPurchaseRecommendations, useGetSalesAnalytics,
-  useListAuditEvents, useListDocuments, useListProducts, useListStock, useListTasks, useListUsers,
-  useListWarehouses, useUpdateTask,
+  useListAuditEvents, useListDocuments, useListProducts, useListStock, useListUsers,
+  useListWarehouses,
   useUpdateUserRole,
 } from '@workspace/api-client-react';
 import type {
-  AppUserRole, Product, Task, TaskInputPriority,
+  AppUserRole, Product,
 } from '@workspace/api-client-react';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import { I18nProvider, useI18n, weekdayShort, formatShortDay, type Lang, type TKey } from '@/i18n';
@@ -30,7 +30,6 @@ import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { OfficePage } from '@/office';
 import { OfficeReportPage } from '@/office-report';
-import { OfficeTasksPage } from '@/office-tasks';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
@@ -68,14 +67,12 @@ const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
   { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
   { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
-  { key: 'nav.officeTasks', href: '/office/tasks', icon: ClipboardList, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
   { key: 'nav.scanner', href: '/scanner', icon: ScanBarcode, group: 'nav.group.workspace' },
   { key: 'nav.receipts', href: '/receipts', icon: ArrowDownLeft, group: 'nav.group.operations' },
   { key: 'nav.transfers', href: '/transfers', icon: ArrowLeftRight, group: 'nav.group.operations' },
   { key: 'nav.inventory', href: '/inventory', icon: ClipboardCheck, group: 'nav.group.operations' },
-  { key: 'nav.tasks', href: '/tasks', icon: ClipboardList, group: 'nav.group.operations' },
   { key: 'nav.analytics', href: '/analytics', icon: BarChart3, group: 'nav.group.analytics' },
   { key: 'nav.nonMoving', href: '/non-moving', icon: Clock3, group: 'nav.group.analytics' },
   { key: 'nav.factories', href: '/factories', icon: Factory, group: 'nav.group.analytics' },
@@ -96,20 +93,20 @@ const navigation: NavItem[] = [
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
 const primaryHrefs = ['/dashboard', '/gps', '/employees', '/products', '/partners'];
-const officeHrefs = ['/office', '/office/report', '/office/tasks'];
+const officeHrefs = ['/office', '/office/report'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory', '/tasks'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory'] },
   { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const warehouseAllowedHrefs = new Set([
   '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
-  '/scanner', '/recommendations', '/office', '/office/report', '/office/tasks', '/tasks', '/partners',
+  '/scanner', '/recommendations', '/office', '/office/report', '/partners',
 ]);
 const warehousePrimaryHrefs = ['/dashboard', '/partners', '/products', '/stock', '/office'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/scanner', '/receipts', '/transfers', '/inventory', '/tasks', '/recommendations'] },
+  { key: 'nav.more.warehouse', hrefs: ['/scanner', '/receipts', '/transfers', '/inventory', '/recommendations'] },
 ];
 const agentPrimaryHrefs = ['/my-kpi', '/office'];
 const roleOptions: Array<AppUserRole | 'sales_admin' | 'agent'> = ['super_admin', 'manager', 'sales_admin', 'agent', 'warehouse_manager', 'warehouse_staff', 'analyst'];
@@ -392,7 +389,6 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {officeOpen && <div className="nav-office-sub">
               {navItem('/office')}
               {officeManager && navItem('/office/report')}
-              {officeManager && navItem('/office/tasks')}
             </div>}
             {director && <>
               <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
@@ -1312,24 +1308,6 @@ function InventoryPage() {
   </>;
 }
 
-/* ---------- tasks ---------- */
-function TasksPage() {
-  const { t, date } = useI18n(); const roleLabel = useRole(); const statusLabel = useStatusLabel();
-  const [filter, setFilter] = useState('all'); const params = useMemo(() => ({ status: filter as 'all'|'open'|'in_progress'|'done' }), [filter]); const q = useListTasks(params); const users = useListUsers(); const create = useCreateTask(); const update = useUpdateTask(); const cache = useQueryClient();
-  const [form, setForm] = useState(false); const [title, setTitle] = useState(''); const [description, setDescription] = useState(''); const [assignedTo, setAssigned] = useState(''); const [priority, setPriority] = useState<TaskInputPriority>('normal');
-  const invalidate = () => { void cache.invalidateQueries({ queryKey: getListTasksQueryKey() }); };
-  const submit = () => create.mutate({ data: { title: title.trim(), description: description || null, assignedTo: assignedTo || null, dueDate: null, priority } }, { onSuccess: () => { invalidate(); setTitle(''); setDescription(''); setForm(false); } });
-  const lanes: Task['status'][] = ['open', 'in_progress', 'done'];
-  const priorityLabel = (p: string) => p === 'low' ? t('status.low_priority') : statusLabel(p);
-  return <>
-    <PageHead title={t('tasks.title')} subtitle={t('tasks.sub')} actions={<><ExportButton kind="tasks"/><Button testId="button-new-task" onClick={() => setForm(!form)}><Plus size={16}/>{t('tasks.add')}</Button></>}/>
-    <div className="tabs">{['all', 'open', 'in_progress', 'done'].map(s => <button key={s} className={filter === s ? 'is-active' : ''} onClick={() => setFilter(s)} data-testid={`filter-task-${s}`}>{s === 'all' ? t('common.all') : statusLabel(s)}</button>)}</div>
-    {form && <Card title={t('tasks.form')} meta={t('tasks.form.meta')}><div className="form-grid"><Field label={t('tasks.name')} testId="field-task-title"><TextInput testId="input-task-title" value={title} onChange={e => setTitle(e.target.value)} placeholder={t('tasks.namePlaceholder')}/></Field><Field label={t('tasks.assignee')} testId="field-task-assigned"><SelectInput value={assignedTo} onChange={setAssigned} testId="select-task-assignee"><option value="">{t('tasks.noAssignee')}</option>{users.data?.map(u => <option key={u.id} value={u.id}>{u.name} · {roleLabel(u.role)}</option>)}</SelectInput></Field><Field label={t('tasks.priority')} testId="field-task-priority"><SelectInput value={priority} onChange={v => setPriority(v as TaskInputPriority)} testId="select-task-priority"><option value="low">{t('status.low_priority')}</option><option value="normal">{t('status.normal')}</option><option value="high">{t('status.high')}</option><option value="urgent">{t('status.urgent')}</option></SelectInput></Field><Field label={t('common.comment')} testId="field-task-description"><TextInput testId="input-task-description" value={description} onChange={e => setDescription(e.target.value)} placeholder={t('tasks.descriptionPlaceholder')}/></Field></div><div className="form-actions"><Button variant="ghost" testId="button-cancel-task" onClick={() => setForm(false)}>{t('common.cancel')}</Button><Button testId="button-submit-task" disabled={!title.trim() || create.isPending} onClick={submit}>{create.isPending ? t('common.saving') : t('tasks.create')}</Button></div>{create.error && <Notice kind="error" title={t('tasks.createFailed')} testId="status-create-task-error">{create.error instanceof Error ? create.error.message : t('common.tryAgain')}</Notice>}</Card>}
-    <QueryError q={q} id="tasks"/>
-    {q.isLoading ? <LoadingRows count={5}/> : q.data?.length ? <div className="board">{(filter === 'all' ? lanes : [filter as Task['status']]).map(lane => { const tasks = q.data!.filter(x => x.status === lane); return <div className="lane" key={lane} data-testid={`task-lane-${lane}`}><div className="lane-head"><span><i className={`dot lane-${lane}`}/>{statusLabel(lane)}</span><b>{tasks.length}</b></div>{tasks.map(task => <article className="card task" key={task.id} data-testid={`card-task-${task.id}`}><div className="task-top"><span className={`badge badge-${task.priority}`}>{priorityLabel(task.priority)}</span><span className="muted">{date(task.dueDate)}</span></div><b>{task.title}</b><p className="muted">{task.description || t('tasks.noDescription')}</p><div className="task-bottom"><span className="muted"><UserRound size={14}/>{users.data?.find(u => u.id === task.assignedTo)?.name || t('tasks.unassigned')}</span><SelectInput value={task.status} onChange={v => update.mutate({ id: task.id, data: { status: v as Task['status'] } }, { onSuccess: invalidate })} testId={`select-task-status-${task.id}`}>{lanes.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</SelectInput></div></article>)}</div>; })}</div> : <EmptyState title={t('tasks.empty.title')} body={t('tasks.empty.body')} icon={ClipboardList}/>}
-  </>;
-}
-
 /* ---------- reports ---------- */
 function ReportsPage() {
   const { t } = useI18n();
@@ -1662,9 +1640,9 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/kpi/settings', titleKey: 'nav.kpiSettings', element: <KpiSettingsPage/> },
   { path: '/inventory', titleKey: 'nav.inventory', element: <InventoryPage/> },
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
-  { path: '/tasks', titleKey: 'nav.tasks', element: <TasksPage/> },
+  { path: '/tasks', titleKey: 'nav.dashboard', element: <Redirect to="/dashboard"/> },
   { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
-  { path: '/office/tasks', titleKey: 'nav.officeTasks', element: <OfficeTasksPage/> },
+  { path: '/office/tasks', titleKey: 'nav.office', element: <Redirect to="/office"/> },
   { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
   { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },

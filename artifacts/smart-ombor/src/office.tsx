@@ -15,11 +15,6 @@ type Me = {
   office: { name: string; lat: number; lng: number; radiusM: number; accuracyM: number; start: string; end: string };
   clock: string; date: string; today: Punch | null; fiksa: number;
 };
-type Task = {
-  id: string; title: string; description: string; dueDate: string; dueTime: string; priority: string;
-  status: 'assigned' | 'accepted' | 'progress' | 'review' | 'done'; assignees: Array<{ id: string; name: string }>; late?: boolean;
-};
-
 const SESSION = 'smart-ombor-session';
 const QR_HINTS = new Map<DecodeHintType, unknown>([[DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]]]);
 
@@ -117,14 +112,12 @@ export function OfficePage() {
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<'day' | 'week' | 'month'>('week');
   const [history, setHistory] = useState<Punch[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [payOpen, setPayOpen] = useState(false);
-  const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'tasks'>('mark');
+  const [section, setSection] = useState<'mark' | 'history' | 'pay'>('mark');
   const video = useRef<HTMLVideoElement>(null);
   const markRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const payRef = useRef<HTMLDivElement>(null);
-  const tasksRef = useRef<HTMLDivElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
   const punchKind = useRef<'in' | 'out'>('in');
@@ -138,12 +131,7 @@ export function OfficePage() {
     const response = await fetch(`/api/office/history?range=${next}`, { headers: officeHeaders() });
     if (response.ok) setHistory((await response.json() as { items: Punch[] }).items);
   };
-  const loadTasks = async () => {
-    const response = await fetch('/api/office/tasks', { headers: officeHeaders() });
-    if (response.ok) setTasks((await response.json() as { items: Task[] }).items);
-  };
-
-  useEffect(() => { void loadMe(); void loadHistory(); void loadTasks(); }, []);
+  useEffect(() => { void loadMe(); void loadHistory(); }, []);
   useEffect(() => {
     const id = window.setInterval(() => setClock(tashkentClock()), 1000);
     return () => window.clearInterval(id);
@@ -473,24 +461,19 @@ export function OfficePage() {
     await startCam(next);
   };
 
-  const patchTask = async (id: string, status: 'accepted' | 'progress' | 'done') => {
-    await fetch(`/api/office/tasks/${id}`, { method: 'PATCH', headers: officeHeaders(), body: JSON.stringify({ status }) });
-    await loadTasks();
-  };
 
   const pingGps = () => {
     setNote('');
     requestGpsFix(true);
   };
 
-  const jumpSection = (id: 'mark' | 'history' | 'pay' | 'tasks') => {
+  const jumpSection = (id: 'mark' | 'history' | 'pay') => {
     setSection(id);
-    const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : id === 'pay' ? payRef.current : tasksRef.current;
+    const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : payRef.current;
     node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const ctaNeedCam = !camReady;
-  const ownTasks = tasks;
   const endHour = Number((me?.office.end || '18:00').slice(0, 2)) || 18;
   const hourNow = Number(clock.slice(0, 2));
   const night = hourNow >= endHour || hourNow < 6;
@@ -536,11 +519,10 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className={`office-sections ${me?.director ? 'is-3' : 'is-4'}`} role="tablist" aria-label={t('nav.office')}>
+      <div className="office-sections is-3" role="tablist" aria-label={t('nav.office')}>
         <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
         <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
         <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
-        {!me?.director && <button type="button" role="tab" aria-selected={section === 'tasks'} className={section === 'tasks' ? 'is-on' : ''} onClick={() => jumpSection('tasks')}>{t('office.sectionTasks')}</button>}
       </div>
       <div ref={markRef} id="office-mark" className="office-block">
         <div className="office-pair">
@@ -623,30 +605,6 @@ export function OfficePage() {
         </div>
         {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
       </div>
-      {!me?.director && <div ref={tasksRef} id="office-tasks" className="office-block">
-        <h2>{t('office.myTasks')}</h2>
-        <p className="lead">{t('office.tasksBody')}</p>
-        {ownTasks.length ? ownTasks.map(task => {
-          const statusKey = task.status === 'assigned' ? 'office.stNew' : task.status === 'accepted' ? 'office.stAccepted' : task.status === 'progress' ? 'office.stProgress' : task.status === 'review' ? 'office.stReview' : 'office.colDone';
-          const prioKey = task.priority === 'low' ? 'office.pLow' : task.priority === 'high' ? 'office.pHigh' : task.priority === 'urgent' ? 'office.pNow' : 'office.pMid';
-          return <article className={`office-task is-${task.priority}${task.late ? ' is-late' : ''}`} key={task.id}>
-            <div className="office-task-top">
-              <span className={`office-pill is-${task.priority}`}>{t(prioKey as TKey)}</span>
-              <span className={`office-pill is-${task.status}`}>{t(statusKey as TKey)}</span>
-            </div>
-            <b>{task.title}</b>
-            <p>{task.description || t('office.noDesc')}</p>
-            <small className="lead">{date(task.dueDate)} {task.dueTime}{task.late ? ` · ${t('office.late')}` : ''}</small>
-            <div className="office-task-actions">
-              {task.status === 'assigned' && <button type="button" onClick={() => void patchTask(task.id, 'accepted')}>{t('office.accept')}</button>}
-              {task.status === 'accepted' && <button type="button" onClick={() => void patchTask(task.id, 'progress')}>{t('office.start')}</button>}
-              {(task.status === 'accepted' || task.status === 'progress') && <button type="button" onClick={() => void patchTask(task.id, 'done')}>{t('office.done')}</button>}
-              {task.status === 'review' && <span className="office-ok">{t('office.waitingReview')}</span>}
-              {task.status === 'done' && <span className="office-ok">{t('office.finished')}</span>}
-            </div>
-          </article>;
-        }) : <p className="office-empty">{t('office.noTasks')}</p>}
-      </div>}
     </div>
     {stage && <div className="office-stage">
       <video ref={video} className="is-on" playsInline muted autoPlay/>
