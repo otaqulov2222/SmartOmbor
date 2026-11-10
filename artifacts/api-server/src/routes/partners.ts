@@ -274,7 +274,12 @@ router.get("/partner-factories/:id", async (req, res, next) => {
 });
 
 function lineUnits(line: { pairs: number; boxes: number; quantity: number; colors: Array<{ name?: string; quantity: number }> }) {
-  return pieceCount(line);
+  return pieceCount({
+    pairs: line.pairs,
+    boxes: line.boxes,
+    quantity: line.quantity,
+    colors: (line.colors ?? []).map((color) => ({ name: color.name || "", quantity: color.quantity })),
+  });
 }
 
 function kopecks(som: number) {
@@ -1208,7 +1213,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
         res.status(bad ? 400 : 502).json(payload);
         return;
       }
-      res.json({ pending: false, ...payload });
+      const { pending: _pending, ...rest } = payload as { pending?: boolean } & Record<string, unknown>;
+      res.json({ pending: false, ...rest });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 40));
