@@ -387,25 +387,82 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   return wrote > 0;
 }
 
-/** Kirim yozilgach MS dagi miqdor yuborilgan bilan bir xil ekanini tekshiradi. */
-async function verifySupplyQuantities(supplyId: string, expectedTotal: number) {
+/**
+ * HARD GUARD: MoySklad kirim = yuk xati (orta/ortiqcha/kam — hech qaysisi yo‘q).
+ * - jami dona
+ * - qatorlar soni
+ * - miqdorlar to‘plami (sorted multiset)
+ */
+async function verifySupplyQuantities(
+  supplyId: string,
+  expectedPositions: Array<{ quantity: number }>,
+) {
+  const expectedQty = expectedPositions.map((item) => Math.round(Number(item.quantity) || 0));
+  if (!expectedQty.length || expectedQty.some((qty) => !(qty > 0))) {
+    throw Object.assign(new Error("qty_mismatch"), {
+      status: 500,
+      detail: "Kirim rejasi bo‘sh yoki noldan miqdor bor. Kirim yozilmadi.",
+    });
+  }
+  const expectedTotal = expectedQty.reduce((sum, qty) => sum + qty, 0);
   const page = await moyskladAll<{ id: string; quantity?: number }>(
     `/entity/supply/${encodeURIComponent(supplyId)}/positions`,
   );
-  const actual = page.rows.reduce((sum, row) => sum + Math.round(Number(row.quantity) || 0), 0);
-  const expected = Math.round(expectedTotal);
-  if (actual !== expected) {
+  const actualQty = page.rows.map((row) => Math.round(Number(row.quantity) || 0));
+  const actualTotal = actualQty.reduce((sum, qty) => sum + qty, 0);
+  const sameCount = actualQty.length === expectedQty.length;
+  const sameTotal = actualTotal === expectedTotal;
+  const sortedExp = [...expectedQty].sort((a, b) => a - b);
+  const sortedAct = [...actualQty].sort((a, b) => a - b);
+  const sameBag = sameCount && sortedExp.every((qty, index) => qty === sortedAct[index]);
+  if (!sameCount || !sameTotal || !sameBag) {
+    logger.error({
+      supplyId,
+      expectedTotal,
+      actualTotal,
+      expectedCount: expectedQty.length,
+      actualCount: actualQty.length,
+      expectedQty: sortedExp,
+      actualQty: sortedAct,
+    }, "MoySklad kirim qty exact verify failed");
     throw Object.assign(
       new Error("qty_mismatch"),
       {
         status: 502,
-        detail: `MoySklad miqdori mos kelmadi: yuborilgan ${expected} dona, MS da ${actual} dona. Kirim bekor qilindi.`,
-        expected,
-        actual,
+        detail: `MoySklad ≠ yuk xati: yuborilgan ${expectedTotal} dona / ${expectedQty.length} qator, MS da ${actualTotal} dona / ${actualQty.length} qator. Kirim bekor qilindi.`,
+        expected: expectedTotal,
+        actual: actualTotal,
       },
     );
   }
-  return actual;
+  return actualTotal;
+}
+
+async function assertSupplyMatchesOrRollback(
+  supplyId: string,
+  expectedPositions: Array<{ quantity: number }>,
+  meta: { shipmentId: string; allowDelete: boolean },
+) {
+  try {
+    return await verifySupplyQuantities(supplyId, expectedPositions);
+  } catch (error) {
+    logger.error({
+      shipment: meta.shipmentId,
+      supply: supplyId,
+      err: error instanceof Error ? error.message : error,
+    }, "MoySklad kirim qty verify failed — rolling back");
+    if (meta.allowDelete) {
+      try {
+        await deleteSupplyDocument(supplyId);
+      } catch (rollbackErr) {
+        logger.error({
+          supply: supplyId,
+          err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr,
+        }, "Kirim rollback delete failed");
+      }
+    }
+    throw error;
+  }
 }
 
 async function deleteSupplyDocument(supplyId: string) {
@@ -946,12 +1003,31 @@ async function writeShipmentSupply(
     });
     mark("positions", stepAt);
     if (!planned.positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
-    const plannedTotal = planned.positions.reduce((sum, item) => sum + Math.round(Number(item.quantity) || 0), 0);
+    const plannedQty = planned.positions.map((item) => Math.round(Number(item.quantity) || 0));
+    if (plannedQty.some((qty) => !(qty > 0))) {
+      throw Object.assign(new Error("qty_mismatch"), {
+        status: 500,
+        detail: "Rejada noldan/manfiy miqdor bor. Kirim yozilmadi.",
+      });
+    }
+    const plannedTotal = plannedQty.reduce((sum, qty) => sum + qty, 0);
     if (plannedTotal !== waybillUnitsTotal) {
-      logger.error({ shipment: shipmentId, plannedTotal, waybillUnitsTotal }, "Kirim qty internal mismatch");
+      logger.error({ shipment: shipmentId, plannedTotal, waybillUnitsTotal, plannedQty }, "Kirim qty internal mismatch");
       throw Object.assign(new Error("qty_mismatch"), {
         status: 500,
         detail: `Ichki miqdor xato: yuk xati ${waybillUnitsTotal}, reja ${plannedTotal}. Kirim yozilmadi.`,
+      });
+    }
+    // Tahrir poygasi: snapshot bilan hozirgi yuk xati yana bir xil bo‘lsin
+    const fresh = listShipments().find((item) => item.id === shipmentId);
+    if (!fresh || fresh.moyskladId) {
+      throw Object.assign(new Error(fresh?.moyskladId ? "posted" : "not_found"), { status: fresh?.moyskladId ? 409 : 404 });
+    }
+    const freshTotal = fresh.lines.reduce((sum, line) => sum + lineUnits(line), 0);
+    if (freshTotal !== waybillUnitsTotal) {
+      throw Object.assign(new Error("qty_mismatch"), {
+        status: 409,
+        detail: `Yuk xati kirim paytida o‘zgardi (${waybillUnitsTotal} → ${freshTotal}). Qayta urinib ko‘ring.`,
       });
     }
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
@@ -1001,36 +1077,30 @@ async function writeShipmentSupply(
       rate: { currency: { meta: currency.meta } },
       ...(shipment.note.trim() ? { description: shipment.note.trim() } : { description: `Yuk xati ${shipment.number}` }),
     };
-    const supplyPositions = planned.positions.map((item) => ({
-      quantity: item.quantity,
+    const supplyPositions = planned.positions.map((item, index) => ({
+      quantity: plannedQty[index],
       price: item.price,
       discount: 0,
       vat: 0,
       vatEnabled: false,
       assortment: item.assortment,
     }));
+    const postedQtyCheck = supplyPositions.reduce((sum, item) => sum + item.quantity, 0);
+    if (postedQtyCheck !== waybillUnitsTotal) {
+      throw Object.assign(new Error("qty_mismatch"), {
+        status: 500,
+        detail: `Yuborish oldidan miqdor xato: ${postedQtyCheck} ≠ ${waybillUnitsTotal}. Kirim yozilmadi.`,
+      });
+    }
     stepAt = Date.now();
     const created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
     mark("post-supply", stepAt);
-    // HARD GUARD: MS dagi yig‘indi yuborilgan bilan bir xil bo‘lsin — aks holda ombor shishmasin
-    if (!created.reused) {
-      try {
-        await verifySupplyQuantities(created.id, plannedTotal);
-      } catch (error) {
-        logger.error({
-          shipment: shipmentId,
-          supply: created.id,
-          plannedTotal,
-          err: error instanceof Error ? error.message : error,
-        }, "MoySklad kirim qty verify failed — rolling back");
-        try {
-          await deleteSupplyDocument(created.id);
-        } catch (rollbackErr) {
-          logger.error({ supply: created.id, err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr }, "Kirim rollback delete failed");
-        }
-        throw error;
-      }
-    }
+    // HARD GUARD: yangi ham, conflict-reuse ham — MS aniq yuk xatiga teng bo‘lsin
+    await assertSupplyMatchesOrRollback(
+      created.id,
+      supplyPositions,
+      { shipmentId, allowDelete: true },
+    );
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;

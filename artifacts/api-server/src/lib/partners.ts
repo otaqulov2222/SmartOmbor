@@ -600,6 +600,7 @@ export function deleteShipment(id: string) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (supplyInflight.has(id)) throw Object.assign(new Error("supply_busy"), { status: 409 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   const before = store.shipments.length;
   store.shipments = store.shipments.filter((item) => item.id !== id);
