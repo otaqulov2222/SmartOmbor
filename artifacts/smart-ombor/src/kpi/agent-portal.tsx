@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  BadgeCheck, CheckCircle2, Clock, Compass, Crosshair, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
-  TrendingUp, Users, Wallet,
+  BadgeCheck, Bell, CheckCircle2, Clock, Compass, Crosshair, Fingerprint, LogOut, MapPin, Navigation, Phone, RefreshCw,
+  Target, TrendingUp, Users, Wallet,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
@@ -67,6 +67,11 @@ type CabinetData = {
     customersCount: number;
     debtorsCount: number;
     visitedToday: number;
+    visitPlanCount?: number;
+    visitPct?: number;
+    salesPlan?: string;
+    monthSales?: string;
+    planPct?: number | null;
     totalSales: string;
     totalPaid: string;
     totalDue: string;
@@ -76,6 +81,15 @@ type CabinetData = {
   track?: Array<{ lat: number; lng: number }>;
   customers: CustomerCard[];
   deals: DealRow[];
+};
+
+type NotifRow = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
 };
 
 type Tab = 'today' | 'kpi' | 'customers';
@@ -158,6 +172,16 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     queryKey: ['kpi-agent-cabinet'],
     queryFn: () => kpiFetch<CabinetData>('/kpi/agent/cabinet', {}, mode),
     refetchInterval: 45_000,
+  });
+  const notifs = useQuery({
+    queryKey: ['kpi-agent-notifs'],
+    queryFn: () => kpiFetch<NotifRow[]>('/kpi/agent/notifications', {}, mode),
+    refetchInterval: 60_000,
+  });
+  const markNotifRead = useMutation({
+    mutationFn: (id: string) =>
+      kpiFetch(`/kpi/agent/notifications/${id}/read`, { method: 'POST', body: '{}' }, mode),
+    onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-agent-notifs'] }),
   });
 
   const focusStop = (stopId: string) => {
@@ -293,8 +317,15 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
   // Full day route = ALL assigned customers (1→2→3…), server already nearest-neighbor ordered
   const routeStops = useMemo(() => d?.customers || [], [d?.customers]);
   const nextStop = routeStops.find((c) => c.isNext) || routeStops.find((c) => !c.visitedToday) || null;
-  const targetCount = s ? (s.customersCount || 1) : 1;
-  const visitPct = s ? Math.min(100, Math.round((s.visitedToday / targetCount) * 100)) : 0;
+  const targetCount = s ? (s.visitPlanCount || s.customersCount || 1) : 1;
+  const visitPct = s
+    ? (s.visitPct != null ? s.visitPct : Math.min(100, Math.round((s.visitedToday / targetCount) * 100)))
+    : 0;
+  const unreadNotifs = (notifs.data || []).filter((n) => !n.readAt);
+
+  useEffect(() => {
+    if (q.isSuccess) void cache.invalidateQueries({ queryKey: ['kpi-agent-notifs'] });
+  }, [q.dataUpdatedAt, q.isSuccess, cache]);
 
   useEffect(() => {
     if (!routeStops.length) return;
@@ -385,7 +416,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
 
       {s ? (
-        <section className="ag-stats">
+        <section className="ag-stats ag-stats-5">
           <article className="ag-stat is-green">
             <div className="ag-stat-head">
               <span>KPI bonus</span>
@@ -396,11 +427,11 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           </article>
           <article className="ag-stat is-blue">
             <div className="ag-stat-head">
-              <span>Qo‘shimcha KPI</span>
-              <span className="ag-stat-ico"><TrendingUp size={18} /></span>
+              <span>Oylik reja</span>
+              <span className="ag-stat-ico"><Target size={18} /></span>
             </div>
-            <strong>+{uzs(s.kpiPotential)}</strong>
-            <small>1-bosqichda to‘liq olinsa</small>
+            <strong>{s.planPct != null ? `${s.planPct}%` : '—'}</strong>
+            <small>Reja {uzs(s.salesPlan || 0)} · Fakt {uzs(s.monthSales || 0)}</small>
           </article>
           <article className="ag-stat is-amber">
             <div className="ag-stat-head">
@@ -412,13 +443,53 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
           </article>
           <article className="ag-stat">
             <div className="ag-stat-head">
-              <span>Bugungi reja</span>
+              <span>Kunlik reja</span>
               <span className="ag-stat-ico"><Users size={18} /></span>
             </div>
-            <strong>{s.visitedToday} / {s.customersCount}</strong>
+            <strong>{s.visitedToday} / {targetCount}</strong>
             <div className="ag-bar"><i style={{ width: `${visitPct}%` }} /></div>
-            <small>{s.customersCount} ta nuqta · {s.debtorsCount} qarzdor</small>
+            <small>{visitPct}% · {s.debtorsCount} qarzdor</small>
           </article>
+          <article className="ag-stat is-blue">
+            <div className="ag-stat-head">
+              <span>Qo‘shimcha KPI</span>
+              <span className="ag-stat-ico"><TrendingUp size={18} /></span>
+            </div>
+            <strong>+{uzs(s.kpiPotential)}</strong>
+            <small>1-bosqichda to‘liq olinsa</small>
+          </article>
+        </section>
+      ) : null}
+
+      {(notifs.data || []).length ? (
+        <section className="ag-notifs">
+          <div className="ag-section-head">
+            <h2><Bell size={16} /> Bildirishnomalar</h2>
+            <p>{unreadNotifs.length ? `${unreadNotifs.length} ta o‘qilmagan` : 'Hammasi o‘qilgan'}</p>
+          </div>
+          <div className="ag-notif-list">
+            {(notifs.data || []).slice(0, 8).map((n) => (
+              <article key={n.id} className={`ag-notif ${n.readAt ? '' : 'is-unread'}`}>
+                <div>
+                  <b>{n.title}</b>
+                  <p>{n.body}</p>
+                  <small>{new Date(n.createdAt).toLocaleString('uz-UZ')}</small>
+                </div>
+                {!n.readAt ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={markNotifRead.isPending}
+                    onClick={() => markNotifRead.mutate(n.id)}
+                  >
+                    O‘qildi
+                  </button>
+                ) : (
+                  <span className="kpi-chip ok">O‘qildi</span>
+                )}
+              </article>
+            ))}
+          </div>
         </section>
       ) : null}
 

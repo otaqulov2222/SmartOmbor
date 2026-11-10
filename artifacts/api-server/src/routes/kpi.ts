@@ -8,6 +8,7 @@ import {
   kpiCustomersTable,
   kpiLedgerTable,
   kpiLocationEventsTable,
+  kpiNotificationsTable,
   kpiOrderItemsTable,
   kpiOrdersTable,
   kpiPaymentsTable,
@@ -16,6 +17,7 @@ import {
   kpiProductsTable,
   kpiStagesTable,
   kpiTerritoriesTable,
+  kpiVisitPlansTable,
   kpiVisitsTable,
 } from "@workspace/db";
 import { recordAudit } from "../lib/audit";
@@ -63,6 +65,123 @@ function tashkentDate(d = new Date()) {
     month: "2-digit",
     day: "2-digit",
   }).format(d);
+}
+
+/** Inclusive start / exclusive end of current Tashkent calendar month (YYYY-MM-DD). */
+function monthBoundsTashkent(d = new Date()) {
+  const today = tashkentDate(d);
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));
+  const start = `${y}-${String(m).padStart(2, "0")}-01`;
+  const nextM = m === 12 ? 1 : m + 1;
+  const nextY = m === 12 ? y + 1 : y;
+  const end = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+  return { start, end };
+}
+
+function computePlanPct(monthSales: string | number, salesPlan: string | number): number | null {
+  const plan = Number(salesPlan);
+  if (!(plan > 0)) return null;
+  return Math.round((Number(monthSales) / plan) * 100);
+}
+
+async function agentMonthSales(agentId: string) {
+  const { start, end } = monthBoundsTashkent();
+  const [row] = await db
+    .select({
+      total: sql<string>`coalesce(sum(${kpiOrdersTable.total}), 0)`,
+    })
+    .from(kpiOrdersTable)
+    .where(
+      and(
+        eq(kpiOrdersTable.agentId, agentId),
+        sql`${kpiOrdersTable.status} not in ('draft','cancelled')`,
+        sql`${kpiOrdersTable.orderDate} >= ${start}`,
+        sql`${kpiOrdersTable.orderDate} < ${end}`,
+      ),
+    );
+  return money(row?.total);
+}
+
+/**
+ * Auto daily visit plan: all active assigned customers.
+ * Idempotent per agent + Tashkent day. Creates in-app notification once on create.
+ */
+async function ensureDailyVisitPlan(agentId: string) {
+  const today = tashkentDate();
+  const existing = await db
+    .select()
+    .from(kpiVisitPlansTable)
+    .where(and(eq(kpiVisitPlansTable.agentId, agentId), eq(kpiVisitPlansTable.planDate, today)))
+    .limit(1);
+  if (existing[0]) {
+    const [cnt] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(kpiVisitsTable)
+      .where(eq(kpiVisitsTable.planId, existing[0].id));
+    return { plan: existing[0], visitPlanCount: cnt?.n ?? 0, created: false as const };
+  }
+
+  const assigns = await db
+    .select()
+    .from(kpiCustomerAssignmentsTable)
+    .where(and(eq(kpiCustomerAssignmentsTable.agentId, agentId), eq(kpiCustomerAssignmentsTable.active, true)));
+
+  const [plan] = await db
+    .insert(kpiVisitPlansTable)
+    .values({
+      agentId,
+      planDate: today,
+      notes: "Avtomatik kunlik reja",
+      createdBy: "system",
+    })
+    .returning();
+
+  const recentVisits = await db
+    .select()
+    .from(kpiVisitsTable)
+    .where(and(eq(kpiVisitsTable.agentId, agentId), eq(kpiVisitsTable.status, "done")))
+    .orderBy(desc(kpiVisitsTable.createdAt))
+    .limit(500);
+  const doneToday = new Map<string, (typeof recentVisits)[0]>();
+  for (const v of recentVisits) {
+    const day = tashkentDate(v.finishedAt || v.createdAt);
+    if (day === today && !doneToday.has(v.customerId)) doneToday.set(v.customerId, v);
+  }
+
+  let sortOrder = 0;
+  for (const a of assigns) {
+    sortOrder += 1;
+    const done = doneToday.get(a.customerId);
+    if (done) {
+      await db
+        .update(kpiVisitsTable)
+        .set({ planId: plan.id, sortOrder, updatedAt: new Date() })
+        .where(eq(kpiVisitsTable.id, done.id));
+    } else {
+      await db.insert(kpiVisitsTable).values({
+        planId: plan.id,
+        agentId,
+        customerId: a.customerId,
+        status: "planned",
+        sortOrder,
+        plannedAt: new Date(),
+      });
+    }
+  }
+
+  const n = assigns.length;
+  if (n > 0) {
+    await db.insert(kpiNotificationsTable).values({
+      agentId,
+      type: "visit_plan_daily",
+      title: "Bugungi tashrif rejasi",
+      body: `Bugun ${n} ta mijoz`,
+      meta: { planId: plan.id, planDate: today, count: n },
+    });
+  }
+
+  return { plan, visitPlanCount: n, created: true as const };
 }
 
 function csvEscape(value: unknown) {
@@ -266,6 +385,8 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
       const [kpi] = await db.select({
         total: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}), 0)`,
       }).from(kpiCalculationsTable).where(and(eq(kpiCalculationsTable.agentId, agent.id), sql`${kpiCalculationsTable.status} in ('confirmed','partial','pending')`));
+      const monthSales = await agentMonthSales(agent.id);
+      const salesPlan = money(agent.salesPlan);
       out.push({
         id: agent.id,
         fullName: agent.fullName,
@@ -274,10 +395,12 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
         status: agent.status,
         territoryId: agent.territoryId,
         startedAt: agent.startedAt,
-        salesPlan: agent.salesPlan,
+        salesPlan,
         notes: agent.notes,
         customers: cust?.n ?? 0,
         salesTotal: money(sales?.total),
+        monthSales,
+        planPct: computePlanPct(monthSales, salesPlan),
         kpiTotal: money(kpi?.total),
         createdAt: agent.createdAt,
       });
@@ -983,6 +1106,7 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
   try {
     await ensureKpiBootstrapped();
     const agent = getKpiAgent(res);
+    const dailyPlan = await ensureDailyVisitPlan(agent.id);
     const [agentRow] = await db.select().from(kpiAgentsTable).where(eq(kpiAgentsTable.id, agent.id)).limit(1);
     const policy = await ensureDefaultPolicy();
     const assigns = await db
@@ -1012,13 +1136,24 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .from(kpiVisitsTable)
       .where(eq(kpiVisitsTable.agentId, agent.id))
       .orderBy(desc(kpiVisitsTable.createdAt))
-      .limit(100);
+      .limit(500);
     const todayVisitMap = new Map<string, { at: string; lat: string | null; lng: string | null }>();
     for (const v of visits) {
-      if (tashkentDate(v.createdAt) === today && v.status === "done" && !todayVisitMap.has(v.customerId)) {
-        todayVisitMap.set(v.customerId, { at: v.createdAt.toISOString(), lat: v.lat, lng: v.lng });
+      const day = tashkentDate(v.finishedAt || v.createdAt);
+      if (day === today && v.status === "done" && !todayVisitMap.has(v.customerId)) {
+        todayVisitMap.set(v.customerId, {
+          at: (v.finishedAt || v.createdAt).toISOString(),
+          lat: v.lat,
+          lng: v.lng,
+        });
       }
     }
+    const visitPlanCount = dailyPlan.visitPlanCount || assigns.length || myCustomers.length;
+    const salesPlan = money(agentRow?.salesPlan || 0);
+    const monthSales = await agentMonthSales(agent.id);
+    const planPct = computePlanPct(monthSales, salesPlan);
+    const visitPct =
+      visitPlanCount > 0 ? Math.min(100, Math.round((todayVisitMap.size / visitPlanCount) * 100)) : 0;
     const locRows = await db
       .select()
       .from(kpiLocationEventsTable)
@@ -1127,6 +1262,11 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
         customersCount: myCustomers.length,
         debtorsCount: customerCards.filter((c) => Number(c.debt) > 0).length,
         visitedToday: todayVisitMap.size,
+        visitPlanCount,
+        visitPct,
+        salesPlan,
+        monthSales,
+        planPct,
         totalSales,
         totalPaid,
         totalDue,
@@ -1158,6 +1298,7 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       res.status(400).json({ error: "Bordim uchun jonli GPS kerak. Telefon GPS ni yoqing." });
       return;
     }
+    await ensureDailyVisitPlan(agent.id);
     const assigns = await db
       .select()
       .from(kpiCustomerAssignmentsTable)
@@ -1170,19 +1311,59 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
     }
     const lat = String(latN.toFixed(6));
     const lng = String(lngN.toFixed(6));
-    const [row] = await db
-      .insert(kpiVisitsTable)
-      .values({
-        agentId: agent.id,
-        customerId,
-        status: "done",
-        startedAt: new Date(),
-        finishedAt: new Date(),
-        lat,
-        lng,
-        notes,
-      })
-      .returning();
+    const now = new Date();
+    const today = tashkentDate();
+    const [todayPlan] = await db
+      .select()
+      .from(kpiVisitPlansTable)
+      .where(and(eq(kpiVisitPlansTable.agentId, agent.id), eq(kpiVisitPlansTable.planDate, today)))
+      .limit(1);
+
+    let row;
+    if (todayPlan) {
+      const [planned] = await db
+        .select()
+        .from(kpiVisitsTable)
+        .where(
+          and(
+            eq(kpiVisitsTable.planId, todayPlan.id),
+            eq(kpiVisitsTable.customerId, customerId),
+            eq(kpiVisitsTable.status, "planned"),
+          ),
+        )
+        .limit(1);
+      if (planned) {
+        [row] = await db
+          .update(kpiVisitsTable)
+          .set({
+            status: "done",
+            startedAt: planned.startedAt || now,
+            finishedAt: now,
+            lat,
+            lng,
+            notes: notes || planned.notes,
+            updatedAt: now,
+          })
+          .where(eq(kpiVisitsTable.id, planned.id))
+          .returning();
+      }
+    }
+    if (!row) {
+      [row] = await db
+        .insert(kpiVisitsTable)
+        .values({
+          planId: todayPlan?.id ?? null,
+          agentId: agent.id,
+          customerId,
+          status: "done",
+          startedAt: now,
+          finishedAt: now,
+          lat,
+          lng,
+          notes,
+        })
+        .returning();
+    }
     await db.insert(kpiLocationEventsTable).values({
       agentId: agent.id,
       lat,
@@ -1258,6 +1439,7 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
       res.status(400).json({ error: "lat/lng kerak." });
       return;
     }
+    await ensureDailyVisitPlan(agent.id).catch(() => undefined);
     const [row] = await db
       .insert(kpiLocationEventsTable)
       .values({
@@ -1269,6 +1451,75 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
       })
       .returning();
     res.status(201).json(row);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/kpi/agent/notifications", requireKpiAgent(), async (_req, res, next) => {
+  try {
+    const agent = getKpiAgent(res);
+    const rows = await db
+      .select()
+      .from(kpiNotificationsTable)
+      .where(eq(kpiNotificationsTable.agentId, agent.id))
+      .orderBy(desc(kpiNotificationsTable.createdAt))
+      .limit(50);
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        body: r.body,
+        readAt: r.readAt ? r.readAt.toISOString() : null,
+        meta: r.meta,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/kpi/agent/notifications/:id/read", requireKpiAgent(), async (req, res, next) => {
+  try {
+    const agent = getKpiAgent(res);
+    const id = String(req.params.id);
+    const [row] = await db
+      .select()
+      .from(kpiNotificationsTable)
+      .where(and(eq(kpiNotificationsTable.id, id), eq(kpiNotificationsTable.agentId, agent.id)))
+      .limit(1);
+    if (!row) {
+      res.status(404).json({ error: "Bildirishnoma topilmadi." });
+      return;
+    }
+    if (row.readAt) {
+      res.json({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        body: row.body,
+        readAt: row.readAt.toISOString(),
+        meta: row.meta,
+        createdAt: row.createdAt.toISOString(),
+      });
+      return;
+    }
+    const [updated] = await db
+      .update(kpiNotificationsTable)
+      .set({ readAt: new Date() })
+      .where(eq(kpiNotificationsTable.id, id))
+      .returning();
+    res.json({
+      id: updated.id,
+      type: updated.type,
+      title: updated.title,
+      body: updated.body,
+      readAt: updated.readAt ? updated.readAt.toISOString() : null,
+      meta: updated.meta,
+      createdAt: updated.createdAt.toISOString(),
+    });
   } catch (error) {
     next(error);
   }

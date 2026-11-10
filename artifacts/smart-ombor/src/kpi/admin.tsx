@@ -11,7 +11,8 @@ type Dash = {
 };
 type Agent = {
   id: string; fullName: string; phone: string; login: string; status: string;
-  salesPlan: string; customers: number; salesTotal: string; kpiTotal: string;
+  salesPlan: string; customers: number; salesTotal: string; monthSales?: string;
+  planPct?: number | null; kpiTotal: string;
 };
 type Customer = {
   id: string; name: string; phone: string; type: string; status: string; address: string;
@@ -119,7 +120,7 @@ export function KpiDashboardPage() {
           </div>
         </div>
         <table className="kpi-table">
-          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MoySklad)</th><th>KPI daromad</th></tr></thead>
+          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MoySklad)</th><th>Oylik fakt</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
           <tbody>
             {sorted.map((a) => (
               <tr key={a.id}>
@@ -127,6 +128,8 @@ export function KpiDashboardPage() {
                 <td data-label="Login" className="kpi-muted">{a.login}</td>
                 <td data-label="Mijozlari">{a.customers}</td>
                 <td data-label="Savdo">{uzs(a.salesTotal)}</td>
+                <td data-label="Oylik fakt">{uzs(a.monthSales ?? 0)}</td>
+                <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
                 <td data-label="KPI daromad"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
               </tr>
             ))}
@@ -186,7 +189,7 @@ function AgentsSection() {
   return (
     <div className="kpi-table-wrap">
       <table className="kpi-table">
-        <thead><tr><th>Agent (MoySklad)</th><th>Portal login</th><th>Mijozlar</th><th>Savdo</th><th>KPI</th><th>Reja / Parol</th></tr></thead>
+        <thead><tr><th>Agent (MoySklad)</th><th>Portal login</th><th>Mijozlar</th><th>Savdo</th><th>Oylik fakt</th><th>Reja %</th><th>KPI</th><th>Reja / Parol</th></tr></thead>
         <tbody>
           {(list.data || []).map((a) => (
             <tr key={a.id}>
@@ -194,6 +197,8 @@ function AgentsSection() {
               <td data-label="Portal login"><code>{a.login}</code></td>
               <td data-label="Mijozlar">{a.customers}</td>
               <td data-label="Savdo">{uzs(a.salesTotal)}</td>
+              <td data-label="Oylik fakt">{uzs(a.monthSales ?? 0)}</td>
+              <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
               <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
               <td data-label="">
                 {editing?.id === a.id ? (
