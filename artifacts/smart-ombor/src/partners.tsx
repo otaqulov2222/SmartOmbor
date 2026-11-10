@@ -247,9 +247,19 @@ function preferredSupplyStore<T extends { id: string; name: string }>(stores: T[
   return stores.find(store => isPreferredSupplyStore(store.name)) ?? null;
 }
 
-function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed' | 'partners.supplyNameTaken') => string) {
+function pairsLooksInflated(line: Pick<Line, 'pairs' | 'pachka' | 'boxes'>) {
+  const pairs = Math.round(Number(line.pairs) || 0);
+  const pachka = Math.round(Number(line.pachka) || 0);
+  if (!(pairs > 0)) return false;
+  if (pachka > 1 && pairs >= pachka * 5) return true;
+  if (!(pachka > 1) && pairs >= 30 && Number(line.boxes) > 0) return true;
+  return false;
+}
+
+function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed' | 'partners.supplyNameTaken' | 'partners.pairsSuspect') => string) {
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
+  if (body.error === 'pairs_suspect') return String(body.detail || '').trim() || t('partners.pairsSuspect');
   if (body.error === 'posted' || body.detail === 'posted') return t('partners.supplyFailed');
   const raw = String(body.detail || '').trim();
   if (raw === 'posted') return t('partners.supplyFailed');
@@ -696,6 +706,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   const [supplyingId, setSupplyingId] = useState<string | null>(null);
   const [storeId, setStoreId] = useState('');
   const [postError, setPostError] = useState('');
+  const [confirmPairs, setConfirmPairs] = useState(false);
   const [agentQuery, setAgentQuery] = useState('');
   const [agentHits, setAgentHits] = useState<Array<{ id: string; name: string }>>([]);
   const [agent, setAgent] = useState<{ id: string; name: string } | null>(null);
@@ -703,6 +714,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
   useEffect(() => { void loadMarkup().then(setMarkup); }, []);
   useEffect(() => {
     if (!posting) return;
+    setConfirmPairs(false);
     const saved = row.account?.counterpartyId && row.account.counterpartyName ? { id: row.account.counterpartyId, name: row.account.counterpartyName } : null;
     setAgent(saved);
     setAgentQuery('');
@@ -827,6 +839,12 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         : t('partners.colorUnder', { sum: fmt(sum), boxes: fmt(mismatch.boxes), diff: fmt(diff) }));
       return;
     }
+    const inflated = posting.lines.filter(line => pairsLooksInflated(line));
+    if (inflated.length && !confirmPairs) {
+      const sample = inflated[0];
+      setPostError(t('partners.supplyWarn', { pairs: fmt(sample.pairs) }));
+      return;
+    }
     supplyBusy.current = true;
     setBusy(true); setPostError('');
     const shipmentId = posting.id;
@@ -852,7 +870,8 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         });
         if (!saved.ok) { setPostError(t('partners.agentMissing')); return; }
       }
-      const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '' }) });
+      const supplyBody = JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '', confirmPairs });
+      const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: supplyBody });
       const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
       if (started.ok && !startedBody.pending && (startedBody.id || startedBody.already)) {
         setPosting(null);
@@ -876,7 +895,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       const resume = async () => {
         if (resumes >= 2) return false;
         resumes += 1;
-        await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '' }) });
+        await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: supplyBody });
         return true;
       };
       for (let i = 0; i < 600; i += 1) {
@@ -1136,7 +1155,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         <Link href="/factories" className="link">{t('nav.factories')}</Link>
       </>}
     </section>}
-    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => { if (!busy) setPosting(null); }} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const mixed = [line.pairs, line.boxes, line.quantity].filter(value => value > 0); const warn = false; return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyUnits', { units: fmt(part.quantity) })}{warn ? ` · ${t('partners.supplyMix', { pairs: fmt(line.pairs), boxes: fmt(line.boxes), quantity: fmt(line.quantity) })}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void postSupply()}>{busy ? t('partners.supplyPending') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
+    {posting && createPortal(<div className="backdrop" onClick={() => { if (!busy) setPosting(null); }}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="supply-title"><div className="modal-top"><div><p className="eyebrow">{posting.number}</p><h2 id="supply-title">{t('partners.supplyTitle')}</h2></div><button type="button" className="icon-btn" onClick={() => { if (!busy) setPosting(null); }} aria-label={t('common.close')}><X size={18}/></button></div><p>{t('partners.supplyBody', { count: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).length, 0)), units: fmt(posting.lines.reduce((sum, line) => sum + receiptParts(line).reduce((inner, part) => inner + part.quantity, 0), 0)) })}</p><p className="muted">{t('partners.supplyFormula')}</p>{(() => { const inflated = posting.lines.filter(line => pairsLooksInflated(line)); if (!inflated.length) return null; return <><p className="error-text">{t('partners.supplyWarn', { pairs: fmt(inflated[0].pairs) })}</p><label className="field" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><input type="checkbox" checked={confirmPairs} onChange={event => setConfirmPairs(event.target.checked)} disabled={busy}/><span>{t('partners.supplyConfirm')}</span></label></>; })()}<ul className="partner-products">{posting.lines.filter(line => lineUnits(line) > 0).flatMap(line => receiptParts(line).map(part => { const warn = pairsLooksInflated(line); return <li key={`${line.id}-${part.color || 'all'}`}><b>{part.color ? `${line.productCode || line.productName || '—'} · ${part.color}` : (line.productName || line.productCode || '—')}</b><small>{t('partners.supplyLine', { pairs: fmt(line.pairs), boxes: fmt(line.boxes || mergeColors(line.colors ?? []).reduce((s, c) => s + c.quantity, 0) || 1), units: fmt(part.quantity) })}{warn ? ` · ${t('partners.pairsSuspect')}` : ''}</small><span>{money(part.quantity * line.price)}</span></li>; }))}</ul>{(warehouses.data?.length ?? 0) > 1 && <label className="field">{t('common.warehouse')}<select className="input" value={storeId} onChange={event => setStoreId(event.target.value)}><option value=""/>{warehouses.data?.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<label className="field"><span>{t('partners.counterparty')}</span><input className="input" value={agent ? agent.name : agentQuery} placeholder={t('partners.counterpartySearch')} onChange={event => { setAgent(null); setAgentQuery(event.target.value); }}/>{!agent && agentHits.map(item => <button type="button" key={item.id} className="btn btn-secondary btn-sm" onClick={() => { setAgent(item); setAgentHits([]); }}>{item.name}</button>)}{agent && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAgent(null)}>{t('partners.counterpartyClear')}</button>}</label>{postError && <p className="error-text">{postError}</p>}<div className="form-actions"><button type="button" className="btn btn-primary" disabled={busy || (posting.lines.some(line => pairsLooksInflated(line)) && !confirmPairs)} onClick={() => void postSupply()}>{busy ? t('partners.supplyPending') : t('partners.supply')}</button><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPosting(null)}>{t('common.cancel')}</button></div></div></div>, document.body)}
     {settings && createPortal(<div className="backdrop" onClick={() => setSettings(false)}><div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="partner-settings-title">
       <div className="modal-top"><div><p className="eyebrow">{row.name}</p><h2 id="partner-settings-title">{t('partners.edit')}</h2></div><button type="button" className="icon-btn" onClick={() => setSettings(false)} aria-label={t('common.close')}><X size={18}/></button></div>
       <div className="form-grid">

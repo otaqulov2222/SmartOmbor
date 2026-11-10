@@ -19,6 +19,8 @@ import {
   loginFactory,
   markShipmentPosted,
   clearShipmentPosted,
+  beginSupplyInflight,
+  endSupplyInflight,
   moyskladDateTime,
   partnerRevision,
   flushPartners,
@@ -32,6 +34,7 @@ import {
   updateShipment,
   updateAccount,
   suggestPassword,
+  type PostedUnitSnapshot,
 } from "../lib/partners";
 
 const router: IRouter = Router();
@@ -39,7 +42,18 @@ const router: IRouter = Router();
 function fail(res: Response, error: unknown) {
   const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 500;
   const message = error instanceof Error ? error.message : "error";
-  res.status(status || 500).json({ error: message });
+  const detail = typeof error === "object" && error && "detail" in error ? String((error as { detail: unknown }).detail ?? "") : "";
+  res.status(status || 500).json(detail ? { error: message, detail } : { error: message });
+}
+
+/** Juft (qadoqda) odatda pachka bilan bir xil; 5×+ farq — chalkashlik (0044-007: 6 o‘rniga 60). */
+function pairsLooksInflated(line: { pairs: number; pachka: number; boxes: number }) {
+  const pairs = Math.round(Number(line.pairs) || 0);
+  const pachka = Math.round(Number(line.pachka) || 0);
+  if (!(pairs > 0)) return false;
+  if (pachka > 1 && pairs >= pachka * 5) return true;
+  if (!(pachka > 1) && pairs >= 30 && Number(line.boxes) > 0) return true;
+  return false;
 }
 
 function bearer(req: Request) {
@@ -373,6 +387,41 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
   return wrote > 0;
 }
 
+/** Kirim yozilgach MS dagi miqdor yuborilgan bilan bir xil ekanini tekshiradi. */
+async function verifySupplyQuantities(supplyId: string, expectedTotal: number) {
+  const page = await moyskladAll<{ id: string; quantity?: number }>(
+    `/entity/supply/${encodeURIComponent(supplyId)}/positions`,
+  );
+  const actual = page.rows.reduce((sum, row) => sum + Math.round(Number(row.quantity) || 0), 0);
+  const expected = Math.round(expectedTotal);
+  if (actual !== expected) {
+    throw Object.assign(
+      new Error("qty_mismatch"),
+      {
+        status: 502,
+        detail: `MoySklad miqdori mos kelmadi: yuborilgan ${expected} dona, MS da ${actual} dona. Kirim bekor qilindi.`,
+        expected,
+        actual,
+      },
+    );
+  }
+  return actual;
+}
+
+async function deleteSupplyDocument(supplyId: string) {
+  try {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
+  } catch (error) {
+    logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply unconduct before delete skipped");
+  }
+  try {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, undefined, "DELETE");
+  } catch (error) {
+    logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply delete failed");
+    throw error;
+  }
+}
+
 async function replaceZeroSupply(supplyId: string) {
   try {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
@@ -603,7 +652,12 @@ function supplyRetryable(error: unknown) {
     || /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi|yaratilmadi|javob bermadi|limiti|fetch failed/i.test(detail);
 }
 
-async function runSupplyJob(shipmentId: string, storeId: string, agent?: { id?: string; name?: string }) {
+async function runSupplyJob(
+  shipmentId: string,
+  storeId: string,
+  agent?: { id?: string; name?: string },
+  opts?: { confirmPairs?: boolean },
+) {
   setSupplyJob(shipmentId, {
     status: "pending",
     storeId,
@@ -614,19 +668,28 @@ async function runSupplyJob(shipmentId: string, storeId: string, agent?: { id?: 
     let last: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const result = await writeShipmentSupply(shipmentId, storeId, agent?.id ? { id: agent.id, name: agent.name || "" } : undefined);
+        const result = await writeShipmentSupply(
+          shipmentId,
+          storeId,
+          agent?.id ? { id: agent.id, name: agent.name || "" } : undefined,
+          opts,
+        );
         setSupplyJob(shipmentId, { status: "done", result, storeId });
         return;
       } catch (error) {
         last = error;
-        if (!supplyRetryable(error) || attempt === 2) throw error;
+        const code = error instanceof Error ? error.message : "";
+        if (code === "pairs_suspect" || code === "qty_mismatch" || !supplyRetryable(error) || attempt === 2) throw error;
         logger.warn({ shipment: shipmentId, attempt, err: error instanceof Error ? error.message : error }, "MoySklad supply retry");
         await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
       }
     }
     throw last;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "Kirim yozilmadi";
+    const codeRaw = error instanceof Error ? error.message : "rejected";
+    const detail =
+      (typeof error === "object" && error && "detail" in error && String((error as { detail?: unknown }).detail || "").trim())
+      || (error instanceof Error ? error.message : "Kirim yozilmadi");
     logger.warn({
       shipment: shipmentId,
       detail,
@@ -634,7 +697,9 @@ async function runSupplyJob(shipmentId: string, storeId: string, agent?: { id?: 
       moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
       parameter: error instanceof MoySkladError ? error.parameter : undefined,
     }, "MoySklad supply failed");
-    const code = detail === "store" || detail === "agent" || detail === "currency" || detail === "declined" ? detail : "rejected";
+    const code = codeRaw === "store" || codeRaw === "agent" || codeRaw === "currency" || codeRaw === "declined" || codeRaw === "pairs_suspect" || codeRaw === "qty_mismatch"
+      ? codeRaw
+      : "rejected";
     setSupplyJob(shipmentId, { status: "error", error: code, detail, storeId });
   }
 }
@@ -795,8 +860,14 @@ async function ensureSupplyAgent(supplyId: string, agentMeta: { href: string; ty
   }
 }
 
-async function writeShipmentSupply(shipmentId: string, storeId: string, agentHint?: { id: string; name: string }): Promise<SupplyResult> {
+async function writeShipmentSupply(
+  shipmentId: string,
+  storeId: string,
+  agentHint?: { id: string; name: string },
+  opts?: { confirmPairs?: boolean },
+): Promise<SupplyResult> {
   const unlock = await acquireSupplyLock(shipmentId);
+  beginSupplyInflight(shipmentId);
   reserveMoySkladSlots(8);
   const t0 = Date.now();
   const mark = (step: string, started: number) => {
@@ -823,8 +894,34 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
       linkExactShipmentLines(account.id, (line) => exactCatalogProduct(catalog, line, account));
     }
     const current = listShipments().find((item) => item.id === shipment.id) ?? shipment;
+    // Freeze miqdor snapshot — tahrir/pachka chalkashuvi keyinroq "nima yuborilgan"ni yo‘qotmasin
+    const unitSnapshot: PostedUnitSnapshot[] = current.lines.map((line) => ({
+      lineId: line.id,
+      productCode: line.productCode,
+      size: line.size,
+      pairs: line.pairs,
+      boxes: line.boxes,
+      pachka: line.pachka,
+      units: lineUnits(line),
+    })).filter((item) => item.units > 0);
+    const waybillUnitsTotal = unitSnapshot.reduce((sum, item) => sum + item.units, 0);
     let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
+    const inflated = current.lines.filter((line) => pairsLooksInflated(line));
+    if (inflated.length && !opts?.confirmPairs) {
+      const sample = inflated.slice(0, 3).map((line) => `${line.productCode}/${line.size}: juft=${line.pairs}, pachka=${line.pachka || "—"}`).join("; ");
+      throw Object.assign(new Error("pairs_suspect"), {
+        status: 400,
+        detail: `Juft (qadoqda) shubhali: ${sample}. Odatda juft = pachka (masalan 6). Umumiy juftni bu yerga yozmang — aks holda ombor shishadi.`,
+      });
+    }
+    logger.info({
+      shipment: shipmentId,
+      number: current.number,
+      waybillUnitsTotal,
+      confirmPairs: Boolean(opts?.confirmPairs),
+      lines: unitSnapshot.map((item) => `${item.productCode}/${item.size}: ${item.pairs}×${item.boxes}=${item.units}`),
+    }, "MoySklad kirim qty snapshot");
     const store = catalog.warehouses.find((item) => item.id === storeId) || (catalog.warehouses.length === 1 ? catalog.warehouses[0] : null);
     if (!store) throw Object.assign(new Error("store"), { status: 400 });
     const { organization, currencies } = orgBundle;
@@ -848,6 +945,14 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
     });
     mark("positions", stepAt);
     if (!planned.positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
+    const plannedTotal = planned.positions.reduce((sum, item) => sum + Math.round(Number(item.quantity) || 0), 0);
+    if (plannedTotal !== waybillUnitsTotal) {
+      logger.error({ shipment: shipmentId, plannedTotal, waybillUnitsTotal }, "Kirim qty internal mismatch");
+      throw Object.assign(new Error("qty_mismatch"), {
+        status: 500,
+        detail: `Ichki miqdor xato: yuk xati ${waybillUnitsTotal}, reja ${plannedTotal}. Kirim yozilmadi.`,
+      });
+    }
     for (const link of planned.links) linkShipmentLine(shipment.id, link.lineId, link.product);
     for (const product of planned.created) {
       const linked = planned.links.find((item) => item.product.id === product.id);
@@ -906,11 +1011,35 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
     stepAt = Date.now();
     const created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
     mark("post-supply", stepAt);
+    // HARD GUARD: MS dagi yig‘indi yuborilgan bilan bir xil bo‘lsin — aks holda ombor shishmasin
+    if (!created.reused) {
+      try {
+        await verifySupplyQuantities(created.id, plannedTotal);
+      } catch (error) {
+        logger.error({
+          shipment: shipmentId,
+          supply: created.id,
+          plannedTotal,
+          err: error instanceof Error ? error.message : error,
+        }, "MoySklad kirim qty verify failed — rolling back");
+        try {
+          await deleteSupplyDocument(created.id);
+        } catch (rollbackErr) {
+          logger.error({ supply: created.id, err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr }, "Kirim rollback delete failed");
+        }
+        throw error;
+      }
+    }
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;
     // Darhol belgilash — nom/agent/narx fon rejimida.
-    const saved = markShipmentPosted(shipment.id, { id: created.id, number });
+    const saved = markShipmentPosted(shipment.id, {
+      id: created.id,
+      number,
+      units: unitSnapshot,
+      unitsTotal: waybillUnitsTotal,
+    });
     void ensureSupplyAgent(created.id, agentMeta);
     if (!(currentName === wanted || currentName.startsWith(`${wanted} `))) {
       scheduleSupplyName({ ...saved, moyskladId: created.id, moyskladNumber: number });
@@ -921,10 +1050,16 @@ async function writeShipmentSupply(shipmentId: string, storeId: string, agentHin
     if (!created.reused) {
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }
-    void recordAudit({ action: "shipment.posted", entityType: "shipment", entityId: shipment.id, details: number });
+    void recordAudit({
+      action: "shipment.posted",
+      entityType: "shipment",
+      entityId: shipment.id,
+      details: `${number}; units=${waybillUnitsTotal}`,
+    });
     mark("done", t0);
     return { id: created.id, number, shipment: saved, already: created.reused };
   } finally {
+    endSupplyInflight(shipmentId);
     releaseMoySkladSlots();
     unlock();
   }
@@ -953,7 +1088,8 @@ router.get("/partner-factories/shipments/:id/supply", (req, res) => {
     return;
   }
   if ("error" in payload && payload.error) {
-    res.status(payload.error === "store" || payload.error === "agent" || payload.error === "currency" ? 400 : 502).json(payload);
+    const bad = payload.error === "store" || payload.error === "agent" || payload.error === "currency" || payload.error === "pairs_suspect";
+    res.status(bad ? 400 : 502).json(payload);
     return;
   }
   res.json(payload);
@@ -982,8 +1118,14 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
   const storeId = String(req.body?.storeId ?? "").trim();
   const counterpartyId = String(req.body?.counterpartyId ?? "").trim();
   const counterpartyName = String(req.body?.counterpartyName ?? "").trim();
+  const confirmPairs = Boolean(req.body?.confirmPairs);
   if (job?.status !== "pending") {
-    void runSupplyJob(shipmentId, storeId, counterpartyId ? { id: counterpartyId, name: counterpartyName } : undefined);
+    void runSupplyJob(
+      shipmentId,
+      storeId,
+      counterpartyId ? { id: counterpartyId, name: counterpartyName } : undefined,
+      { confirmPairs },
+    );
   }
   // Tez yo‘l: kirim tayyor bo‘lsa shu so‘rovda qaytarish (poll kutmasin).
   const started = Date.now();
@@ -991,7 +1133,8 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
     const payload = supplyJobPayload(shipmentId);
     if (!payload.pending) {
       if ("error" in payload && payload.error && payload.error !== "idle") {
-        res.status(payload.error === "store" || payload.error === "agent" || payload.error === "currency" ? 400 : 502).json(payload);
+        const bad = payload.error === "store" || payload.error === "agent" || payload.error === "currency" || payload.error === "pairs_suspect";
+        res.status(bad ? 400 : 502).json(payload);
         return;
       }
       res.json({ pending: false, ...payload });

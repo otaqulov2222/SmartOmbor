@@ -30,6 +30,16 @@ export type ShipmentLine = {
   productName: string | null;
 };
 
+export type PostedUnitSnapshot = {
+  lineId: string;
+  productCode: string;
+  size: string;
+  pairs: number;
+  boxes: number;
+  pachka: number;
+  units: number;
+};
+
 export type Shipment = {
   id: string;
   number: string;
@@ -41,6 +51,9 @@ export type Shipment = {
   createdAt: string;
   moyskladId: string | null;
   moyskladNumber: string | null;
+  /** Kirim paytidagi juft×qop snapshot — keyinroq audit uchun */
+  postedUnits?: PostedUnitSnapshot[] | null;
+  postedUnitsTotal?: number | null;
 };
 
 export type PartnerAccount = {
@@ -556,6 +569,7 @@ export function updateShipment(id: string, input: { date?: string; note?: string
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (supplyInflight.has(id)) throw Object.assign(new Error("supply_busy"), { status: 409 });
   const account = store.accounts.find((item) => item.id === shipment.factoryId);
   if (!account) throw Object.assign(new Error("not_found"), { status: 404 });
   const lines = (input.lines ?? []).map((line) => {
@@ -657,19 +671,44 @@ export function clearShipmentPosted(shipmentId: string) {
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
   shipment.moyskladId = null;
   shipment.moyskladNumber = null;
+  shipment.postedUnits = null;
+  shipment.postedUnitsTotal = null;
   save(store);
   return shipmentView(shipment);
 }
 
-export function markShipmentPosted(shipmentId: string, posted: { id: string; number: string }) {
+export function markShipmentPosted(
+  shipmentId: string,
+  posted: { id: string; number: string; units?: PostedUnitSnapshot[]; unitsTotal?: number },
+) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
   shipment.moyskladId = posted.id;
   shipment.moyskladNumber = posted.number;
   shipment.status = "accepted";
+  if (posted.units) shipment.postedUnits = posted.units;
+  if (posted.unitsTotal != null) shipment.postedUnitsTotal = posted.unitsTotal;
   save(store);
   return shipmentView(shipment);
+}
+
+/** Kirim yozilayotganda tahrirni bloklash */
+const supplyInflight = new Set<string>();
+
+export function beginSupplyInflight(shipmentId: string) {
+  if (supplyInflight.has(shipmentId)) {
+    throw Object.assign(new Error("supply_busy"), { status: 409 });
+  }
+  supplyInflight.add(shipmentId);
+}
+
+export function endSupplyInflight(shipmentId: string) {
+  supplyInflight.delete(shipmentId);
+}
+
+export function isSupplyInflight(shipmentId: string) {
+  return supplyInflight.has(shipmentId);
 }
 
 export function setShipmentStatus(id: string, status: "sent" | "accepted" | "declined") {
