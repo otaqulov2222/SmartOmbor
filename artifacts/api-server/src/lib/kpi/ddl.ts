@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS kpi_visit_plans (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS kpi_visit_plans_agent_date_uidx ON kpi_visit_plans(agent_id, plan_date);
 CREATE INDEX IF NOT EXISTS kpi_visit_plans_agent_date_idx ON kpi_visit_plans(agent_id, plan_date);
 CREATE TABLE IF NOT EXISTS kpi_visits (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

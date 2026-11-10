@@ -1,6 +1,7 @@
 import { asc, desc, eq, sql } from "drizzle-orm";
 import {
   db,
+  kpiAgentsTable,
   kpiCalculationsTable,
   kpiLedgerTable,
   kpiOrdersTable,
@@ -8,6 +9,15 @@ import {
   kpiStagesTable,
 } from "@workspace/db";
 import { money, moneyCmp, moneyPct } from "./money";
+
+function tashkentYmd(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
 
 export type StageSnap = {
   name: string;
@@ -60,10 +70,13 @@ export function snapshotPolicy(policy: PolicySnap): PolicySnap {
   return structuredClone(policy);
 }
 
+/** Calendar-day difference in Asia/Tashkent (not server UTC local). */
 function daysBetween(anchor: Date, now = new Date()): number {
-  const a = Date.UTC(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
-  const b = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.floor((b - a) / 86_400_000);
+  const a = tashkentYmd(anchor);
+  const b = tashkentYmd(now);
+  const aMs = Date.UTC(Number(a.slice(0, 4)), Number(a.slice(5, 7)) - 1, Number(a.slice(8, 10)));
+  const bMs = Date.UTC(Number(b.slice(0, 4)), Number(b.slice(5, 7)) - 1, Number(b.slice(8, 10)));
+  return Math.floor((bMs - aMs) / 86_400_000);
 }
 
 export function resolveStage(stages: StageSnap[], dayIndex: number): StageSnap | null {
@@ -135,7 +148,9 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
     agentRow?.login === "vanseling" ||
     agentRow?.fullName.toLowerCase() === "ofis";
 
-  const anchor = order.confirmedAt ? new Date(order.confirmedAt) : new Date(order.orderDate);
+  const anchor = order.confirmedAt
+    ? new Date(order.confirmedAt)
+    : new Date(`${order.orderDate}T09:00:00+05:00`);
   const settledAt =
     moneyCmp(order.paidAmount, order.total) >= 0 && order.invoiceRef
       ? new Date(order.invoiceRef)

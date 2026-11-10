@@ -362,7 +362,7 @@ export const kpiVisitPlansTable = pgTable(
     ...stamps,
   },
   (t) => ({
-    agentDateIdx: index("kpi_visit_plans_agent_date_idx").on(t.agentId, t.planDate),
+    agentDateUid: uniqueIndex("kpi_visit_plans_agent_date_uidx").on(t.agentId, t.planDate),
   }),
 );
 
