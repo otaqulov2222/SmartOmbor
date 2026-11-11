@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, ExternalLink, KeyRound, RefreshCw } from 'lucide-react';
+import { Download, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { kpiFetch, uzs } from '@/kpi/api';
 import './kpi.css';
@@ -225,10 +225,12 @@ function AgentsSection() {
 function CustomersSection() {
   const cache = useQueryClient();
   const [q, setQ] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [lat, setLat] = useState('');
   const [lng, setLng] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [phone, setPhone] = useState('');
   const [addressPreview, setAddressPreview] = useState('');
   const [formError, setFormError] = useState('');
   const agents = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
@@ -236,6 +238,27 @@ function CustomersSection() {
     queryKey: ['kpi-customers', q],
     queryFn: () => kpiFetch<Customer[]>(`/kpi/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   });
+  const resetForm = () => {
+    setEditingId(null);
+    setName('');
+    setLat('');
+    setLng('');
+    setAgentId('');
+    setPhone('');
+    setAddressPreview('');
+    setFormError('');
+  };
+  const startEdit = (c: Customer) => {
+    setEditingId(c.id);
+    setName(c.name || '');
+    setPhone(c.phone || '');
+    setLat(c.lat != null && c.lat !== '' ? String(c.lat) : '');
+    setLng(c.lng != null && c.lng !== '' ? String(c.lng) : '');
+    setAgentId(c.agentId || '');
+    setAddressPreview(c.address || '');
+    setFormError('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const assign = useMutation({
     mutationFn: (payload: { id: string; agentId: string }) =>
       kpiFetch(`/kpi/customers/${payload.id}/assign`, { method: 'POST', body: JSON.stringify({ agentId: payload.agentId }) }),
@@ -258,7 +281,7 @@ function CustomersSection() {
     },
     onError: (err) => setFormError((err as Error).message || 'Manzil topilmadi'),
   });
-  const createCustomer = useMutation({
+  const saveCustomer = useMutation({
     mutationFn: async () => {
       const la = Number(lat);
       const ln = Number(lng);
@@ -267,52 +290,65 @@ function CustomersSection() {
         throw new Error('Aniq lat/lng kiriting.');
       }
       if (!agentId) throw new Error('Mas’ul agentni tanlang.');
-      return kpiFetch('/kpi/customers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: name.trim(),
-          lat: Number(la.toFixed(6)),
-          lng: Number(ln.toFixed(6)),
-          agentId,
-          address: addressPreview.trim() || undefined,
-          status: 'active',
-        }),
-      });
+      const body = {
+        name: name.trim(),
+        phone: phone.trim(),
+        lat: Number(la.toFixed(6)),
+        lng: Number(ln.toFixed(6)),
+        agentId,
+        address: addressPreview.trim() || undefined,
+        status: 'active',
+      };
+      if (editingId) {
+        return kpiFetch(`/kpi/customers/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      }
+      return kpiFetch('/kpi/customers', { method: 'POST', body: JSON.stringify(body) });
     },
     onSuccess: () => {
-      setName('');
-      setLat('');
-      setLng('');
-      setAgentId('');
-      setAddressPreview('');
-      setFormError('');
+      resetForm();
       void cache.invalidateQueries({ queryKey: ['kpi-customers'] });
       void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
     },
     onError: (err) => setFormError((err as Error).message || 'Saqlanmadi'),
   });
+  const removeCustomer = useMutation({
+    mutationFn: (id: string) => kpiFetch(`/kpi/customers/${id}`, { method: 'DELETE' }),
+    onSuccess: (_data, id) => {
+      if (editingId === id) resetForm();
+      void cache.invalidateQueries({ queryKey: ['kpi-customers'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
+    },
+    onError: (err) => window.alert((err as Error).message || 'O‘chirilmadi'),
+  });
+  const agentOptions = (agents.data || []).filter((a) => a.login !== 'ofis' && a.login !== 'vanseling');
   return (
     <>
       <div className="kpi-panel">
-        <h3 style={{ margin: '0 0 .55rem', fontSize: '1rem' }}>Yangi mijoz (aniq GPS)</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '.75rem', alignItems: 'center', marginBottom: '.55rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1rem' }}>{editingId ? 'Mijozni tahrirlash' : 'Yangi mijoz (aniq GPS)'}</h3>
+          {editingId ? (
+            <button type="button" className="btn" onClick={resetForm}><X size={14} /> Bekor</button>
+          ) : null}
+        </div>
         <p className="kpi-muted" style={{ marginTop: 0 }}>
           Nom + lat/lng yozing — tizim tuman/ko‘cha/uyni topadi. Bordim faqat shu nuqta atrofida (250 m) ishlaydi.
         </p>
         <div className="kpi-form">
           <input className="input" placeholder="Mijoz nomi (masalan Alisher aka Samarqand)" value={name} onChange={(e) => setName(e.target.value)} />
+          <input className="input" placeholder="Telefon (ixtiyoriy)" value={phone} onChange={(e) => setPhone(e.target.value)} />
           <input className="input" placeholder="Lat (41.2995)" value={lat} onChange={(e) => { setLat(e.target.value); setAddressPreview(''); }} />
           <input className="input" placeholder="Lng (69.2401)" value={lng} onChange={(e) => { setLng(e.target.value); setAddressPreview(''); }} />
           <select className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
             <option value="">— mas’ul agent —</option>
-            {(agents.data || []).filter((a) => a.login !== 'ofis' && a.login !== 'vanseling').map((a) => (
+            {agentOptions.map((a) => (
               <option key={a.id} value={a.id}>{a.fullName}</option>
             ))}
           </select>
           <button type="button" className="btn" disabled={resolveAddress.isPending} onClick={() => resolveAddress.mutate()}>
             {resolveAddress.isPending ? 'Aniqlanmoqda…' : 'Manzilni aniqlash'}
           </button>
-          <button type="button" className="btn btn-primary" disabled={createCustomer.isPending} onClick={() => createCustomer.mutate()}>
-            {createCustomer.isPending ? 'Saqlanmoqda…' : 'Qo‘shish'}
+          <button type="button" className="btn btn-primary" disabled={saveCustomer.isPending} onClick={() => saveCustomer.mutate()}>
+            {saveCustomer.isPending ? 'Saqlanmoqda…' : editingId ? 'Saqlash' : 'Qo‘shish'}
           </button>
         </div>
         {addressPreview ? <p className="kpi-muted" style={{ marginBottom: 0 }}>Topilgan manzil: <b>{addressPreview}</b></p> : null}
@@ -323,10 +359,10 @@ function CustomersSection() {
       </div>
       <div className="kpi-table-wrap">
         <table className="kpi-table">
-          <thead><tr><th>Mijoz</th><th>Manzil / GPS</th><th>Mas’ul agent</th></tr></thead>
+          <thead><tr><th>Mijoz</th><th>Manzil / GPS</th><th>Mas’ul agent</th><th></th></tr></thead>
           <tbody>
             {(list.data || []).map((c) => (
-              <tr key={c.id}>
+              <tr key={c.id} className={editingId === c.id ? 'is-selected' : undefined}>
                 <td data-label="Mijoz"><b>{c.name}</b><div className="kpi-muted">{c.phone || '—'}</div></td>
                 <td data-label="Manzil / GPS">
                   <div>{c.address || '—'}</div>
@@ -341,6 +377,26 @@ function CustomersSection() {
                     <option value="">— biriktirilmagan —</option>
                     {(agents.data || []).map((a) => <option key={a.id} value={a.id}>{a.fullName}</option>)}
                   </select>
+                </td>
+                <td data-label="Amallar">
+                  <div className="kpi-row-actions">
+                    <button type="button" className="btn" onClick={() => startEdit(c)} title="Tahrirlash">
+                      <Pencil size={14} /> Tahrirlash
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ color: '#b91c1c' }}
+                      disabled={removeCustomer.isPending}
+                      onClick={() => {
+                        if (!window.confirm(`«${c.name}» o‘chirilsinmi?`)) return;
+                        removeCustomer.mutate(c.id);
+                      }}
+                      title="O‘chirish"
+                    >
+                      <Trash2 size={14} /> O‘chirish
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

@@ -726,8 +726,69 @@ router.patch("/kpi/customers/:id", requireKpiAdmin(), async (req, res, next) => 
       res.status(404).json({ error: "Mijoz topilmadi." });
       return;
     }
+    const nextAgentId = req.body?.agentId != null ? String(req.body.agentId).trim() : "";
+    if (req.body?.agentId !== undefined) {
+      const current = await activeAssignment(id);
+      if (!nextAgentId) {
+        if (current) {
+          await db.update(kpiCustomerAssignmentsTable).set({
+            active: false,
+            unassignedAt: new Date(),
+          }).where(eq(kpiCustomerAssignmentsTable.id, current.id));
+        }
+      } else if (!current || current.agentId !== nextAgentId) {
+        if (current) {
+          await db.update(kpiCustomerAssignmentsTable).set({
+            active: false,
+            unassignedAt: new Date(),
+          }).where(eq(kpiCustomerAssignmentsTable.id, current.id));
+        }
+        await db.insert(kpiCustomerAssignmentsTable).values({
+          customerId: id,
+          agentId: nextAgentId,
+          active: true,
+          assignedBy: actor.id,
+        });
+      }
+    }
     await recordAudit({ action: "kpi.customer.updated", entityType: "kpi_customer", entityId: id, actorName: actor.name, details: row.name });
-    res.json(row);
+    const assign = await activeAssignment(id);
+    res.json({ ...row, agentId: assign?.agentId ?? null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/kpi/customers/:id", requireKpiAdmin(), async (req, res, next) => {
+  try {
+    const actor = getKpiActor(res);
+    const id = String(req.params.id);
+    const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, id)).limit(1);
+    if (!cust) {
+      res.status(404).json({ error: "Mijoz topilmadi." });
+      return;
+    }
+    const [orderHit] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(kpiOrdersTable)
+      .where(eq(kpiOrdersTable.customerId, id));
+    if ((orderHit?.n ?? 0) > 0) {
+      res.status(409).json({
+        error: `Bu mijozda ${orderHit.n} ta savdo bor — o‘chirib bo‘lmaydi. Agentni olib tashlang yoki statusni o‘zgartiring.`,
+      });
+      return;
+    }
+    await db.delete(kpiVisitsTable).where(eq(kpiVisitsTable.customerId, id));
+    await db.delete(kpiCustomerAssignmentsTable).where(eq(kpiCustomerAssignmentsTable.customerId, id));
+    await db.delete(kpiCustomersTable).where(eq(kpiCustomersTable.id, id));
+    await recordAudit({
+      action: "kpi.customer.deleted",
+      entityType: "kpi_customer",
+      entityId: id,
+      actorName: actor.name,
+      details: cust.name,
+    });
+    res.json({ ok: true, id, name: cust.name });
   } catch (error) {
     next(error);
   }
