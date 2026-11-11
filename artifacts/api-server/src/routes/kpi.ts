@@ -1670,8 +1670,24 @@ router.get("/kpi/route", requireKpiAgentOrAdmin(), async (req, res, next) => {
       distanceM: route?.distance != null ? Math.round(route.distance) : null,
       durationSec: route?.duration != null ? Math.round(route.duration) : null,
     });
-  } catch (error) {
-    next(error);
+  } catch {
+    const fromLat = Number(req.query.fromLat);
+    const fromLng = Number(req.query.fromLng);
+    const toLat = Number(req.query.toLat);
+    const toLng = Number(req.query.toLng);
+    if ([fromLat, fromLng, toLat, toLng].every((n) => Number.isFinite(n))) {
+      res.status(502).json({
+        ok: false,
+        path: [
+          [fromLat, fromLng],
+          [toLat, toLng],
+        ],
+        distanceM: null,
+        durationSec: null,
+      });
+      return;
+    }
+    next(new Error("Marshrut hisoblanmadi."));
   }
 });
 

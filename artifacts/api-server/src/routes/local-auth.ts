@@ -131,10 +131,7 @@ function ensureAdmin(store: Store): boolean {
   let changed = false;
   const admin = store.accounts.find((account) => account.login === "bordouzadmin");
   if (admin) {
-    if (admin.password !== "2026@admin") {
-      admin.password = "2026@admin";
-      changed = true;
-    }
+    // Parolni majburan qayta yozmaymiz — admin o‘zgartirgan bo‘lsa saqlanadi.
     if (admin.role !== "super_admin") {
       admin.role = "super_admin";
       changed = true;

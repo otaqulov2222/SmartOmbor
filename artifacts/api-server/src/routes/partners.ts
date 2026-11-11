@@ -969,14 +969,20 @@ async function writeShipmentSupply(
     const waybillUnitsTotal = unitSnapshot.reduce((sum, item) => sum + item.units, 0);
     let positions = current.lines.map((line) => ({ line, quantity: lineUnits(line) })).filter((item) => item.quantity > 0);
     if (!positions.length) throw Object.assign(new Error("Kirim qatorlari bo‘sh"), { status: 400 });
-    // Juft katta bo‘lsa faqat log — avtomatik “6 ga tushirish” / bloklash YO‘Q (zavod packingini bilmaymiz).
+    // Juft katta bo‘lsa avtomatik o‘zgartirmaymiz; faqat odam tasdiqlamaguncha to‘xtatamiz.
     const inflated = current.lines.filter((line) => pairsLooksInflated(line));
     if (inflated.length) {
       logger.warn({
         shipment: shipmentId,
         confirmPairs: Boolean(opts?.confirmPairs),
         sample: inflated.slice(0, 5).map((line) => `${line.productCode}/${line.size}: juft=${line.pairs}, pachka=${line.pachka || "—"}`),
-      }, "Kirim juft qiymati katta — tekshirish tavsiya, lekin bloklanmaydi");
+      }, "Kirim juft qiymati katta — tasdiq kerak");
+      if (!opts?.confirmPairs) {
+        throw Object.assign(new Error("pairs_suspect"), {
+          status: 400,
+          detail: `Juft (qadoqda) shubhali (${inflated.length} qator). Qiymatni tekshirib tasdiqlang — avtomatik o‘zgartirilmaydi.`,
+        });
+      }
     }
     logger.info({
       shipment: shipmentId,
