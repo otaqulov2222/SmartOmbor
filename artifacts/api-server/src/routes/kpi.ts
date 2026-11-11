@@ -2057,14 +2057,15 @@ function num(value: unknown): number {
 }
 
 function statusLabel(raw: string) {
-  const s = String(raw || "").toLowerCase();
+  const s = String(raw || "").toLowerCase().trim();
   if (s === "confirmed") return "Tasdiqlangan";
-  if (s === "paid") return "To‘langan";
-  if (s === "partially_paid" || s === "partial") return "Qisman";
-  if (s === "pending") return "Kutilmoqda";
-  if (s === "expired") return "Muddati o‘tgan";
-  if (s === "cancelled" || s === "canceled") return "Bekor";
+  if (s === "paid") return "To'langan";
+  if (s === "partially_paid" || s === "partial") return "Qisman to'langan";
+  if (s === "pending" || s === "pending_approval") return "Kutilmoqda";
+  if (s === "expired" || s === "overdue") return "Muddati o'tgan";
+  if (s === "cancelled" || s === "canceled") return "Bekor qilingan";
   if (s === "active") return "Faol";
+  if (s === "inactive") return "Nofaol";
   if (s === "draft") return "Qoralama";
   return raw || "—";
 }

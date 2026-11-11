@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { kpiFetch, readStaffToken, uzs } from '@/kpi/api';
+import { kpiFetch, kpiStatusLabel, readStaffToken, uzs } from '@/kpi/api';
 import './kpi.css';
 
 function parseCoordPair(raw: string): { lat: number; lng: number } | null {
@@ -675,7 +675,7 @@ function OrdersAndKpiSection() {
                   <td data-label="To‘langan">{uzs(o.paidAmount)}</td>
                   <td data-label="Bosqich">{k ? `${k.stageName} (${Number(k.stagePercent)}%)` : '—'}<div className="kpi-muted">{k?.daysRemaining != null ? `${k.daysRemaining} kun qoldi` : ''}</div></td>
                   <td data-label="KPI"><b className="is-ok">{k ? uzs(k.kpiAmount) : '0 so‘m'}</b></td>
-                  <td data-label="Holat"><span className={`kpi-chip ${o.status}`}>{o.status}</span></td>
+                  <td data-label="Holat"><span className={`kpi-chip ${o.status}`}>{kpiStatusLabel(o.status)}</span></td>
                 </tr>
               );
             })}
