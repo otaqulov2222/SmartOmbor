@@ -217,18 +217,18 @@ function sheetXml(sheet: Sheet) {
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><tabColor rgb="FF9F1239"/><pageSetUpPr fitToPage="1"/></sheetPr>',
     `<dimension ref="A1:${lastCol}${lastRow}"/>`,
-    '<sheetViews><sheetView workbookViewId="0" showGridLines="0" zoomScale="110"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="20"/><cols>${cols}</cols><sheetData>`,
+    '<sheetViews><sheetView workbookViewId="0" showGridLines="1" zoomScale="120"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>',
+    `<sheetFormatPr defaultRowHeight="22"/><cols>${cols}</cols><sheetData>`,
   ];
   const writeRow = (r: number, cells: Cell[], height: number, styleFor: (index: number, cell: Cell) => number) => {
     let row = `<row r="${r}" ht="${height}" customHeight="1">`;
     for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
     lines.push(row + "</row>");
   };
-  writeRow(1, sheet.headers, 24, () => STYLE.header);
+  writeRow(1, sheet.headers, 26, () => STYLE.header);
   sheet.rows.forEach((row, i) => {
     const zebra = i % 2 === 1;
-    writeRow(i + 2, row, 20, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
+    writeRow(i + 2, row, 22, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
   });
   lines.push(`</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/>`);
   lines.push('<pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>');
@@ -238,8 +238,8 @@ function sheetXml(sheet: Sheet) {
 }
 
 /**
- * Dense professional table:
- * solid white/zebra cells, visible borders, short columns, Holat pastels.
+ * Dense table with REAL visible grid:
+ * border index 0 = empty (Excel default), 1 = data grid, 2 = header.
  */
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -249,56 +249,59 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <numFmt numFmtId="166" formatCode="0"/>
 </numFmts>
 <fonts count="7">
-<font><sz val="10"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF047857"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB45309"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB91C1C"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF1D4ED8"/></font>
-<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF9F1239"/></font>
+<font><sz val="11"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF047857"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFB45309"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFB91C1C"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF1D4ED8"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF9F1239"/></font>
 </fonts>
 <fills count="9">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFCBD5E1"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFECACA"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFDBEAFE"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill>
 </fills>
-<borders count="2">
+<borders count="3">
 <border>
-  <left style="thin"><color rgb="FF94A3B8"/></left>
-  <right style="thin"><color rgb="FF94A3B8"/></right>
-  <top style="thin"><color rgb="FF94A3B8"/></top>
-  <bottom style="thin"><color rgb="FF94A3B8"/></bottom>
+  <left/><right/><top/><bottom/>
 </border>
 <border>
-  <left style="thin"><color rgb="FF0F172A"/></left>
-  <right style="thin"><color rgb="FF0F172A"/></right>
-  <top style="thin"><color rgb="FF0F172A"/></top>
+  <left style="medium"><color rgb="FF334155"/></left>
+  <right style="medium"><color rgb="FF334155"/></right>
+  <top style="medium"><color rgb="FF334155"/></top>
+  <bottom style="medium"><color rgb="FF334155"/></bottom>
+</border>
+<border>
+  <left style="medium"><color rgb="FF0F172A"/></left>
+  <right style="medium"><color rgb="FF0F172A"/></right>
+  <top style="medium"><color rgb="FF0F172A"/></top>
   <bottom style="medium"><color rgb="FFE11D48"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
 <cellXfs count="15">
-<xf numFmtId="0" fontId="0" fillId="8" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
-<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
-<xf numFmtId="164" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="166" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="166" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="5" fillId="7" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="6" fillId="8" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
-<xf numFmtId="0" fontId="6" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="8" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="8" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="8" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="8" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="6" fillId="8" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="6" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
 </cellXfs>
 </styleSheet>`;
 
