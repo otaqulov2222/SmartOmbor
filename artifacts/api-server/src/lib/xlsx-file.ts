@@ -96,12 +96,14 @@ const STYLE = {
   int: 10,
   zebraInt: 11,
   info: 12,
+  orderId: 13,
+  zebraOrderId: 14,
 } as const;
 
 /** Soft status tones — only for Holat. confirmed=blue, paid=green. */
 function statusStyle(value: unknown): number | null {
   const s = String(value ?? "").toLowerCase().trim();
-  if (!s) return null;
+  if (!s || s === "—") return null;
   if (s.includes("pending") || s.includes("partial") || s.includes("kutil") || s.includes("qisman") || s === "agent") {
     return STYLE.warn;
   }
@@ -115,10 +117,7 @@ function statusStyle(value: unknown): number | null {
   ) {
     return STYLE.bad;
   }
-  // Tasdiqlangan ≠ To'langan
-  if (s.includes("confirm") || s.includes("tasdiq")) {
-    return STYLE.info;
-  }
+  if (s.includes("confirm") || s.includes("tasdiq")) return STYLE.info;
   if (
     s === "paid" ||
     s.includes("to‘lang") ||
@@ -135,51 +134,52 @@ function statusStyle(value: unknown): number | null {
 }
 
 function isMoneyHeader(header: string) {
-  return /jami|to‘lang|tolang|baza|kpi summa|reja|qarz|amount|total|paid|sales|so'm|som/i.test(header);
+  return /jami|to‘lang|tolang|baza|savdo|^kpi$|kpi summa|reja|qarz|amount|total|paid|sales|so'm|som/i.test(header);
 }
 function isPctHeader(header: string) {
   return /foiz|%|percent/i.test(header);
 }
 function isIntHeader(header: string) {
-  return /qolgan kun|days|kun\b/i.test(header);
+  return /^kun$|qolgan kun|days/i.test(header);
 }
 function isCoordHeader(header: string) {
   return /^(lat|lng)$/i.test(header.trim());
 }
 function isStatusHeader(header: string) {
-  return /holat|status|gps|to'lov holati|tolov holati/i.test(header);
+  return /^holat$|status|gps|to'lov holati|tolov holati/i.test(header);
 }
 function isBosqichHeader(header: string) {
   return /bosqich|stage/i.test(header);
 }
+function isOrderHeader(header: string) {
+  return /buyurtma|raqam|^№/i.test(header);
+}
 
+/** Dense widths — table looks solid, not full of empty gaps */
 function colWidth(sheet: Sheet, index: number) {
   const header = sheet.headers[index] || "";
   let max = header.length;
-  let numeric = true;
-  const sample = Math.min(sheet.rows.length, 200);
+  const sample = Math.min(sheet.rows.length, 250);
   for (let row = 0; row < sample; row += 1) {
     const value = sheet.rows[row]?.[index];
     if (typeof value === "number" && Number.isFinite(value)) {
       const formatted =
-        Math.abs(value) >= 1000 ? value.toLocaleString("fr-FR").length + 2 : String(value).length + 2;
+        Math.abs(value) >= 1000 ? value.toLocaleString("fr-FR").length + 1 : String(value).length + 1;
       if (formatted > max) max = formatted;
     } else if (value != null && value !== "") {
-      numeric = false;
       if (String(value).length > max) max = String(value).length;
     }
   }
-  if (isStatusHeader(header)) return Math.min(28, Math.max(20, max + 6));
-  if (isBosqichHeader(header)) return Math.min(16, Math.max(12, max + 3));
-  if (isIntHeader(header)) return Math.min(14, Math.max(12, max + 3));
-  if (isCoordHeader(header)) return Math.min(14, Math.max(12, max + 2));
-  if (numeric || isMoneyHeader(header) || isPctHeader(header)) {
-    return Math.min(18, Math.max(13, max + 3));
-  }
-  if (/manzil|mijoz|agent|buyurtma|nom|f\.i\.sh|login|reference/i.test(header)) {
-    return Math.min(44, Math.max(20, max + 6));
-  }
-  return Math.min(38, Math.max(16, max + 5));
+  if (isStatusHeader(header)) return Math.min(18, Math.max(14, max + 1));
+  if (isBosqichHeader(header)) return Math.min(12, Math.max(10, max + 1));
+  if (isIntHeader(header)) return Math.min(8, Math.max(7, max + 1));
+  if (isPctHeader(header)) return Math.min(9, Math.max(8, max + 1));
+  if (isCoordHeader(header)) return Math.min(11, Math.max(9, max + 1));
+  if (isMoneyHeader(header)) return Math.min(14, Math.max(11, max + 1));
+  if (isOrderHeader(header)) return Math.min(12, Math.max(10, max + 1));
+  if (/agent|login|telefon|f\.i\.sh/i.test(header)) return Math.min(14, Math.max(10, max + 1));
+  if (/manzil|mijoz|reference/i.test(header)) return Math.min(28, Math.max(14, max + 1));
+  return Math.min(16, Math.max(10, max + 1));
 }
 
 function cellXml(ref: string, cell: Cell, style: number) {
@@ -191,11 +191,11 @@ function cellXml(ref: string, cell: Cell, style: number) {
 function styleForCell(header: string, cell: Cell, zebra: boolean): number {
   const number = typeof cell === "number" && Number.isFinite(cell);
   if (!number) {
-    // Color only Holat — Bosqich stays plain so the sheet stays calm
     if (isStatusHeader(header)) {
       const status = statusStyle(cell);
       if (status != null) return status;
     }
+    if (isOrderHeader(header)) return zebra ? STYLE.zebraOrderId : STYLE.orderId;
     return zebra ? STYLE.zebraText : STYLE.text;
   }
   if (isIntHeader(header)) return zebra ? STYLE.zebraInt : STYLE.int;
@@ -215,85 +215,90 @@ function sheetXml(sheet: Sheet) {
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
-    '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
-    '<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="22"/><cols>${cols}</cols><sheetData>`,
+    '<sheetPr><tabColor rgb="FF9F1239"/><pageSetUpPr fitToPage="1"/></sheetPr>',
+    `<dimension ref="A1:${lastCol}${lastRow}"/>`,
+    '<sheetViews><sheetView workbookViewId="0" showGridLines="0" zoomScale="110"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>',
+    `<sheetFormatPr defaultRowHeight="20"/><cols>${cols}</cols><sheetData>`,
   ];
   const writeRow = (r: number, cells: Cell[], height: number, styleFor: (index: number, cell: Cell) => number) => {
     let row = `<row r="${r}" ht="${height}" customHeight="1">`;
     for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
     lines.push(row + "</row>");
   };
-  writeRow(1, sheet.headers, 26, () => STYLE.header);
+  writeRow(1, sheet.headers, 24, () => STYLE.header);
   sheet.rows.forEach((row, i) => {
     const zebra = i % 2 === 1;
-    writeRow(i + 2, row, 22, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
+    writeRow(i + 2, row, 20, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
   });
   lines.push(`</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/>`);
-  lines.push('<pageMargins left="0.4" right="0.4" top="0.45" bottom="0.45" header="0.2" footer="0.2"/>');
+  lines.push('<pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>');
   lines.push('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="1"/>');
   lines.push("</worksheet>");
   return lines.join("");
 }
 
 /**
- * Clean finance-report look:
- * slate header, cool gray zebra, soft pastel Holat chips, no loud fills.
+ * Dense professional table:
+ * solid white/zebra cells, visible borders, short columns, Holat pastels.
  */
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <numFmts count="3">
 <numFmt numFmtId="164" formatCode="#,##0"/>
-<numFmt numFmtId="165" formatCode="0.00"/>
+<numFmt numFmtId="165" formatCode="0"/>
 <numFmt numFmtId="166" formatCode="0"/>
 </numFmts>
-<fonts count="6">
-<font><sz val="11"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<fonts count="7">
+<font><sz val="10"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF047857"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB45309"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB91C1C"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF1D4ED8"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF9F1239"/></font>
 </fonts>
-<fills count="8">
+<fills count="9">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FF334155"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFECFDF5"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFFFFBEB"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFFEF2F2"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F0"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFECACA"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFDBEAFE"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill>
 </fills>
 <borders count="2">
 <border>
-  <left style="thin"><color rgb="FFE2E8F0"/></left>
-  <right style="thin"><color rgb="FFE2E8F0"/></right>
-  <top style="thin"><color rgb="FFE2E8F0"/></top>
-  <bottom style="thin"><color rgb="FFE2E8F0"/></bottom>
+  <left style="thin"><color rgb="FF94A3B8"/></left>
+  <right style="thin"><color rgb="FF94A3B8"/></right>
+  <top style="thin"><color rgb="FF94A3B8"/></top>
+  <bottom style="thin"><color rgb="FF94A3B8"/></bottom>
 </border>
 <border>
-  <left style="thin"><color rgb="FF334155"/></left>
-  <right style="thin"><color rgb="FF334155"/></right>
-  <top style="thin"><color rgb="FF334155"/></top>
-  <bottom style="thin"><color rgb="FF334155"/></bottom>
+  <left style="thin"><color rgb="FF0F172A"/></left>
+  <right style="thin"><color rgb="FF0F172A"/></right>
+  <top style="thin"><color rgb="FF0F172A"/></top>
+  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="13">
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+<cellXfs count="15">
+<xf numFmtId="0" fontId="0" fillId="8" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
 <xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="8" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 <xf numFmtId="166" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="5" fillId="7" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="5" fillId="7" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="6" fillId="8" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="6" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
 </cellXfs>
 </styleSheet>`;
 

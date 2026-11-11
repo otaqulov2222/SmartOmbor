@@ -2097,7 +2097,7 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
 
     if (kind === "orders") {
       sheetName = "Savdolar";
-      headers = ["Buyurtma №", "To'lov holati", "Agent", "Mijoz", "Jami (so'm)", "To'langan (so'm)", "Sana", "Muddat"];
+      headers = ["Buyurtma", "Holat", "Agent", "Mijoz", "Jami", "To'langan", "Sana", "Muddat"];
       const data = await db.select().from(kpiOrdersTable).orderBy(desc(kpiOrdersTable.createdAt)).limit(2000);
       rows = data.map((r) => [
         r.number,
@@ -2123,16 +2123,7 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
       ]);
     } else if (kind === "kpi") {
       sheetName = "KPI";
-      headers = [
-        "Buyurtma №",
-        "Agent",
-        "Savdo baza (so'm)",
-        "KPI foizi %",
-        "KPI summa (so'm)",
-        "To'lov holati",
-        "KPI bosqichi",
-        "Qolgan kun",
-      ];
+      headers = ["Buyurtma", "Agent", "Savdo", "Foiz %", "KPI", "Holat", "Bosqich", "Kun"];
       const data = await db.select().from(kpiCalculationsTable).orderBy(desc(kpiCalculationsTable.updatedAt)).limit(2000);
       rows = data.map((r) => [
         orderNumber.get(r.orderId) || r.orderId,
@@ -2146,7 +2137,7 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
       ]);
     } else if (kind === "agents") {
       sheetName = "Agentlar";
-      headers = ["F.I.Sh", "Login", "Telefon", "Holat", "Oylik reja (so'm)"];
+      headers = ["F.I.Sh", "Login", "Telefon", "Holat", "Oylik reja"];
       const data = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
       rows = data.map((r) => [r.fullName, r.login, r.phone, statusLabel(r.status), num(r.salesPlan)]);
     } else if (kind === "customers") {
