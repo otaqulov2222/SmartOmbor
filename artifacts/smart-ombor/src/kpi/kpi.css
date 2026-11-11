@@ -35,7 +35,8 @@
 .kpi-table th, .kpi-table td { text-align: left; padding: .65rem .55rem; border-bottom: 1px solid #eef2f6; vertical-align: top; }
 .kpi-table th { color: #64748b; font-weight: 600; }
 .kpi-chip { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem .55rem; border-radius: 999px; background: #e2e8f0; font-size: .75rem; font-weight: 600; }
-.kpi-chip.active, .kpi-chip.confirmed, .kpi-chip.paid, .kpi-chip.ok { background: #dcfce7; color: #166534; }
+.kpi-chip.confirmed { background: #dbeafe; color: #1d4ed8; }
+.kpi-chip.active, .kpi-chip.paid, .kpi-chip.ok { background: #dcfce7; color: #166534; }
 .kpi-chip.pending, .kpi-chip.pending_approval, .kpi-chip.partial, .kpi-chip.partially_paid { background: #fef3c7; color: #92400e; }
 .kpi-chip.cancelled, .kpi-chip.expired, .kpi-chip.overdue, .kpi-chip.bad { background: #fee2e2; color: #991b1b; }
 .kpi-muted { color: #64748b; font-size: .8rem; }

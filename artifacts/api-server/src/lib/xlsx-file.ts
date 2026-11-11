@@ -95,9 +95,10 @@ const STYLE = {
   bad: 9,
   int: 10,
   zebraInt: 11,
+  info: 12,
 } as const;
 
-/** Soft status tones — only for Holat column, not Bosqich / 0%. */
+/** Soft status tones — only for Holat. confirmed=blue, paid=green. */
 function statusStyle(value: unknown): number | null {
   const s = String(value ?? "").toLowerCase().trim();
   if (!s) return null;
@@ -114,10 +115,12 @@ function statusStyle(value: unknown): number | null {
   ) {
     return STYLE.bad;
   }
+  // Tasdiqlangan ≠ To'langan
+  if (s.includes("confirm") || s.includes("tasdiq")) {
+    return STYLE.info;
+  }
   if (
-    s.includes("confirm") ||
     s === "paid" ||
-    s.includes("tasdiq") ||
     s.includes("to‘lang") ||
     s.includes("to'lang") ||
     s.includes("tolang") ||
@@ -132,7 +135,7 @@ function statusStyle(value: unknown): number | null {
 }
 
 function isMoneyHeader(header: string) {
-  return /jami|to‘lang|tolang|baza|kpi|summa|reja|qarz|amount|total|paid|sales/i.test(header);
+  return /jami|to‘lang|tolang|baza|kpi summa|reja|qarz|amount|total|paid|sales|so'm|som/i.test(header);
 }
 function isPctHeader(header: string) {
   return /foiz|%|percent/i.test(header);
@@ -144,7 +147,7 @@ function isCoordHeader(header: string) {
   return /^(lat|lng)$/i.test(header.trim());
 }
 function isStatusHeader(header: string) {
-  return /holat|status|gps/i.test(header);
+  return /holat|status|gps|to'lov holati|tolov holati/i.test(header);
 }
 function isBosqichHeader(header: string) {
   return /bosqich|stage/i.test(header);
@@ -244,21 +247,23 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <numFmt numFmtId="165" formatCode="0.00"/>
 <numFmt numFmtId="166" formatCode="0"/>
 </numFmts>
-<fonts count="5">
+<fonts count="6">
 <font><sz val="11"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
 <font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF047857"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB45309"/></font>
 <font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB91C1C"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF1D4ED8"/></font>
 </fonts>
-<fills count="7">
+<fills count="8">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FF334155"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFECFDF5"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFFFBEB"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEF2F2"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFDBEAFE"/></patternFill></fill>
 </fills>
 <borders count="2">
 <border>
@@ -275,7 +280,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="12">
+<cellXfs count="13">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
@@ -288,6 +293,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 <xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 <xf numFmtId="166" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="7" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 </cellXfs>
 </styleSheet>`;
 

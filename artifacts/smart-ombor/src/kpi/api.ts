@@ -59,7 +59,7 @@ export function kpiStatusLabel(raw: unknown): string {
   const s = String(raw ?? '').toLowerCase().trim();
   if (!s) return '—';
   if (s === 'confirmed') return 'Tasdiqlangan';
-  if (s === 'paid') return "To'langan";
+  if (s === 'paid') return "To'liq to'langan";
   if (s === 'partially_paid' || s === 'partial') return "Qisman to'langan";
   if (s === 'pending' || s === 'pending_approval') return 'Kutilmoqda';
   if (s === 'expired' || s === 'overdue') return "Muddati o'tgan";

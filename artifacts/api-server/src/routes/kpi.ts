@@ -2059,7 +2059,7 @@ function num(value: unknown): number {
 function statusLabel(raw: string) {
   const s = String(raw || "").toLowerCase().trim();
   if (s === "confirmed") return "Tasdiqlangan";
-  if (s === "paid") return "To'langan";
+  if (s === "paid") return "To'liq to'langan";
   if (s === "partially_paid" || s === "partial") return "Qisman to'langan";
   if (s === "pending" || s === "pending_approval") return "Kutilmoqda";
   if (s === "expired" || s === "overdue") return "Muddati o'tgan";
@@ -2068,6 +2068,13 @@ function statusLabel(raw: string) {
   if (s === "inactive") return "Nofaol";
   if (s === "draft") return "Qoralama";
   return raw || "—";
+}
+
+function stageLabel(raw: unknown) {
+  const s = String(raw ?? "").trim();
+  if (!s || s === "0%" || s === "0" || s.toLowerCase() === "none") return "—";
+  if (/^\d+-bosqich$/i.test(s)) return s.replace(/bosqich/i, "bosqich");
+  return s;
 }
 
 /* ---------- Export: styled XLSX (colors, wide columns, readable numbers) ---------- */
@@ -2090,7 +2097,7 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
 
     if (kind === "orders") {
       sheetName = "Savdolar";
-      headers = ["Raqam", "Holat", "Agent", "Mijoz", "Jami", "To‘langan", "Sana", "Muddat"];
+      headers = ["Buyurtma №", "To'lov holati", "Agent", "Mijoz", "Jami (so'm)", "To'langan (so'm)", "Sana", "Muddat"];
       const data = await db.select().from(kpiOrdersTable).orderBy(desc(kpiOrdersTable.createdAt)).limit(2000);
       rows = data.map((r) => [
         r.number,
@@ -2116,7 +2123,16 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
       ]);
     } else if (kind === "kpi") {
       sheetName = "KPI";
-      headers = ["Buyurtma", "Agent", "Baza", "Foiz %", "KPI summa", "Holat", "Bosqich", "Qolgan kun"];
+      headers = [
+        "Buyurtma №",
+        "Agent",
+        "Savdo baza (so'm)",
+        "KPI foizi %",
+        "KPI summa (so'm)",
+        "To'lov holati",
+        "KPI bosqichi",
+        "Qolgan kun",
+      ];
       const data = await db.select().from(kpiCalculationsTable).orderBy(desc(kpiCalculationsTable.updatedAt)).limit(2000);
       rows = data.map((r) => [
         orderNumber.get(r.orderId) || r.orderId,
@@ -2125,17 +2141,17 @@ router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
         num(r.stagePercent),
         num(r.kpiAmount),
         statusLabel(r.status),
-        r.stageName,
+        stageLabel(r.stageName),
         r.daysRemaining == null ? "" : Number(r.daysRemaining),
       ]);
     } else if (kind === "agents") {
       sheetName = "Agentlar";
-      headers = ["F.I.Sh", "Login", "Telefon", "Holat", "Oylik reja"];
+      headers = ["F.I.Sh", "Login", "Telefon", "Holat", "Oylik reja (so'm)"];
       const data = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
       rows = data.map((r) => [r.fullName, r.login, r.phone, statusLabel(r.status), num(r.salesPlan)]);
     } else if (kind === "customers") {
       sheetName = "Mijozlar";
-      headers = ["Mijoz", "Telefon", "Manzil", "Lat", "Lng", "GPS", "Mas’ul agent", "Holat"];
+      headers = ["Mijoz", "Telefon", "Manzil", "Lat", "Lng", "GPS", "Mas'ul agent", "Holat"];
       const assigns = await db
         .select()
         .from(kpiCustomerAssignmentsTable)
