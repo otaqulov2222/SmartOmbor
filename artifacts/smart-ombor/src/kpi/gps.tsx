@@ -90,7 +90,7 @@ export function GpsPage() {
   const [focusNonce, setFocusNonce] = useState(0);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [sub, setSub] = useState<'points' | 'agents' | 'route'>('points');
-  const [coordEdit, setCoordEdit] = useState<{ id: string; lat: string; lng: string; address: string } | null>(null);
+  const [coordEdit, setCoordEdit] = useState<{ id: string; coords: string; address: string } | null>(null);
 
   const q = useQuery({
     queryKey: ['kpi-gps', agentId],
@@ -99,11 +99,13 @@ export function GpsPage() {
   });
 
   const saveCoords = useMutation({
-    mutationFn: async (payload: { id: string; lat: string; lng: string; address: string }) => {
-      const lat = Number(payload.lat);
-      const lng = Number(payload.lng);
+    mutationFn: async (payload: { id: string; coords: string; address: string }) => {
+      const text = payload.coords.trim().replace(/;/g, ',').replace(/\s+/g, ' ');
+      const parts = text.includes(',') ? text.split(',').map((p) => p.trim()) : text.split(' ').filter(Boolean);
+      const lat = Number(parts[0]);
+      const lng = Number(parts[1]);
       if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 1 || Math.abs(lng) < 1) {
-        throw new Error('Aniq lat/lng kiriting (taxminiy pinni saqlamang).');
+        throw new Error('Koordinata kiriting: 41.355233, 69.386437');
       }
       let address = payload.address.trim();
       if (!address) {
@@ -289,11 +291,13 @@ export function GpsPage() {
                     <td data-label="Manzil / GPS" onClick={(e) => e.stopPropagation()}>
                       {isEd ? (
                         <div style={{ display: 'grid', gap: '.3rem' }}>
-                          <input className="input" placeholder="Manzil" value={coordEdit.address} onChange={(e) => setCoordEdit({ ...coordEdit, address: e.target.value })} />
-                          <div className="kpi-row-actions">
-                            <input className="input" style={{ width: 110 }} placeholder="Lat (41.29)" value={coordEdit.lat} onChange={(e) => setCoordEdit({ ...coordEdit, lat: e.target.value })} />
-                            <input className="input" style={{ width: 110 }} placeholder="Lng (69.24)" value={coordEdit.lng} onChange={(e) => setCoordEdit({ ...coordEdit, lng: e.target.value })} />
-                          </div>
+                          <input
+                            className="input"
+                            placeholder="Koordinata: 41.355233, 69.386437"
+                            value={coordEdit.coords}
+                            onChange={(e) => setCoordEdit({ ...coordEdit, coords: e.target.value, address: '' })}
+                          />
+                          <input className="input" placeholder="Manzil (avto)" value={coordEdit.address} onChange={(e) => setCoordEdit({ ...coordEdit, address: e.target.value })} />
                         </div>
                       ) : (
                         <>
@@ -329,8 +333,7 @@ export function GpsPage() {
                               onClick={() => setCoordEdit({
                                 id: p.id,
                                 // Never prefill inferred/fake pins as if they were exact
-                                lat: p.exactGps ? String(p.lat) : '',
-                                lng: p.exactGps ? String(p.lng) : '',
+                                coords: p.exactGps ? `${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` : '',
                                 address: p.address || '',
                               })}
                             >

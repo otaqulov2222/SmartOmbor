@@ -1,8 +1,128 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { kpiFetch, uzs } from '@/kpi/api';
 import './kpi.css';
+
+function parseCoordPair(raw: string): { lat: number; lng: number } | null {
+  const text = raw.trim().replace(/;/g, ',').replace(/\s+/g, ' ');
+  const parts = text.includes(',')
+    ? text.split(',').map((p) => p.trim())
+    : text.split(' ').filter(Boolean);
+  if (parts.length < 2) return null;
+  const lat = Number(parts[0]);
+  const lng = Number(parts[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 1 || Math.abs(lng) < 1) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function formatCoordPair(lat: number, lng: number) {
+  return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+}
+
+/** Compact map: paste coords or click/drag marker. */
+function CustomerPinMap({
+  lat,
+  lng,
+  onPick,
+}: {
+  lat: number | null;
+  lng: number | null;
+  onPick: (lat: number, lng: number) => void;
+}) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
+
+  useEffect(() => {
+    let cancelled = false;
+    const boot = async () => {
+      const w = window as unknown as { L?: any };
+      if (!w.L) {
+        if (!document.getElementById('leaflet-css')) {
+          const link = document.createElement('link');
+          link.id = 'leaflet-css';
+          link.rel = 'stylesheet';
+          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          document.head.appendChild(link);
+        }
+        if (!document.getElementById('leaflet-js')) {
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement('script');
+            script.id = 'leaflet-js';
+            script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Leaflet yuklanmadi'));
+            document.head.appendChild(script);
+          });
+        } else {
+          await new Promise<void>((resolve) => {
+            const wait = () => {
+              if ((window as unknown as { L?: any }).L) resolve();
+              else window.setTimeout(wait, 50);
+            };
+            wait();
+          });
+        }
+      }
+      if (cancelled || !boxRef.current || mapRef.current) return;
+      const L = (window as unknown as { L: any }).L;
+      const map = L.map(boxRef.current, { zoomControl: true }).setView([41.3111, 69.2797], 12);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      map.on('click', (e: { latlng: { lat: number; lng: number } }) => {
+        onPickRef.current(e.latlng.lat, e.latlng.lng);
+      });
+      mapRef.current = map;
+      setTimeout(() => map.invalidateSize(), 80);
+    };
+    void boot().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const L = (window as unknown as { L?: any }).L;
+    if (!map || !L || lat == null || lng == null) return;
+    if (!markerRef.current) {
+      markerRef.current = L.marker([lat, lng], { draggable: true }).addTo(map);
+      markerRef.current.on('dragend', () => {
+        const p = markerRef.current.getLatLng();
+        onPickRef.current(p.lat, p.lng);
+      });
+    } else {
+      markerRef.current.setLatLng([lat, lng]);
+    }
+    map.setView([lat, lng], Math.max(map.getZoom(), 16));
+  }, [lat, lng]);
+
+  useEffect(() => () => {
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    }
+  }, []);
+
+  return (
+    <div
+      ref={boxRef}
+      style={{
+        width: '100%',
+        height: 220,
+        borderRadius: 12,
+        overflow: 'hidden',
+        border: '1px solid #e2e8f0',
+        marginTop: '.55rem',
+      }}
+    />
+  );
+}
 
 type Dash = {
   agentsTotal: number; agentsActive: number; customersTotal: number; customersPending: number;
@@ -227,74 +347,89 @@ function CustomersSection() {
   const [q, setQ] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [lat, setLat] = useState('');
-  const [lng, setLng] = useState('');
+  const [coords, setCoords] = useState('');
   const [agentId, setAgentId] = useState('');
   const [phone, setPhone] = useState('');
   const [addressPreview, setAddressPreview] = useState('');
+  const [geoBusy, setGeoBusy] = useState(false);
   const [formError, setFormError] = useState('');
   const agents = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
   const list = useQuery({
     queryKey: ['kpi-customers', q],
     queryFn: () => kpiFetch<Customer[]>(`/kpi/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   });
+  const parsed = useMemo(() => parseCoordPair(coords), [coords]);
   const resetForm = () => {
     setEditingId(null);
     setName('');
-    setLat('');
-    setLng('');
+    setCoords('');
     setAgentId('');
     setPhone('');
     setAddressPreview('');
     setFormError('');
+    setGeoBusy(false);
   };
   const startEdit = (c: Customer) => {
     setEditingId(c.id);
     setName(c.name || '');
     setPhone(c.phone || '');
-    setLat(c.lat != null && c.lat !== '' ? String(c.lat) : '');
-    setLng(c.lng != null && c.lng !== '' ? String(c.lng) : '');
+    const la = c.lat != null && c.lat !== '' ? Number(c.lat) : NaN;
+    const ln = c.lng != null && c.lng !== '' ? Number(c.lng) : NaN;
+    setCoords(Number.isFinite(la) && Number.isFinite(ln) ? formatCoordPair(la, ln) : '');
     setAgentId(c.agentId || '');
     setAddressPreview(c.address || '');
     setFormError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+  const applyPick = useCallback((lat: number, lng: number) => {
+    setCoords(formatCoordPair(lat, lng));
+  }, []);
+  useEffect(() => {
+    if (!parsed) {
+      if (coords.trim()) setAddressPreview('');
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setGeoBusy(true);
+      void kpiFetch<{ address: string; displayName?: string }>(
+        `/kpi/geo/reverse?lat=${encodeURIComponent(parsed.lat.toFixed(6))}&lng=${encodeURIComponent(parsed.lng.toFixed(6))}`,
+      )
+        .then((data) => {
+          if (cancelled) return;
+          setFormError('');
+          setAddressPreview(data.address || data.displayName || '');
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setAddressPreview('');
+          setFormError((err as Error).message || 'Manzil topilmadi');
+        })
+        .finally(() => {
+          if (!cancelled) setGeoBusy(false);
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [parsed, coords]);
   const assign = useMutation({
     mutationFn: (payload: { id: string; agentId: string }) =>
       kpiFetch(`/kpi/customers/${payload.id}/assign`, { method: 'POST', body: JSON.stringify({ agentId: payload.agentId }) }),
     onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-customers'] }),
   });
-  const resolveAddress = useMutation({
-    mutationFn: async () => {
-      const la = Number(lat);
-      const ln = Number(lng);
-      if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) < 1 || Math.abs(ln) < 1) {
-        throw new Error('Aniq lat/lng kiriting.');
-      }
-      return kpiFetch<{ address: string; displayName?: string }>(
-        `/kpi/geo/reverse?lat=${encodeURIComponent(la.toFixed(6))}&lng=${encodeURIComponent(ln.toFixed(6))}`,
-      );
-    },
-    onSuccess: (data) => {
-      setFormError('');
-      setAddressPreview(data.address || data.displayName || '');
-    },
-    onError: (err) => setFormError((err as Error).message || 'Manzil topilmadi'),
-  });
   const saveCustomer = useMutation({
     mutationFn: async () => {
-      const la = Number(lat);
-      const ln = Number(lng);
+      const pair = parseCoordPair(coords);
       if (!name.trim()) throw new Error('Mijoz nomi kerak.');
-      if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) < 1 || Math.abs(ln) < 1) {
-        throw new Error('Aniq lat/lng kiriting.');
-      }
+      if (!pair) throw new Error('Koordinata kiriting: 41.355233, 69.386437');
       if (!agentId) throw new Error('Mas’ul agentni tanlang.');
       const body = {
         name: name.trim(),
         phone: phone.trim(),
-        lat: Number(la.toFixed(6)),
-        lng: Number(ln.toFixed(6)),
+        lat: Number(pair.lat.toFixed(6)),
+        lng: Number(pair.lng.toFixed(6)),
         agentId,
         address: addressPreview.trim() || undefined,
         status: 'active',
@@ -331,27 +466,44 @@ function CustomersSection() {
           ) : null}
         </div>
         <p className="kpi-muted" style={{ marginTop: 0 }}>
-          Nom + lat/lng yozing — tizim tuman/ko‘cha/uyni topadi. Bordim faqat shu nuqta atrofida (250 m) ishlaydi.
+          Koordinata yozing — tizim tuman/ko‘cha/uyni o‘zi topadi. Bordim faqat shu nuqta atrofida (250 m) ishlaydi.
         </p>
         <div className="kpi-form">
           <input className="input" placeholder="Mijoz nomi (masalan Alisher aka Samarqand)" value={name} onChange={(e) => setName(e.target.value)} />
           <input className="input" placeholder="Telefon (ixtiyoriy)" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <input className="input" placeholder="Lat (41.2995)" value={lat} onChange={(e) => { setLat(e.target.value); setAddressPreview(''); }} />
-          <input className="input" placeholder="Lng (69.2401)" value={lng} onChange={(e) => { setLng(e.target.value); setAddressPreview(''); }} />
           <select className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
             <option value="">— mas’ul agent —</option>
             {agentOptions.map((a) => (
               <option key={a.id} value={a.id}>{a.fullName}</option>
             ))}
           </select>
-          <button type="button" className="btn" disabled={resolveAddress.isPending} onClick={() => resolveAddress.mutate()}>
-            {resolveAddress.isPending ? 'Aniqlanmoqda…' : 'Manzilni aniqlash'}
-          </button>
           <button type="button" className="btn btn-primary" disabled={saveCustomer.isPending} onClick={() => saveCustomer.mutate()}>
             {saveCustomer.isPending ? 'Saqlanmoqda…' : editingId ? 'Saqlash' : 'Qo‘shish'}
           </button>
         </div>
-        {addressPreview ? <p className="kpi-muted" style={{ marginBottom: 0 }}>Topilgan manzil: <b>{addressPreview}</b></p> : null}
+        <label className="field" style={{ display: 'grid', gap: '.35rem', marginTop: '.75rem' }}>
+          <b>Koordinata (kenglik, uzunlik)</b>
+          <input
+            className="input"
+            placeholder="41.355233, 69.386437"
+            value={coords}
+            onChange={(e) => setCoords(e.target.value)}
+          />
+          <span className="kpi-muted">
+            Koordinatani yozing — tizim aniq nuqtani xaritaga o‘zi qo‘yadi. Xaritani bosib yoki belgini tortib ham belgilash mumkin.
+          </span>
+        </label>
+        <CustomerPinMap
+          lat={parsed?.lat ?? null}
+          lng={parsed?.lng ?? null}
+          onPick={applyPick}
+        />
+        {geoBusy ? <p className="kpi-muted">Manzil aniqlanmoqda…</p> : null}
+        {addressPreview ? (
+          <p style={{ margin: '.55rem 0 0', color: '#0f766e', fontWeight: 600 }}>
+            Aniqlangan manzil: {addressPreview}
+          </p>
+        ) : null}
         {formError ? <p className="kpi-muted" style={{ color: '#b91c1c' }}>{formError}</p> : null}
       </div>
       <div className="kpi-panel">
