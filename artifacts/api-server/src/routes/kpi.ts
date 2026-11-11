@@ -2056,37 +2056,89 @@ router.post("/kpi/recalculate", requireKpiAdmin(), async (_req, res, next) => {
   }
 });
 
-/* ---------- Export ---------- */
+/* ---------- Export (Excel-friendly: UTF-8 BOM + semicolon) ---------- */
 router.get("/kpi/export/:kind", requireKpiAdmin(), async (req, res, next) => {
   try {
     const kind = String(req.params.kind);
+    const agents = await db.select().from(kpiAgentsTable);
+    const agentName = new Map(agents.map((a) => [a.id, a.fullName]));
+    const customers = await db.select().from(kpiCustomersTable).limit(5000);
+    const customerName = new Map(customers.map((c) => [c.id, c.name]));
+    const ordersLite = await db
+      .select({ id: kpiOrdersTable.id, number: kpiOrdersTable.number })
+      .from(kpiOrdersTable)
+      .limit(5000);
+    const orderNumber = new Map(ordersLite.map((o) => [o.id, o.number]));
+
     let header: string[] = [];
     let lines: string[][] = [];
     if (kind === "orders") {
-      header = ["number", "status", "agent_id", "customer_id", "total", "paid", "order_date", "due_date"];
+      header = ["Raqam", "Holat", "Agent", "Mijoz", "Jami", "To‘langan", "Sana", "Muddat"];
       const rows = await db.select().from(kpiOrdersTable).orderBy(desc(kpiOrdersTable.createdAt)).limit(2000);
-      lines = rows.map((r) => [r.number, r.status, r.agentId, r.customerId, r.total, r.paidAmount, r.orderDate, r.paymentDueDate || ""]);
+      lines = rows.map((r) => [
+        r.number,
+        r.status,
+        agentName.get(r.agentId) || r.agentId,
+        customerName.get(r.customerId) || r.customerId,
+        r.total,
+        r.paidAmount,
+        r.orderDate,
+        r.paymentDueDate || "",
+      ]);
     } else if (kind === "payments") {
-      header = ["id", "order_id", "amount", "status", "method", "reference", "paid_at"];
+      header = ["ID", "Buyurtma", "Summa", "Holat", "Usul", "Reference", "To‘lov sanasi"];
       const rows = await db.select().from(kpiPaymentsTable).orderBy(desc(kpiPaymentsTable.createdAt)).limit(2000);
-      lines = rows.map((r) => [r.id, r.orderId, r.amount, r.status, r.method, r.reference, r.paidAt?.toISOString() || ""]);
+      lines = rows.map((r) => [
+        r.id,
+        orderNumber.get(r.orderId) || r.orderId,
+        r.amount,
+        r.status,
+        r.method,
+        r.reference,
+        r.paidAt?.toISOString() || "",
+      ]);
     } else if (kind === "kpi") {
-      header = ["order_id", "agent_id", "base", "percent", "kpi_amount", "status", "stage", "days_remaining"];
+      header = ["Buyurtma", "Agent", "Baza", "Foiz %", "KPI summa", "Holat", "Bosqich", "Qolgan kun"];
       const rows = await db.select().from(kpiCalculationsTable).orderBy(desc(kpiCalculationsTable.updatedAt)).limit(2000);
-      lines = rows.map((r) => [r.orderId, r.agentId, r.baseAmount, r.stagePercent, r.kpiAmount, r.status, r.stageName, String(r.daysRemaining ?? "")]);
+      lines = rows.map((r) => [
+        orderNumber.get(r.orderId) || r.orderId,
+        agentName.get(r.agentId) || r.agentId,
+        r.baseAmount,
+        r.stagePercent,
+        r.kpiAmount,
+        r.status,
+        r.stageName,
+        String(r.daysRemaining ?? ""),
+      ]);
     } else if (kind === "agents") {
-      header = ["full_name", "login", "phone", "status", "sales_plan"];
+      header = ["F.I.Sh", "Login", "Telefon", "Holat", "Oylik reja"];
       const rows = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
       lines = rows.map((r) => [r.fullName, r.login, r.phone, r.status, r.salesPlan]);
     } else if (kind === "customers") {
-      header = ["name", "type", "phone", "status", "address"];
+      header = ["Mijoz", "Telefon", "Manzil", "Lat", "Lng", "GPS", "Mas’ul agent", "Holat"];
+      const assigns = await db
+        .select()
+        .from(kpiCustomerAssignmentsTable)
+        .where(eq(kpiCustomerAssignmentsTable.active, true));
+      const owner = new Map(assigns.map((a) => [a.customerId, a.agentId]));
       const rows = await db.select().from(kpiCustomersTable).orderBy(asc(kpiCustomersTable.name)).limit(2000);
-      lines = rows.map((r) => [r.name, r.type, r.phone, r.status, r.address]);
+      lines = rows.map((r) => [
+        r.name,
+        r.phone,
+        r.address,
+        r.lat ?? "",
+        r.lng ?? "",
+        r.gpsSource === "admin" ? "aniq" : r.gpsSource === "agent" ? "agent" : "taxminiy",
+        agentName.get(owner.get(r.id) || "") || "",
+        r.status,
+      ]);
     } else {
       res.status(400).json({ error: "orders|payments|kpi|agents|customers" });
       return;
     }
-    const body = [header, ...lines].map((row) => row.map(csvEscape).join(",")).join("\n");
+    // Excel (RU/UZ): semicolon delimiter + UTF-8 BOM + sep= hint
+    const rowsOut = [header, ...lines].map((row) => row.map(csvEscape).join(";"));
+    const body = ["sep=;", ...rowsOut].join("\r\n");
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="kpi-${kind}.csv"`);
     res.send("\uFEFF" + body);

@@ -42,6 +42,40 @@
 .kpi-error { color: #b91c1c; margin: 0; }
 .kpi-ok { color: #15803d; margin: 0; }
 .kpi-actions, .kpi-row-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.kpi-export-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .65rem;
+}
+.kpi-export-card {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  text-align: left;
+  padding: .85rem 1rem;
+  border: 1.5px solid #e4e8ee;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.kpi-export-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 18px rgba(29, 78, 216, .08);
+  transform: translateY(-1px);
+}
+.kpi-export-card b { display: block; color: #0f1b2d; font-size: .95rem; }
+.kpi-export-card small { display: block; color: #64748b; font-size: .78rem; margin-top: .15rem; }
+.kpi-export-ico {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: #eff6ff;
+  color: #1d4ed8;
+  flex-shrink: 0;
+}
 .kpi-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .kpi-seg { display: inline-flex; background: #eef2f6; padding: .2rem; border-radius: 10px; gap: .2rem; flex-wrap: wrap; }
 .kpi-seg button { border: 0; background: transparent; padding: .42rem .85rem; border-radius: 8px; font-weight: 600; color: #475569; cursor: pointer; }

@@ -161,14 +161,15 @@ function Card({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-function downloadCsv(kind: string) {
+function downloadCsv(kind: string, label: string) {
   void kpiFetch<string>(`/kpi/export/${kind}`)
     .then((text) => {
-      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      // Keep BOM from server; Excel needs UTF-8 BOM + semicolon rows
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `kpi-${kind}.csv`;
+      a.download = `${label.replace(/\s+/g, '-').toLowerCase()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     })
@@ -224,21 +225,33 @@ export function KpiDashboardPage() {
           <Card label="KPI jami hisob" value={uzs(d.kpiAccrued)} tone="purple" />
         </div>
       ) : null}
+      <div className="kpi-panel" style={{ marginBottom: '.85rem' }}>
+        <div className="kpi-panel-head" style={{ padding: '0 0 .65rem' }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Hisobotlarni yuklash</h3>
+            <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>Excel uchun tayyor CSV (ustunlar ajratilgan, UTF-8)</p>
+          </div>
+        </div>
+        <div className="kpi-export-grid">
+          {[
+            ['orders', 'Savdolar', 'Buyurtmalar va to‘lovlar'],
+            ['kpi', 'KPI', 'Komissiya hisoblari'],
+            ['agents', 'Agentlar', 'Login va reja'],
+            ['customers', 'Mijozlar', 'Manzil va GPS'],
+          ].map(([k, title, sub]) => (
+            <button key={k} type="button" className="kpi-export-card" onClick={() => downloadCsv(k, title)}>
+              <span className="kpi-export-ico"><Download size={18} /></span>
+              <span>
+                <b>{title}</b>
+                <small>{sub}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="kpi-table-wrap">
         <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
           <h3>Agentlar reytingi (MoySklad)</h3>
-          <div className="kpi-actions">
-            {[
-              ['orders', 'Savdolar CSV'],
-              ['kpi', 'KPI CSV'],
-              ['agents', 'Agentlar CSV'],
-              ['customers', 'Mijozlar CSV'],
-            ].map(([k, label]) => (
-              <button key={k} type="button" className="btn" onClick={() => downloadCsv(k)}>
-                <Download size={14} /> {label}
-              </button>
-            ))}
-          </div>
         </div>
         <table className="kpi-table">
           <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MoySklad)</th><th>Oylik fakt</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
