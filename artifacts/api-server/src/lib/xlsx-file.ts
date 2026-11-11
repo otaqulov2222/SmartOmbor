@@ -27,7 +27,10 @@ function u32(n: number) {
 function concat(parts: Uint8Array[]) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
   return out;
 }
 
@@ -40,14 +43,39 @@ function zipStore(files: { name: string; data: Uint8Array }[]) {
     const name = nameEnc.encode(file.name);
     const crc = crc32(file.data);
     const local = concat([
-      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
-      u32(crc), u32(file.data.length), u32(file.data.length), u16(name.length), u16(0),
-      name, file.data,
+      u32(0x04034b50),
+      u16(20),
+      u16(0x0800),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(file.data.length),
+      u32(file.data.length),
+      u16(name.length),
+      u16(0),
+      name,
+      file.data,
     ]);
     const central = concat([
-      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
-      u32(crc), u32(file.data.length), u32(file.data.length), u16(name.length), u16(0),
-      u16(0), u16(0), u16(0), u32(0), u32(offset), name,
+      u32(0x02014b50),
+      u16(20),
+      u16(20),
+      u16(0x0800),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(file.data.length),
+      u32(file.data.length),
+      u16(name.length),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(0),
+      u32(offset),
+      name,
     ]);
     locals.push(local);
     centrals.push(central);
@@ -55,8 +83,14 @@ function zipStore(files: { name: string; data: Uint8Array }[]) {
   }
   const centralDir = concat(centrals);
   const end = concat([
-    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
-    u32(centralDir.length), u32(offset), u16(0),
+    u32(0x06054b50),
+    u16(0),
+    u16(0),
+    u16(files.length),
+    u16(files.length),
+    u32(centralDir.length),
+    u32(offset),
+    u16(0),
   ]);
   return concat([...locals, centralDir, end]);
 }
@@ -81,31 +115,45 @@ function colName(index: number) {
 export type Cell = string | number | null | undefined;
 export type Sheet = { name: string; headers: string[]; rows: Cell[][] };
 
-/** Style ids in STYLES_XML cellXfs */
+/** Style ids in STYLES_XML cellXfs — keep in sync with STYLES_XML order */
 const STYLE = {
   text: 0,
-  header: 1,
-  zebraText: 2,
-  money: 3,
-  zebraMoney: 4,
-  pct: 5,
-  zebraPct: 6,
-  ok: 7,
-  warn: 8,
-  bad: 9,
-  int: 10,
-  zebraInt: 11,
+  title: 1,
+  meta: 2,
+  header: 3,
+  zebraText: 4,
+  money: 5,
+  zebraMoney: 6,
+  pct: 7,
+  zebraPct: 8,
+  int: 9,
+  zebraInt: 10,
+  ok: 11,
+  warn: 12,
+  bad: 13,
+  stage1: 14,
+  stage2: 15,
+  stage3: 16,
+  daysBad: 17,
+  daysWarn: 18,
+  orderId: 19,
+  zebraOrderId: 20,
 } as const;
 
-function statusStyle(value: unknown): number | null {
-  const s = String(value ?? "").toLowerCase().trim();
+function badgeStyle(value: unknown): number | null {
+  const s = String(value ?? "")
+    .toLowerCase()
+    .trim();
   if (!s) return null;
+  if (s.includes("1-bosqich") || s === "1") return STYLE.stage1;
+  if (s.includes("2-bosqich") || s === "2") return STYLE.stage2;
+  if (s.includes("3-bosqich") || s === "3") return STYLE.stage3;
   if (
     s.includes("confirm") ||
-    s.includes("paid") ||
     s.includes("tasdiq") ||
     s.includes("to‘lang") ||
     s.includes("tolang") ||
+    s === "paid" ||
     s === "ok" ||
     s === "aniq" ||
     s === "active" ||
@@ -118,10 +166,7 @@ function statusStyle(value: unknown): number | null {
     s.includes("partial") ||
     s.includes("kutil") ||
     s.includes("qisman") ||
-    s === "agent" ||
-    s.includes("1-bosqich") ||
-    s.includes("2-bosqich") ||
-    s.includes("3-bosqich")
+    s === "agent"
   ) {
     return STYLE.warn;
   }
@@ -154,33 +199,37 @@ function isCoordHeader(header: string) {
 function isStatusHeader(header: string) {
   return /holat|status|gps|bosqich/i.test(header);
 }
+function isOrderHeader(header: string) {
+  return /buyurtma|raqam|order/i.test(header);
+}
 
 function colWidth(sheet: Sheet, index: number) {
   const header = sheet.headers[index] || "";
   let max = header.length;
   let numeric = true;
-  const sample = Math.min(sheet.rows.length, 200);
+  const sample = Math.min(sheet.rows.length, 250);
   for (let row = 0; row < sample; row += 1) {
     const value = sheet.rows[row]?.[index];
     if (typeof value === "number" && Number.isFinite(value)) {
       const formatted =
-        Math.abs(value) >= 1000 ? value.toLocaleString("fr-FR").length + 2 : String(value).length + 2;
+        Math.abs(value) >= 1000 ? value.toLocaleString("fr-FR").length + 3 : String(value).length + 2;
       if (formatted > max) max = formatted;
     } else if (value != null && value !== "") {
       numeric = false;
       if (String(value).length > max) max = String(value).length;
     }
   }
-  if (isStatusHeader(header)) return Math.min(22, Math.max(16, max + 4));
-  if (isIntHeader(header)) return Math.min(14, Math.max(12, max + 3));
+  if (isStatusHeader(header)) return Math.min(28, Math.max(20, max + 6));
+  if (isIntHeader(header)) return Math.min(16, Math.max(13, max + 4));
   if (isCoordHeader(header)) return Math.min(14, Math.max(12, max + 2));
+  if (isOrderHeader(header)) return Math.min(18, Math.max(14, max + 3));
   if (numeric || isMoneyHeader(header) || isPctHeader(header)) {
-    return Math.min(20, Math.max(14, max + 4));
+    return Math.min(22, Math.max(15, max + 5));
   }
-  if (/manzil|mijoz|agent|buyurtma|nom|f\.i\.sh|login|reference/i.test(header)) {
-    return Math.min(44, Math.max(20, max + 6));
+  if (/manzil|mijoz|agent|nom|f\.i\.sh|login|reference/i.test(header)) {
+    return Math.min(46, Math.max(18, max + 6));
   }
-  return Math.min(38, Math.max(16, max + 5));
+  return Math.min(40, Math.max(16, max + 5));
 }
 
 function cellXml(ref: string, cell: Cell, style: number) {
@@ -192,48 +241,95 @@ function cellXml(ref: string, cell: Cell, style: number) {
 function styleForCell(header: string, cell: Cell, zebra: boolean): number {
   const number = typeof cell === "number" && Number.isFinite(cell);
   if (!number) {
-    const status = statusStyle(cell);
-    if (status != null) return status;
+    const badge = badgeStyle(cell);
+    if (badge != null) return badge;
+    if (isOrderHeader(header)) return zebra ? STYLE.zebraOrderId : STYLE.orderId;
     return zebra ? STYLE.zebraText : STYLE.text;
   }
-  if (isIntHeader(header)) return zebra ? STYLE.zebraInt : STYLE.int;
+  if (isIntHeader(header)) {
+    if (cell < 0) return STYLE.daysBad;
+    if (cell <= 3) return STYLE.daysWarn;
+    return zebra ? STYLE.zebraInt : STYLE.int;
+  }
   if (isPctHeader(header) || isCoordHeader(header)) return zebra ? STYLE.zebraPct : STYLE.pct;
   if (isMoneyHeader(header) || Math.abs(cell) >= 1000) return zebra ? STYLE.zebraMoney : STYLE.money;
   return zebra ? STYLE.zebraPct : STYLE.pct;
 }
 
+function tashkentStamp() {
+  try {
+    return new Intl.DateTimeFormat("uz-UZ", {
+      timeZone: "Asia/Tashkent",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 16).replace("T", " ");
+  }
+}
+
 function sheetXml(sheet: Sheet) {
   const columns = Math.max(sheet.headers.length, ...sheet.rows.map((row) => row.length), 1);
   const lastCol = colName(columns - 1);
-  const lastRow = sheet.rows.length + 1;
+  const headerRow = 3;
+  const lastDataRow = headerRow + sheet.rows.length;
   const cols = Array.from(
     { length: columns },
     (_, index) => `<col min="${index + 1}" max="${index + 1}" width="${colWidth(sheet, index)}" customWidth="1"/>`,
   ).join("");
+
+  const title = `SmartOmbor  ·  ${sheet.name}`;
+  const meta = `${sheet.rows.length} qator  ·  ${tashkentStamp()} (Toshkent)`;
+  const titleCells = Array.from({ length: columns }, (_, i) => (i === 0 ? title : ""));
+  const metaCells = Array.from({ length: columns }, (_, i) => (i === 0 ? meta : ""));
+
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
-    '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="24" customHeight="1"/><cols>${cols}</cols><sheetData>`,
+    `<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="${headerRow}" topLeftCell="A${headerRow + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`,
+    `<sheetFormatPr defaultRowHeight="26" customHeight="1"/><cols>${cols}</cols><sheetData>`,
   ];
-  const writeRow = (r: number, cells: Cell[], height: number, styleFor: (index: number, cell: Cell) => number) => {
+
+  const writeRow = (
+    r: number,
+    cells: Cell[],
+    height: number,
+    styleFor: (index: number, cell: Cell) => number,
+  ) => {
     let row = `<row r="${r}" ht="${height}" customHeight="1">`;
-    for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
+    for (let i = 0; i < columns; i += 1) {
+      row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
+    }
     lines.push(row + "</row>");
   };
-  writeRow(1, sheet.headers, 30, () => STYLE.header);
+
+  writeRow(1, titleCells, 38, () => STYLE.title);
+  writeRow(2, metaCells, 22, () => STYLE.meta);
+  writeRow(headerRow, sheet.headers, 32, () => STYLE.header);
   sheet.rows.forEach((row, i) => {
     const zebra = i % 2 === 1;
-    writeRow(i + 2, row, 24, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
+    writeRow(headerRow + 1 + i, row, 26, (index, cell) =>
+      styleForCell(sheet.headers[index] || "", cell, zebra),
+    );
   });
-  lines.push(`</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/>`);
-  lines.push('<pageMargins left="0.4" right="0.4" top="0.45" bottom="0.45" header="0.2" footer="0.2"/>');
+
+  lines.push("</sheetData>");
+  lines.push(`<mergeCells count="2"><mergeCell ref="A1:${lastCol}1"/><mergeCell ref="A2:${lastCol}2"/></mergeCells>`);
+  lines.push(`<autoFilter ref="A${headerRow}:${lastCol}${lastDataRow}"/>`);
+  lines.push('<pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>');
   lines.push('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>');
   lines.push("</worksheet>");
   return lines.join("");
 }
 
+/**
+ * BordoUz report theme:
+ * deep wine banner, charcoal header, solid status badges, soft rose zebra, no gridlines.
+ */
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <numFmts count="3">
@@ -241,50 +337,79 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <numFmt numFmtId="165" formatCode="0.00"/>
 <numFmt numFmtId="166" formatCode="0"/>
 </numFmts>
-<fonts count="5">
-<font><sz val="11"/><name val="Calibri"/><color rgb="FF0F1B2D"/></font>
-<font><b/><sz val="12"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF166534"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF92400E"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF991B1B"/></font>
+<fonts count="10">
+<font><sz val="11"/><name val="Calibri"/><color rgb="FF1C1917"/></font>
+<font><b/><sz val="18"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><sz val="10"/><name val="Calibri"/><color rgb="FFFECACA"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF9F1239"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF9F1239"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFB45309"/></font>
 </fonts>
-<fills count="7">
+<fills count="14">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF7F1D1D"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF9F1239"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF1C1917"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFFF1F2"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF059669"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFD97706"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFDC2626"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FF1D4ED8"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFEFF6FF"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF7C3AED"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEE2E2"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
 </fills>
-<borders count="2">
+<borders count="4">
 <border>
-  <left style="thin"><color rgb="FFE2E8F0"/></left>
-  <right style="thin"><color rgb="FFE2E8F0"/></right>
-  <top style="thin"><color rgb="FFE2E8F0"/></top>
-  <bottom style="thin"><color rgb="FFE2E8F0"/></bottom>
+  <left style="thin"><color rgb="FFF1E7E9"/></left>
+  <right style="thin"><color rgb="FFF1E7E9"/></right>
+  <top style="thin"><color rgb="FFF1E7E9"/></top>
+  <bottom style="thin"><color rgb="FFF1E7E9"/></bottom>
 </border>
 <border>
-  <left style="thin"><color rgb="FF1D4ED8"/></left>
-  <right style="thin"><color rgb="FF1D4ED8"/></right>
-  <top style="thin"><color rgb="FF1D4ED8"/></top>
-  <bottom style="thin"><color rgb="FF1D4ED8"/></bottom>
+  <left/><right/><top/>
+  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
+</border>
+<border>
+  <left style="thin"><color rgb="FF7F1D1D"/></left>
+  <right style="thin"><color rgb="FF7F1D1D"/></right>
+  <top style="thin"><color rgb="FF7F1D1D"/></top>
+  <bottom style="thin"><color rgb="FF7F1D1D"/></bottom>
+</border>
+<border>
+  <left/><right/><top/>
+  <bottom style="thin"><color rgb="FFE11D48"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="12">
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="165" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-<xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<cellXfs count="21">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" indent="1"/></xf>
+<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center" indent="1"/></xf>
+<xf numFmtId="0" fontId="3" fillId="4" borderId="3" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1" wrapText="1"/></xf>
+<xf numFmtId="164" fontId="8" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center" indent="1"/></xf>
+<xf numFmtId="164" fontId="8" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center" indent="1"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 <xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="166" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="6" fillId="7" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="7" fillId="8" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="5" fillId="9" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="5" fillId="10" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="5" fillId="11" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="166" fontId="8" fillId="12" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="9" fillId="13" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+<xf numFmtId="0" fontId="4" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
 </cellXfs>
 </styleSheet>`;
 
