@@ -97,19 +97,11 @@ const STYLE = {
   zebraInt: 11,
 } as const;
 
+/** Soft status tones — only for Holat column, not Bosqich / 0%. */
 function statusStyle(value: unknown): number | null {
   const s = String(value ?? "").toLowerCase().trim();
   if (!s) return null;
-  if (
-    s.includes("pending") ||
-    s.includes("partial") ||
-    s.includes("kutil") ||
-    s.includes("qisman") ||
-    s === "agent" ||
-    s.includes("1-bosqich") ||
-    s.includes("2-bosqich") ||
-    s.includes("3-bosqich")
-  ) {
+  if (s.includes("pending") || s.includes("partial") || s.includes("kutil") || s.includes("qisman") || s === "agent") {
     return STYLE.warn;
   }
   if (
@@ -118,8 +110,7 @@ function statusStyle(value: unknown): number | null {
     s.includes("overdue") ||
     s.includes("muddati") ||
     s.includes("bekor") ||
-    s === "taxminiy" ||
-    s === "0%"
+    s === "taxminiy"
   ) {
     return STYLE.bad;
   }
@@ -153,7 +144,10 @@ function isCoordHeader(header: string) {
   return /^(lat|lng)$/i.test(header.trim());
 }
 function isStatusHeader(header: string) {
-  return /holat|status|gps|bosqich/i.test(header);
+  return /holat|status|gps/i.test(header);
+}
+function isBosqichHeader(header: string) {
+  return /bosqich|stage/i.test(header);
 }
 
 function colWidth(sheet: Sheet, index: number) {
@@ -172,11 +166,12 @@ function colWidth(sheet: Sheet, index: number) {
       if (String(value).length > max) max = String(value).length;
     }
   }
-  if (isStatusHeader(header)) return Math.min(26, Math.max(18, max + 5));
+  if (isStatusHeader(header)) return Math.min(28, Math.max(20, max + 6));
+  if (isBosqichHeader(header)) return Math.min(16, Math.max(12, max + 3));
   if (isIntHeader(header)) return Math.min(14, Math.max(12, max + 3));
   if (isCoordHeader(header)) return Math.min(14, Math.max(12, max + 2));
   if (numeric || isMoneyHeader(header) || isPctHeader(header)) {
-    return Math.min(20, Math.max(14, max + 4));
+    return Math.min(18, Math.max(13, max + 3));
   }
   if (/manzil|mijoz|agent|buyurtma|nom|f\.i\.sh|login|reference/i.test(header)) {
     return Math.min(44, Math.max(20, max + 6));
@@ -193,8 +188,11 @@ function cellXml(ref: string, cell: Cell, style: number) {
 function styleForCell(header: string, cell: Cell, zebra: boolean): number {
   const number = typeof cell === "number" && Number.isFinite(cell);
   if (!number) {
-    const status = statusStyle(cell);
-    if (status != null) return status;
+    // Color only Holat — Bosqich stays plain so the sheet stays calm
+    if (isStatusHeader(header)) {
+      const status = statusStyle(cell);
+      if (status != null) return status;
+    }
     return zebra ? STYLE.zebraText : STYLE.text;
   }
   if (isIntHeader(header)) return zebra ? STYLE.zebraInt : STYLE.int;
@@ -216,17 +214,17 @@ function sheetXml(sheet: Sheet) {
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
     '<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="24"/><cols>${cols}</cols><sheetData>`,
+    `<sheetFormatPr defaultRowHeight="22"/><cols>${cols}</cols><sheetData>`,
   ];
   const writeRow = (r: number, cells: Cell[], height: number, styleFor: (index: number, cell: Cell) => number) => {
     let row = `<row r="${r}" ht="${height}" customHeight="1">`;
     for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
     lines.push(row + "</row>");
   };
-  writeRow(1, sheet.headers, 28, () => STYLE.header);
+  writeRow(1, sheet.headers, 26, () => STYLE.header);
   sheet.rows.forEach((row, i) => {
     const zebra = i % 2 === 1;
-    writeRow(i + 2, row, 24, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
+    writeRow(i + 2, row, 22, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
   });
   lines.push(`</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/>`);
   lines.push('<pageMargins left="0.4" right="0.4" top="0.45" bottom="0.45" header="0.2" footer="0.2"/>');
@@ -235,42 +233,45 @@ function sheetXml(sheet: Sheet) {
   return lines.join("");
 }
 
-/** Wine header + solid status badges. No merge/title rows (Excel-safe). */
+/**
+ * Clean finance-report look:
+ * slate header, cool gray zebra, soft pastel Holat chips, no loud fills.
+ */
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <numFmts count="3">
-<numFmt numFmtId="164" formatCode="#,##0.00"/>
+<numFmt numFmtId="164" formatCode="#,##0"/>
 <numFmt numFmtId="165" formatCode="0.00"/>
 <numFmt numFmtId="166" formatCode="0"/>
 </numFmts>
 <fonts count="5">
-<font><sz val="11"/><name val="Calibri"/><color rgb="FF1C1917"/></font>
+<font><sz val="11"/><name val="Calibri"/><color rgb="FF0F172A"/></font>
 <font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FF047857"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB45309"/></font>
+<font><b/><sz val="10"/><name val="Calibri"/><color rgb="FFB91C1C"/></font>
 </fonts>
 <fills count="7">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FF7F1D1D"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFFFF1F2"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FF059669"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFD97706"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFDC2626"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF334155"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFECFDF5"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFFFBEB"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFEF2F2"/></patternFill></fill>
 </fills>
 <borders count="2">
 <border>
-  <left style="thin"><color rgb="FFF1E7E9"/></left>
-  <right style="thin"><color rgb="FFF1E7E9"/></right>
-  <top style="thin"><color rgb="FFF1E7E9"/></top>
-  <bottom style="thin"><color rgb="FFF1E7E9"/></bottom>
+  <left style="thin"><color rgb="FFE2E8F0"/></left>
+  <right style="thin"><color rgb="FFE2E8F0"/></right>
+  <top style="thin"><color rgb="FFE2E8F0"/></top>
+  <bottom style="thin"><color rgb="FFE2E8F0"/></bottom>
 </border>
 <border>
-  <left style="thin"><color rgb="FF7F1D1D"/></left>
-  <right style="thin"><color rgb="FF7F1D1D"/></right>
-  <top style="thin"><color rgb="FF7F1D1D"/></top>
-  <bottom style="thin"><color rgb="FF7F1D1D"/></bottom>
+  <left style="thin"><color rgb="FF334155"/></left>
+  <right style="thin"><color rgb="FF334155"/></right>
+  <top style="thin"><color rgb="FF334155"/></top>
+  <bottom style="thin"><color rgb="FF334155"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
