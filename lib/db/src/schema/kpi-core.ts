@@ -85,6 +85,8 @@ export const kpiCustomersTable = pgTable(
     address: text("address").notNull().default(""),
     lat: numeric("lat", { precision: 10, scale: 7 }),
     lng: numeric("lng", { precision: 10, scale: 7 }),
+    /** admin = exact meeting point; agent = unofficial; null = unknown/inferred */
+    gpsSource: text("gps_source"),
     type: text("type").notNull().default("store"),
     status: text("status").notNull().default("pending"),
     contractNumber: text("contract_number").notNull().default(""),

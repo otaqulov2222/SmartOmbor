@@ -40,6 +40,12 @@ import {
 } from "../lib/kpi/engine";
 import { ensureKpiSchema } from "../lib/kpi/ddl";
 import { distanceMeters, inferCoordinates, orderRouteStops } from "../lib/kpi/geo";
+import {
+  BORDIM_GEOFENCE_M,
+  hasAdminGps,
+  parseAdminCoords,
+  reverseGeocode,
+} from "../lib/kpi/geocode";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 
@@ -529,6 +535,28 @@ router.get("/kpi/agent/customers", requireKpiAgent(), async (_req, res, next) =>
   }
 });
 
+router.get("/kpi/geo/reverse", requireKpiAdmin(), async (req, res, next) => {
+  try {
+    const coords = parseAdminCoords(req.query.lat, req.query.lng);
+    if (!coords) {
+      res.status(400).json({ error: "Aniq lat/lng kerak." });
+      return;
+    }
+    const geo = await reverseGeocode(coords.lat, coords.lng);
+    if (!geo) {
+      res.status(404).json({ error: "Manzil topilmadi. Koordinatalarni tekshiring." });
+      return;
+    }
+    res.json({
+      lat: Number(coords.lat.toFixed(6)),
+      lng: Number(coords.lng.toFixed(6)),
+      ...geo,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/kpi/customers", requireKpiAdmin(), async (req, res, next) => {
   try {
     const actor = getKpiActor(res);
@@ -537,14 +565,37 @@ router.post("/kpi/customers", requireKpiAdmin(), async (req, res, next) => {
       res.status(400).json({ error: "Korxona nomi kerak." });
       return;
     }
+    const coords = parseAdminCoords(req.body?.lat, req.body?.lng);
+    if (!coords) {
+      res.status(400).json({ error: "Aniq lat/lng kiriting (uchrashuv/to‘lov joyi)." });
+      return;
+    }
+    const agentId = String(req.body?.agentId ?? "").trim();
+    if (!agentId) {
+      res.status(400).json({ error: "Mas’ul agentni tanlang." });
+      return;
+    }
+    const [agent] = await db.select({ id: kpiAgentsTable.id }).from(kpiAgentsTable).where(eq(kpiAgentsTable.id, agentId)).limit(1);
+    if (!agent) {
+      res.status(400).json({ error: "Agent topilmadi." });
+      return;
+    }
+    let address = String(req.body?.address ?? "").trim();
+    if (!address) {
+      const geo = await reverseGeocode(coords.lat, coords.lng);
+      address = geo?.address || `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+    }
+    const lat = String(coords.lat.toFixed(6));
+    const lng = String(coords.lng.toFixed(6));
     const [row] = await db.insert(kpiCustomersTable).values({
       name,
       stir: String(req.body?.stir ?? "").trim(),
       contactName: String(req.body?.contactName ?? "").trim(),
       phone: String(req.body?.phone ?? "").trim(),
-      address: String(req.body?.address ?? "").trim(),
-      lat: req.body?.lat != null ? String(req.body.lat) : null,
-      lng: req.body?.lng != null ? String(req.body.lng) : null,
+      address,
+      lat,
+      lng,
+      gpsSource: "admin",
       type: String(req.body?.type ?? "store"),
       status: String(req.body?.status ?? "active"),
       contractNumber: String(req.body?.contractNumber ?? ""),
@@ -552,16 +603,20 @@ router.post("/kpi/customers", requireKpiAdmin(), async (req, res, next) => {
       notes: String(req.body?.notes ?? ""),
       createdBy: actor.id,
     }).returning();
-    if (req.body?.agentId) {
-      await db.insert(kpiCustomerAssignmentsTable).values({
-        customerId: row.id,
-        agentId: String(req.body.agentId),
-        active: true,
-        assignedBy: actor.id,
-      });
-    }
-    await recordAudit({ action: "kpi.customer.created", entityType: "kpi_customer", entityId: row.id, actorName: actor.name, details: name });
-    res.status(201).json(row);
+    await db.insert(kpiCustomerAssignmentsTable).values({
+      customerId: row.id,
+      agentId,
+      active: true,
+      assignedBy: actor.id,
+    });
+    await recordAudit({
+      action: "kpi.customer.created",
+      entityType: "kpi_customer",
+      entityId: row.id,
+      actorName: actor.name,
+      details: `${name}; gps=${lat},${lng}; agent=${agentId}`,
+    });
+    res.status(201).json({ ...row, agentId });
   } catch (error) {
     next(error);
   }
@@ -645,8 +700,27 @@ router.patch("/kpi/customers/:id", requireKpiAdmin(), async (req, res, next) => 
     for (const key of ["name", "stir", "contactName", "phone", "address", "type", "status", "contractNumber", "paymentTermsNote", "notes"] as const) {
       if (req.body?.[key] != null) patch[key] = String(req.body[key]);
     }
-    if (req.body?.lat !== undefined) patch.lat = req.body.lat == null ? null : String(req.body.lat);
-    if (req.body?.lng !== undefined) patch.lng = req.body.lng == null ? null : String(req.body.lng);
+    const touchingGps = req.body?.lat !== undefined || req.body?.lng !== undefined;
+    if (touchingGps) {
+      if (req.body?.lat == null || req.body?.lng == null || req.body?.lat === "" || req.body?.lng === "") {
+        patch.lat = null;
+        patch.lng = null;
+        patch.gpsSource = null;
+      } else {
+        const coords = parseAdminCoords(req.body.lat, req.body.lng);
+        if (!coords) {
+          res.status(400).json({ error: "Aniq lat/lng kiriting." });
+          return;
+        }
+        patch.lat = String(coords.lat.toFixed(6));
+        patch.lng = String(coords.lng.toFixed(6));
+        patch.gpsSource = "admin";
+        if (req.body?.address == null || !String(req.body.address).trim()) {
+          const geo = await reverseGeocode(coords.lat, coords.lng);
+          if (geo?.address) patch.address = geo.address;
+        }
+      }
+    }
     const [row] = await db.update(kpiCustomersTable).set(patch).where(eq(kpiCustomersTable.id, id)).returning();
     if (!row) {
       res.status(404).json({ error: "Mijoz topilmadi." });
@@ -1257,7 +1331,14 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       const debt = debtByCustomer.get(c.id) || "0.00";
       const v = todayVisitMap.get(c.id);
       // Prefer saved store GPS over one-off visit coords for the map pin
-      const geo = inferCoordinates(c.id, c.name, c.address, c.lat || v?.lat, c.lng || v?.lng);
+      const adminGps = hasAdminGps(c);
+      const geo = inferCoordinates(
+        c.id,
+        c.name,
+        c.address,
+        adminGps.ok ? adminGps.lat : c.lat || v?.lat,
+        adminGps.ok ? adminGps.lng : c.lng || v?.lng,
+      );
       return {
         id: c.id,
         name: c.name,
@@ -1266,7 +1347,8 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
         debt,
         lat: geo.lat,
         lng: geo.lng,
-        exactGps: geo.exact,
+        exactGps: adminGps.ok,
+        gpsSource: c.gpsSource || null,
         visitedToday: Boolean(v),
         visitedAt: v?.at || null,
       };
@@ -1338,6 +1420,22 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
     const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
     if (!cust || (!allowed.has(customerId) && cust.createdByAgentId !== agent.id)) {
       res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
+      return;
+    }
+    const storeGps = hasAdminGps(cust);
+    if (!storeGps.ok) {
+      res.status(400).json({
+        error: "Admin aniq manzil (lat/lng) belgilamagunicha Bordim mumkin emas.",
+      });
+      return;
+    }
+    const distM = distanceMeters(latN, lngN, storeGps.lat, storeGps.lng);
+    if (distM > BORDIM_GEOFENCE_M) {
+      res.status(400).json({
+        error: `Siz belgilangan joydan ~${distM} m uzoqdasiz. Bordim faqat ${BORDIM_GEOFENCE_M} m ichida ruxsat etiladi.`,
+        distanceM: distM,
+        limitM: BORDIM_GEOFENCE_M,
+      });
       return;
     }
     const lat = String(latN.toFixed(6));
@@ -1448,25 +1546,14 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
       source: "visit",
     });
-    // Refresh store pin only when empty or agent is near existing pin (avoid distant overwrite)
-    const existingLat = cust.lat != null && cust.lat !== "" ? Number(cust.lat) : NaN;
-    const existingLng = cust.lng != null && cust.lng !== "" ? Number(cust.lng) : NaN;
-    const hasStorePin =
-      Number.isFinite(existingLat) &&
-      Number.isFinite(existingLng) &&
-      Math.abs(existingLat) > 1 &&
-      Math.abs(existingLng) > 1;
-    const nearStore = hasStorePin ? distanceMeters(latN, lngN, existingLat, existingLng) <= 800 : true;
-    if (!hasStorePin || nearStore) {
-      await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId));
-    }
-    res.status(201).json(row);
+    // Admin GPS is authoritative — Bordim must not overwrite store coordinates.
+    res.status(201).json({ ...row, distanceM: distM, limitM: BORDIM_GEOFENCE_M });
   } catch (error) {
     next(error);
   }
 });
 
-/** Save exact store GPS without marking the visit done. */
+/** Agent may propose a pin only when admin has not locked exact GPS. */
 router.post("/kpi/agent/customers/:id/pin", requireKpiAgent(), async (req, res, next) => {
   try {
     const agent = getKpiAgent(res);
@@ -1491,9 +1578,19 @@ router.post("/kpi/agent/customers/:id/pin", requireKpiAgent(), async (req, res, 
       res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
       return;
     }
+    if (String(cust.gpsSource || "") === "admin") {
+      res.status(403).json({
+        error: "Bu mijozning aniq joyini faqat admin o‘zgartira oladi.",
+      });
+      return;
+    }
     const lat = String(latN.toFixed(6));
     const lng = String(lngN.toFixed(6));
-    const [row] = await db.update(kpiCustomersTable).set({ lat, lng }).where(eq(kpiCustomersTable.id, customerId)).returning();
+    const [row] = await db
+      .update(kpiCustomersTable)
+      .set({ lat, lng, gpsSource: "agent" })
+      .where(eq(kpiCustomersTable.id, customerId))
+      .returning();
     await db.insert(kpiLocationEventsTable).values({
       agentId: agent.id,
       lat,
@@ -1801,8 +1898,15 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
         const debt = debtByCustomer.get(c.id) || "0.00";
-        // Prefer saved store coords; do not promote visit-only GPS to exactGps
-        const geo = inferCoordinates(c.id, c.name, c.address, c.lat, c.lng);
+        // Prefer saved store coords; exactGps only when admin locked the pin
+        const adminGps = hasAdminGps(c);
+        const geo = inferCoordinates(
+          c.id,
+          c.name,
+          c.address,
+          adminGps.ok ? adminGps.lat : c.lat,
+          adminGps.ok ? adminGps.lng : c.lng,
+        );
         return {
           id: c.id,
           name: c.name,
@@ -1812,7 +1916,8 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
           agentName: owner ? agentMap.get(owner) || "—" : "—",
           lat: geo.lat,
           lng: geo.lng,
-          exactGps: geo.exact,
+          exactGps: adminGps.ok,
+          gpsSource: c.gpsSource || null,
           debt,
           visitedToday: Boolean(visit),
           visitedAt: visit?.at || null,

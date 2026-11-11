@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS kpi_customers (
 );
 CREATE INDEX IF NOT EXISTS kpi_customers_name_idx ON kpi_customers(name);
 CREATE INDEX IF NOT EXISTS kpi_customers_status_idx ON kpi_customers(status);
+ALTER TABLE kpi_customers ADD COLUMN IF NOT EXISTS gps_source text;
 CREATE TABLE IF NOT EXISTS kpi_customer_assignments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_id uuid NOT NULL REFERENCES kpi_customers(id) ON DELETE CASCADE,

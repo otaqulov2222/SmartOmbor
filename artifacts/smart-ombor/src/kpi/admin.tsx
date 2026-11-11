@@ -17,6 +17,7 @@ type Agent = {
 type Customer = {
   id: string; name: string; phone: string; type: string; status: string; address: string;
   agentId: string | null; notes?: string;
+  lat?: string | number | null; lng?: string | number | null; gpsSource?: string | null;
 };
 type Order = {
   id: string; number: string; status: string; total: string; paidAmount: string; orderDate: string;
@@ -224,6 +225,12 @@ function AgentsSection() {
 function CustomersSection() {
   const cache = useQueryClient();
   const [q, setQ] = useState('');
+  const [name, setName] = useState('');
+  const [lat, setLat] = useState('');
+  const [lng, setLng] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [addressPreview, setAddressPreview] = useState('');
+  const [formError, setFormError] = useState('');
   const agents = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
   const list = useQuery({
     queryKey: ['kpi-customers', q],
@@ -234,19 +241,101 @@ function CustomersSection() {
       kpiFetch(`/kpi/customers/${payload.id}/assign`, { method: 'POST', body: JSON.stringify({ agentId: payload.agentId }) }),
     onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-customers'] }),
   });
+  const resolveAddress = useMutation({
+    mutationFn: async () => {
+      const la = Number(lat);
+      const ln = Number(lng);
+      if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) < 1 || Math.abs(ln) < 1) {
+        throw new Error('Aniq lat/lng kiriting.');
+      }
+      return kpiFetch<{ address: string; displayName?: string }>(
+        `/kpi/geo/reverse?lat=${encodeURIComponent(la.toFixed(6))}&lng=${encodeURIComponent(ln.toFixed(6))}`,
+      );
+    },
+    onSuccess: (data) => {
+      setFormError('');
+      setAddressPreview(data.address || data.displayName || '');
+    },
+    onError: (err) => setFormError((err as Error).message || 'Manzil topilmadi'),
+  });
+  const createCustomer = useMutation({
+    mutationFn: async () => {
+      const la = Number(lat);
+      const ln = Number(lng);
+      if (!name.trim()) throw new Error('Mijoz nomi kerak.');
+      if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) < 1 || Math.abs(ln) < 1) {
+        throw new Error('Aniq lat/lng kiriting.');
+      }
+      if (!agentId) throw new Error('Mas’ul agentni tanlang.');
+      return kpiFetch('/kpi/customers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim(),
+          lat: Number(la.toFixed(6)),
+          lng: Number(ln.toFixed(6)),
+          agentId,
+          address: addressPreview.trim() || undefined,
+          status: 'active',
+        }),
+      });
+    },
+    onSuccess: () => {
+      setName('');
+      setLat('');
+      setLng('');
+      setAgentId('');
+      setAddressPreview('');
+      setFormError('');
+      void cache.invalidateQueries({ queryKey: ['kpi-customers'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
+    },
+    onError: (err) => setFormError((err as Error).message || 'Saqlanmadi'),
+  });
   return (
     <>
       <div className="kpi-panel">
-        <input className="input" placeholder="Mijoz qidirish (MoySklad)…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <h3 style={{ margin: '0 0 .55rem', fontSize: '1rem' }}>Yangi mijoz (aniq GPS)</h3>
+        <p className="kpi-muted" style={{ marginTop: 0 }}>
+          Nom + lat/lng yozing — tizim tuman/ko‘cha/uyni topadi. Bordim faqat shu nuqta atrofida (250 m) ishlaydi.
+        </p>
+        <div className="kpi-form">
+          <input className="input" placeholder="Mijoz nomi (masalan Alisher aka Samarqand)" value={name} onChange={(e) => setName(e.target.value)} />
+          <input className="input" placeholder="Lat (41.2995)" value={lat} onChange={(e) => { setLat(e.target.value); setAddressPreview(''); }} />
+          <input className="input" placeholder="Lng (69.2401)" value={lng} onChange={(e) => { setLng(e.target.value); setAddressPreview(''); }} />
+          <select className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+            <option value="">— mas’ul agent —</option>
+            {(agents.data || []).filter((a) => a.login !== 'ofis' && a.login !== 'vanseling').map((a) => (
+              <option key={a.id} value={a.id}>{a.fullName}</option>
+            ))}
+          </select>
+          <button type="button" className="btn" disabled={resolveAddress.isPending} onClick={() => resolveAddress.mutate()}>
+            {resolveAddress.isPending ? 'Aniqlanmoqda…' : 'Manzilni aniqlash'}
+          </button>
+          <button type="button" className="btn btn-primary" disabled={createCustomer.isPending} onClick={() => createCustomer.mutate()}>
+            {createCustomer.isPending ? 'Saqlanmoqda…' : 'Qo‘shish'}
+          </button>
+        </div>
+        {addressPreview ? <p className="kpi-muted" style={{ marginBottom: 0 }}>Topilgan manzil: <b>{addressPreview}</b></p> : null}
+        {formError ? <p className="kpi-muted" style={{ color: '#b91c1c' }}>{formError}</p> : null}
+      </div>
+      <div className="kpi-panel">
+        <input className="input" placeholder="Mijoz qidirish…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="kpi-table-wrap">
         <table className="kpi-table">
-          <thead><tr><th>Mijoz (MoySklad)</th><th>Teglar</th><th>Mas’ul agent</th></tr></thead>
+          <thead><tr><th>Mijoz</th><th>Manzil / GPS</th><th>Mas’ul agent</th></tr></thead>
           <tbody>
             {(list.data || []).map((c) => (
               <tr key={c.id}>
-                <td data-label="Mijoz"><b>{c.name}</b><div className="kpi-muted">{c.phone} {c.address}</div></td>
-                <td data-label="Teglar" className="kpi-muted">{c.notes || '—'}</td>
+                <td data-label="Mijoz"><b>{c.name}</b><div className="kpi-muted">{c.phone || '—'}</div></td>
+                <td data-label="Manzil / GPS">
+                  <div>{c.address || '—'}</div>
+                  <div className="kpi-muted">
+                    {c.lat != null && c.lng != null ? `${Number(c.lat).toFixed(5)}, ${Number(c.lng).toFixed(5)}` : 'koordinata yo‘q'}
+                    {' · '}
+                    {c.gpsSource === 'admin' ? 'aniq GPS (admin)' : c.gpsSource === 'agent' ? 'agent pin' : 'taxminiy'}
+                  </div>
+                </td>
                 <td data-label="Mas’ul agent">
                   <select className="input" value={c.agentId || ''} onChange={(e) => assign.mutate({ id: c.id, agentId: e.target.value })}>
                     <option value="">— biriktirilmagan —</option>

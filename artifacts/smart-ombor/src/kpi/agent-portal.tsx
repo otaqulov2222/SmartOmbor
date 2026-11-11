@@ -46,6 +46,7 @@ type CustomerCard = {
   lat: number;
   lng: number;
   exactGps?: boolean;
+  gpsSource?: string | null;
   debt: string;
   visitedToday: boolean;
   visitedAt?: string | null;
@@ -344,6 +345,10 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const confirmVisit = async (c: CustomerCard) => {
     try {
+      if (!c.exactGps) {
+        window.alert('Admin hali aniq manzil (lat/lng) belgilamagan. Bordim mumkin emas.');
+        return;
+      }
       const gps = coords?.lat != null && coords.accuracy > 0 ? coords : await readFreshGps();
       const distLive =
         Number.isFinite(c.lat) && Number.isFinite(c.lng)
@@ -360,11 +365,11 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                 ),
             )
           : c.distanceM ?? null;
-      if (distLive != null && distLive > 800) {
-        const ok = window.confirm(
-          `${c.name} sizdan ~${fmtDist(distLive)} uzoqda.\nBaribir «Bordim / Gaplashdim» deb belgilaysizmi?`,
+      if (distLive != null && distLive > 250) {
+        window.alert(
+          `${c.name} sizdan ~${fmtDist(distLive)} uzoqda.\nBordim faqat 250 m ichida ruxsat etiladi — joyga boring.`,
         );
-        if (!ok) return;
+        return;
       }
       markVisit.mutate(c.id);
     } catch (err) {
@@ -374,8 +379,12 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const confirmPin = async (c: CustomerCard) => {
     try {
+      if (c.exactGps || c.gpsSource === 'admin') {
+        window.alert('Bu mijozning aniq joyini faqat admin o‘zgartira oladi.');
+        return;
+      }
       await savePin.mutateAsync(c.id);
-      window.alert(`${c.name} uchun aniq GPS saqlandi.`);
+      window.alert(`${c.name} uchun taxminiy pin yuborildi. Aniq joy uchun admin tasdiqlashi kerak.`);
     } catch (err) {
       window.alert((err as Error).message || 'GPS saqlanmadi');
     }
@@ -587,6 +596,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                         </a>
                       ) : null}
                       <span><MapPin size={13} /> {c.address || (c.exactGps ? 'GPS aniq' : 'Taxminiy joy')}</span>
+                      {!c.exactGps ? <span className="kpi-chip pending">Admin GPS yo‘q</span> : null}
                     </div>
                   </div>
                   <div className="ag-stop-amount">
@@ -606,9 +616,10 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                         type="button"
                         className="btn"
                         disabled={savePin.isPending}
+                        title="Faqat taklif — aniq joy admin belgilaydi"
                         onClick={() => void confirmPin(c)}
                       >
-                        <Crosshair size={15} /> GPS saqlash
+                        <Crosshair size={15} /> Pin taklif
                       </button>
                     ) : null}
                     {c.visitedToday ? (
@@ -617,7 +628,8 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                       <button
                         type="button"
                         className="btn btn-primary"
-                        disabled={markVisit.isPending}
+                        disabled={markVisit.isPending || !c.exactGps}
+                        title={!c.exactGps ? 'Avval admin aniq manzil belgilashi kerak' : '250 m ichida Bordim'}
                         onClick={() => void confirmVisit(c)}
                       >
                         <CheckCircle2 size={15} /> Bordim

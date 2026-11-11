@@ -99,24 +99,32 @@ export function GpsPage() {
   });
 
   const saveCoords = useMutation({
-    mutationFn: (payload: { id: string; lat: string; lng: string; address: string }) => {
+    mutationFn: async (payload: { id: string; lat: string; lng: string; address: string }) => {
       const lat = Number(payload.lat);
       const lng = Number(payload.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 1 || Math.abs(lng) < 1) {
-        return Promise.reject(new Error('Aniq lat/lng kiriting (taxminiy pinni saqlamang).'));
+        throw new Error('Aniq lat/lng kiriting (taxminiy pinni saqlamang).');
+      }
+      let address = payload.address.trim();
+      if (!address) {
+        const geo = await kpiFetch<{ address: string }>(
+          `/kpi/geo/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lng=${encodeURIComponent(lng.toFixed(6))}`,
+        );
+        address = geo.address || '';
       }
       return kpiFetch(`/kpi/customers/${payload.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           lat: Number(lat.toFixed(6)),
           lng: Number(lng.toFixed(6)),
-          address: payload.address,
+          address,
         }),
       });
     },
     onSuccess: () => {
       setCoordEdit(null);
       void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-customers'] });
     },
   });
 
@@ -291,7 +299,7 @@ export function GpsPage() {
                         <>
                           <div>{p.address || '—'}</div>
                           <div className="kpi-muted">
-                            {p.lat.toFixed(4)}, {p.lng.toFixed(4)} {p.exactGps ? '(aniq GPS)' : '(hudud bo‘yicha)'}
+                            {p.lat.toFixed(4)}, {p.lng.toFixed(4)} {p.exactGps ? '(aniq GPS · admin)' : '(hudud bo‘yicha)'}
                           </div>
                         </>
                       )}
