@@ -415,9 +415,23 @@ function CustomersSection() {
     };
   }, [parsed, coords]);
   const assign = useMutation({
-    mutationFn: (payload: { id: string; agentId: string }) =>
-      kpiFetch(`/kpi/customers/${payload.id}/assign`, { method: 'POST', body: JSON.stringify({ agentId: payload.agentId }) }),
-    onSuccess: () => void cache.invalidateQueries({ queryKey: ['kpi-customers'] }),
+    mutationFn: (payload: { id: string; agentId: string }) => {
+      // Bo‘sh agent — PATCH orqali biriktirishni yechish (assign endpoint agentId talab qiladi)
+      if (!payload.agentId) {
+        return kpiFetch(`/kpi/customers/${payload.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ agentId: '' }),
+        });
+      }
+      return kpiFetch(`/kpi/customers/${payload.id}/assign`, {
+        method: 'POST',
+        body: JSON.stringify({ agentId: payload.agentId }),
+      });
+    },
+    onSuccess: () => {
+      void cache.invalidateQueries({ queryKey: ['kpi-customers'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-gps'] });
+    },
   });
   const saveCustomer = useMutation({
     mutationFn: async () => {
