@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { kpiFetch, uzs } from '@/kpi/api';
+import { kpiFetch, readStaffToken, uzs } from '@/kpi/api';
 import './kpi.css';
 
 function parseCoordPair(raw: string): { lat: number; lng: number } | null {
@@ -161,19 +161,32 @@ function Card({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-function downloadCsv(kind: string, label: string) {
-  void kpiFetch<string>(`/kpi/export/${kind}`)
-    .then((text) => {
-      // Keep BOM from server; Excel needs UTF-8 BOM + semicolon rows
-      const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${label.replace(/\s+/g, '-').toLowerCase()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    })
-    .catch((err: Error) => alert(err.message));
+async function downloadExcel(kind: string, label: string) {
+  try {
+    const token = readStaffToken();
+    const response = await fetch(`/api/kpi/export/${kind}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) {
+      let message = `Xato ${response.status}`;
+      try {
+        const body = await response.json() as { error?: string };
+        if (body.error) message = body.error;
+      } catch {
+        /* keep */
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SmartOmbor-${label.replace(/\s+/g, '-')}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert((err as Error).message || 'Yuklab bo‘lmadi');
+  }
 }
 
 function useMsSync() {
@@ -229,20 +242,20 @@ export function KpiDashboardPage() {
         <div className="kpi-panel-head" style={{ padding: '0 0 .65rem' }}>
           <div>
             <h3 style={{ margin: 0 }}>Hisobotlarni yuklash</h3>
-            <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>Excel uchun tayyor CSV (ustunlar ajratilgan, UTF-8)</p>
+            <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>Rangli Excel (.xlsx) — ustunlar keng, holatlar rangli</p>
           </div>
         </div>
         <div className="kpi-export-grid">
           {[
-            ['orders', 'Savdolar', 'Buyurtmalar va to‘lovlar'],
+            ['orders', 'Savdolar', 'Buyurtmalar va summalar'],
             ['kpi', 'KPI', 'Komissiya hisoblari'],
             ['agents', 'Agentlar', 'Login va reja'],
             ['customers', 'Mijozlar', 'Manzil va GPS'],
           ].map(([k, title, sub]) => (
-            <button key={k} type="button" className="kpi-export-card" onClick={() => downloadCsv(k, title)}>
+            <button key={k} type="button" className="kpi-export-card" onClick={() => void downloadExcel(k, title)}>
               <span className="kpi-export-ico"><Download size={18} /></span>
               <span>
-                <b>{title}</b>
+                <b>{title} · Excel</b>
                 <small>{sub}</small>
               </span>
             </button>

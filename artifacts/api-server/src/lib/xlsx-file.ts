@@ -65,11 +65,11 @@ function xml(s: string) {
   return new TextEncoder().encode(s);
 }
 function esc(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function colName(index: number) {
   let n = index + 1;
-  let s = '';
+  let s = "";
   while (n > 0) {
     const r = (n - 1) % 26;
     s = String.fromCharCode(65 + r) + s;
@@ -81,89 +81,215 @@ function colName(index: number) {
 export type Cell = string | number | null | undefined;
 export type Sheet = { name: string; headers: string[]; rows: Cell[][] };
 
+/** Style ids in STYLES_XML cellXfs */
+const STYLE = {
+  text: 0,
+  header: 1,
+  zebraText: 2,
+  money: 3,
+  zebraMoney: 4,
+  pct: 5,
+  zebraPct: 6,
+  ok: 7,
+  warn: 8,
+  bad: 9,
+  int: 10,
+  zebraInt: 11,
+} as const;
+
+function statusStyle(value: unknown): number | null {
+  const s = String(value ?? "").toLowerCase().trim();
+  if (!s) return null;
+  if (
+    s.includes("confirm") ||
+    s.includes("paid") ||
+    s.includes("tasdiq") ||
+    s.includes("to‘lang") ||
+    s.includes("tolang") ||
+    s === "ok" ||
+    s === "aniq" ||
+    s === "active" ||
+    s === "faol"
+  ) {
+    return STYLE.ok;
+  }
+  if (
+    s.includes("pending") ||
+    s.includes("partial") ||
+    s.includes("kutil") ||
+    s.includes("qisman") ||
+    s === "agent" ||
+    s.includes("1-bosqich") ||
+    s.includes("2-bosqich") ||
+    s.includes("3-bosqich")
+  ) {
+    return STYLE.warn;
+  }
+  if (
+    s.includes("expir") ||
+    s.includes("cancel") ||
+    s.includes("overdue") ||
+    s.includes("muddati") ||
+    s.includes("bekor") ||
+    s === "taxminiy" ||
+    s === "0%"
+  ) {
+    return STYLE.bad;
+  }
+  return null;
+}
+
+function isMoneyHeader(header: string) {
+  return /jami|to‘lang|tolang|baza|kpi|summa|reja|qarz|amount|total|paid|sales/i.test(header);
+}
+function isPctHeader(header: string) {
+  return /foiz|%|percent/i.test(header);
+}
+function isIntHeader(header: string) {
+  return /qolgan kun|days|kun\b/i.test(header);
+}
+function isCoordHeader(header: string) {
+  return /^(lat|lng)$/i.test(header.trim());
+}
+function isStatusHeader(header: string) {
+  return /holat|status|gps|bosqich/i.test(header);
+}
+
 function colWidth(sheet: Sheet, index: number) {
-  const header = sheet.headers[index] || '';
+  const header = sheet.headers[index] || "";
   let max = header.length;
   let numeric = true;
-  const sample = Math.min(sheet.rows.length, 80);
+  const sample = Math.min(sheet.rows.length, 200);
   for (let row = 0; row < sample; row += 1) {
     const value = sheet.rows[row]?.[index];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      const formatted = Math.abs(value) >= 1000 ? value.toLocaleString('fr-FR').length : String(value).length;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const formatted =
+        Math.abs(value) >= 1000 ? value.toLocaleString("fr-FR").length + 2 : String(value).length + 2;
       if (formatted > max) max = formatted;
-    } else if (value != null && value !== '') {
+    } else if (value != null && value !== "") {
       numeric = false;
       if (String(value).length > max) max = String(value).length;
     }
   }
-  if (numeric) return Math.min(16, Math.max(11, max + 2));
-  return Math.min(index === 0 ? 46 : 28, Math.max(14, max + 2));
+  if (isStatusHeader(header)) return Math.min(22, Math.max(16, max + 4));
+  if (isIntHeader(header)) return Math.min(14, Math.max(12, max + 3));
+  if (isCoordHeader(header)) return Math.min(14, Math.max(12, max + 2));
+  if (numeric || isMoneyHeader(header) || isPctHeader(header)) {
+    return Math.min(20, Math.max(14, max + 4));
+  }
+  if (/manzil|mijoz|agent|buyurtma|nom|f\.i\.sh|login|reference/i.test(header)) {
+    return Math.min(44, Math.max(20, max + 6));
+  }
+  return Math.min(38, Math.max(16, max + 5));
 }
 
 function cellXml(ref: string, cell: Cell, style: number) {
-  if (typeof cell === 'number' && Number.isFinite(cell)) return `<c r="${ref}" s="${style}"><v>${cell}</v></c>`;
-  const text = cell == null || cell === '' ? '' : String(cell).slice(0, 32000);
+  if (typeof cell === "number" && Number.isFinite(cell)) return `<c r="${ref}" s="${style}"><v>${cell}</v></c>`;
+  const text = cell == null || cell === "" ? "" : String(cell).slice(0, 32000);
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${esc(text)}</t></is></c>`;
 }
 
+function styleForCell(header: string, cell: Cell, zebra: boolean): number {
+  const number = typeof cell === "number" && Number.isFinite(cell);
+  if (!number) {
+    const status = statusStyle(cell);
+    if (status != null) return status;
+    return zebra ? STYLE.zebraText : STYLE.text;
+  }
+  if (isIntHeader(header)) return zebra ? STYLE.zebraInt : STYLE.int;
+  if (isPctHeader(header) || isCoordHeader(header)) return zebra ? STYLE.zebraPct : STYLE.pct;
+  if (isMoneyHeader(header) || Math.abs(cell) >= 1000) return zebra ? STYLE.zebraMoney : STYLE.money;
+  return zebra ? STYLE.zebraPct : STYLE.pct;
+}
+
 function sheetXml(sheet: Sheet) {
-  const columns = Math.max(sheet.headers.length, ...sheet.rows.map(row => row.length), 1);
+  const columns = Math.max(sheet.headers.length, ...sheet.rows.map((row) => row.length), 1);
   const lastCol = colName(columns - 1);
   const lastRow = sheet.rows.length + 1;
-  const cols = Array.from({ length: columns }, (_, index) => `<col min="${index + 1}" max="${index + 1}" width="${colWidth(sheet, index)}" customWidth="1"/>`).join('');
+  const cols = Array.from(
+    { length: columns },
+    (_, index) => `<col min="${index + 1}" max="${index + 1}" width="${colWidth(sheet, index)}" customWidth="1"/>`,
+  ).join("");
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
     '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="18"/><cols>${cols}</cols><sheetData>`,
+    `<sheetFormatPr defaultRowHeight="24" customHeight="1"/><cols>${cols}</cols><sheetData>`,
   ];
-  const writeRow = (r: number, cells: Cell[], styleFor: (index: number, cell: Cell) => number) => {
-    let row = `<row r="${r}">`;
+  const writeRow = (r: number, cells: Cell[], height: number, styleFor: (index: number, cell: Cell) => number) => {
+    let row = `<row r="${r}" ht="${height}" customHeight="1">`;
     for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
-    lines.push(row + '</row>');
+    lines.push(row + "</row>");
   };
-  writeRow(1, sheet.headers, () => 1);
-  sheet.rows.forEach((row, i) => writeRow(i + 2, row, (_index, cell) => {
-    const number = typeof cell === 'number' && Number.isFinite(cell);
-    if (i % 2 === 1) return number ? 4 : 2;
-    return number ? 3 : 0;
-  }));
+  writeRow(1, sheet.headers, 30, () => STYLE.header);
+  sheet.rows.forEach((row, i) => {
+    const zebra = i % 2 === 1;
+    writeRow(i + 2, row, 24, (index, cell) => styleForCell(sheet.headers[index] || "", cell, zebra));
+  });
   lines.push(`</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/>`);
   lines.push('<pageMargins left="0.4" right="0.4" top="0.45" bottom="0.45" header="0.2" footer="0.2"/>');
   lines.push('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>');
-  lines.push('</worksheet>');
-  return lines.join('');
+  lines.push("</worksheet>");
+  return lines.join("");
 }
 
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2">
+<numFmts count="3">
+<numFmt numFmtId="164" formatCode="#,##0.00"/>
+<numFmt numFmtId="165" formatCode="0.00"/>
+<numFmt numFmtId="166" formatCode="0"/>
+</numFmts>
+<fonts count="5">
 <font><sz val="11"/><name val="Calibri"/><color rgb="FF0F1B2D"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="12"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF166534"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF92400E"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FF991B1B"/></font>
 </fonts>
-<fills count="4">
+<fills count="7">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FF2F54EB"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFEEF2FF"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF1D4ED8"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFEFF6FF"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFEE2E2"/></patternFill></fill>
 </fills>
 <borders count="2">
-<border><left style="thin"><color rgb="FFE4E8EE"/></left><right style="thin"><color rgb="FFE4E8EE"/></right><top style="thin"><color rgb="FFE4E8EE"/></top><bottom style="thin"><color rgb="FFE4E8EE"/></bottom></border>
-<border><left style="thin"><color rgb="FF2F54EB"/></left><right style="thin"><color rgb="FF2F54EB"/></right><top style="thin"><color rgb="FF2F54EB"/></top><bottom style="thin"><color rgb="FF2F54EB"/></bottom></border>
+<border>
+  <left style="thin"><color rgb="FFE2E8F0"/></left>
+  <right style="thin"><color rgb="FFE2E8F0"/></right>
+  <top style="thin"><color rgb="FFE2E8F0"/></top>
+  <bottom style="thin"><color rgb="FFE2E8F0"/></bottom>
+</border>
+<border>
+  <left style="thin"><color rgb="FF1D4ED8"/></left>
+  <right style="thin"><color rgb="FF1D4ED8"/></right>
+  <top style="thin"><color rgb="FF1D4ED8"/></top>
+  <bottom style="thin"><color rgb="FF1D4ED8"/></bottom>
+</border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="5">
+<cellXfs count="12">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
-<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="3" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="4" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 </cellXfs>
 </styleSheet>`;
 
 function sanitizeSheetName(name: string, used: Set<string>) {
-  let base = name.replace(/[:\\/?*[\]]/g, ' ').trim().slice(0, 31) || 'Sheet';
+  let base = name.replace(/[:\\/?*[\]]/g, " ").trim().slice(0, 31) || "Sheet";
   let next = base;
   let n = 2;
   while (used.has(next)) {
@@ -179,38 +305,38 @@ export function buildXlsx(sheets: Sheet[]): Buffer {
   const named = sheets.map((s, i) => ({ ...s, name: sanitizeSheetName(s.name || `Sheet${i + 1}`, used) }));
   const files: { name: string; data: Uint8Array }[] = [
     {
-      name: '[Content_Types].xml',
+      name: "[Content_Types].xml",
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-${named.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}
+${named.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}
 </Types>`),
     },
     {
-      name: '_rels/.rels',
+      name: "_rels/.rels",
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>`),
     },
     {
-      name: 'xl/_rels/workbook.xml.rels',
+      name: "xl/_rels/workbook.xml.rels",
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-${named.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}
+${named.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}
 <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`),
     },
-    { name: 'xl/styles.xml', data: xml(STYLES_XML) },
+    { name: "xl/styles.xml", data: xml(STYLES_XML) },
     {
-      name: 'xl/workbook.xml',
+      name: "xl/workbook.xml",
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <sheets>
-${named.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}
+${named.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}
 </sheets>
 </workbook>`),
     },
