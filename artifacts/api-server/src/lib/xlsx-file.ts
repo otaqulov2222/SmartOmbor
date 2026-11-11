@@ -275,23 +275,22 @@ function sheetXml(sheet: Sheet) {
   const columns = Math.max(sheet.headers.length, ...sheet.rows.map((row) => row.length), 1);
   const lastCol = colName(columns - 1);
   const headerRow = 3;
-  const lastDataRow = headerRow + sheet.rows.length;
+  const lastDataRow = Math.max(headerRow, headerRow + sheet.rows.length);
   const cols = Array.from(
     { length: columns },
     (_, index) => `<col min="${index + 1}" max="${index + 1}" width="${colWidth(sheet, index)}" customWidth="1"/>`,
   ).join("");
 
-  const title = `SmartOmbor  ·  ${sheet.name}`;
-  const meta = `${sheet.rows.length} qator  ·  ${tashkentStamp()} (Toshkent)`;
-  const titleCells = Array.from({ length: columns }, (_, i) => (i === 0 ? title : ""));
-  const metaCells = Array.from({ length: columns }, (_, i) => (i === 0 ? meta : ""));
+  // Avoid fancy unicode (middle-dot) — some Excel locales choke on repair paths
+  const title = `SmartOmbor - ${sheet.name}`;
+  const meta = `${sheet.rows.length} qator | ${tashkentStamp()} (Toshkent)`;
 
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
-    `<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="${headerRow}" topLeftCell="A${headerRow + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`,
-    `<sheetFormatPr defaultRowHeight="26" customHeight="1"/><cols>${cols}</cols><sheetData>`,
+    `<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="${headerRow}" topLeftCell="A${headerRow + 1}" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A${headerRow + 1}" sqref="A${headerRow + 1}"/></sheetView></sheetViews>`,
+    `<sheetFormatPr defaultRowHeight="26"/><cols>${cols}</cols><sheetData>`,
   ];
 
   const writeRow = (
@@ -307,8 +306,13 @@ function sheetXml(sheet: Sheet) {
     lines.push(row + "</row>");
   };
 
-  writeRow(1, titleCells, 38, () => STYLE.title);
-  writeRow(2, metaCells, 22, () => STYLE.meta);
+  // Merged title/meta: ONLY top-left cell may exist (Excel repair otherwise)
+  lines.push(
+    `<row r="1" ht="38" customHeight="1">${cellXml("A1", title, STYLE.title)}</row>`,
+  );
+  lines.push(
+    `<row r="2" ht="22" customHeight="1">${cellXml("A2", meta, STYLE.meta)}</row>`,
+  );
   writeRow(headerRow, sheet.headers, 32, () => STYLE.header);
   sheet.rows.forEach((row, i) => {
     const zebra = i % 2 === 1;
@@ -318,10 +322,14 @@ function sheetXml(sheet: Sheet) {
   });
 
   lines.push("</sheetData>");
-  lines.push(`<mergeCells count="2"><mergeCell ref="A1:${lastCol}1"/><mergeCell ref="A2:${lastCol}2"/></mergeCells>`);
+  if (columns > 1) {
+    lines.push(
+      `<mergeCells count="2"><mergeCell ref="A1:${lastCol}1"/><mergeCell ref="A2:${lastCol}2"/></mergeCells>`,
+    );
+  }
   lines.push(`<autoFilter ref="A${headerRow}:${lastCol}${lastDataRow}"/>`);
   lines.push('<pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>');
-  lines.push('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>');
+  lines.push('<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="1"/>');
   lines.push("</worksheet>");
   return lines.join("");
 }
@@ -365,7 +373,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEE2E2"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
 </fills>
-<borders count="4">
+<borders count="3">
 <border>
   <left style="thin"><color rgb="FFF1E7E9"/></left>
   <right style="thin"><color rgb="FFF1E7E9"/></right>
@@ -373,18 +381,16 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <bottom style="thin"><color rgb="FFF1E7E9"/></bottom>
 </border>
 <border>
-  <left/><right/><top/>
-  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
-</border>
-<border>
   <left style="thin"><color rgb="FF7F1D1D"/></left>
   <right style="thin"><color rgb="FF7F1D1D"/></right>
   <top style="thin"><color rgb="FF7F1D1D"/></top>
-  <bottom style="thin"><color rgb="FF7F1D1D"/></bottom>
+  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
 </border>
 <border>
-  <left/><right/><top/>
-  <bottom style="thin"><color rgb="FFE11D48"/></bottom>
+  <left style="thin"><color rgb="FF1C1917"/></left>
+  <right style="thin"><color rgb="FF1C1917"/></right>
+  <top style="thin"><color rgb="FF1C1917"/></top>
+  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
@@ -392,7 +398,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" indent="1"/></xf>
 <xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center" indent="1"/></xf>
-<xf numFmtId="0" fontId="3" fillId="4" borderId="3" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="3" fillId="4" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1" wrapText="1"/></xf>
 <xf numFmtId="164" fontId="8" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center" indent="1"/></xf>
 <xf numFmtId="164" fontId="8" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center" indent="1"/></xf>
@@ -452,7 +458,7 @@ ${named.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" Con
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 ${named.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}
-<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+<Relationship Id="rId${named.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`),
     },
     { name: "xl/styles.xml", data: xml(STYLES_XML) },
