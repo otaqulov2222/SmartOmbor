@@ -188,20 +188,21 @@ function cellXml(ref: string, cell: Cell, style: number) {
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${esc(text)}</t></is></c>`;
 }
 
-function styleForCell(header: string, cell: Cell, zebra: boolean): number {
+function styleForCell(header: string, cell: Cell, _zebra: boolean): number {
+  // No zebra fills — white rows only; Holat keeps soft status colors.
   const number = typeof cell === "number" && Number.isFinite(cell);
   if (!number) {
     if (isStatusHeader(header)) {
       const status = statusStyle(cell);
       if (status != null) return status;
     }
-    if (isOrderHeader(header)) return zebra ? STYLE.zebraOrderId : STYLE.orderId;
-    return zebra ? STYLE.zebraText : STYLE.text;
+    if (isOrderHeader(header)) return STYLE.orderId;
+    return STYLE.text;
   }
-  if (isIntHeader(header)) return zebra ? STYLE.zebraInt : STYLE.int;
-  if (isPctHeader(header) || isCoordHeader(header)) return zebra ? STYLE.zebraPct : STYLE.pct;
-  if (isMoneyHeader(header) || Math.abs(cell) >= 1000) return zebra ? STYLE.zebraMoney : STYLE.money;
-  return zebra ? STYLE.zebraPct : STYLE.pct;
+  if (isIntHeader(header)) return STYLE.int;
+  if (isPctHeader(header) || isCoordHeader(header)) return STYLE.pct;
+  if (isMoneyHeader(header) || Math.abs(cell) >= 1000) return STYLE.money;
+  return STYLE.pct;
 }
 
 function sheetXml(sheet: Sheet) {
@@ -261,7 +262,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FFCBD5E1"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFDCFCE7"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFEF3C7"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFFECACA"/></patternFill></fill>
@@ -273,16 +274,16 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <left/><right/><top/><bottom/>
 </border>
 <border>
-  <left style="medium"><color rgb="FF334155"/></left>
-  <right style="medium"><color rgb="FF334155"/></right>
-  <top style="medium"><color rgb="FF334155"/></top>
-  <bottom style="medium"><color rgb="FF334155"/></bottom>
+  <left style="thin"><color rgb="FF64748B"/></left>
+  <right style="thin"><color rgb="FF64748B"/></right>
+  <top style="thin"><color rgb="FF64748B"/></top>
+  <bottom style="thin"><color rgb="FF64748B"/></bottom>
 </border>
 <border>
-  <left style="medium"><color rgb="FF0F172A"/></left>
-  <right style="medium"><color rgb="FF0F172A"/></right>
-  <top style="medium"><color rgb="FF0F172A"/></top>
-  <bottom style="medium"><color rgb="FFE11D48"/></bottom>
+  <left style="thin"><color rgb="FF0F172A"/></left>
+  <right style="thin"><color rgb="FF0F172A"/></right>
+  <top style="thin"><color rgb="FF0F172A"/></top>
+  <bottom style="thin"><color rgb="FFE11D48"/></bottom>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
