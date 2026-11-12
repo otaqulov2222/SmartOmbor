@@ -483,12 +483,12 @@ export function RouteMap({
       activeLineRef.current = null;
       return;
     }
-    const glowOpts = { color: '#1e3a8a', weight: 14, opacity: 0.2, lineCap: 'round', lineJoin: 'round' };
+    const glowOpts = { color: '#1e3a8a', weight: 7, opacity: 0.14, lineCap: 'round', lineJoin: 'round' };
     const mainOpts = {
       color: ok ? '#2563eb' : '#64748b',
-      weight: 7,
-      opacity: 0.98,
-      dashArray: ok ? undefined : '6 8',
+      weight: 3.5,
+      opacity: 0.95,
+      dashArray: ok ? undefined : '5 7',
       lineCap: 'round' as const,
       lineJoin: 'round' as const,
     };
@@ -648,13 +648,13 @@ export function RouteMap({
           const path = roads[idx]?.path;
           if (!path || path.length < 2) return;
           if (p.kind === 'done') {
-            L.polyline(path, { color: '#059669', weight: 5, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+            L.polyline(path, { color: '#059669', weight: 3, opacity: 0.88, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
           } else {
             L.polyline(path, {
               color: '#d97706',
-              weight: 5,
-              opacity: 0.92,
-              dashArray: '12 8',
+              weight: 3,
+              opacity: 0.9,
+              dashArray: '10 7',
               lineCap: 'round',
               lineJoin: 'round',
             }).addTo(layer);
