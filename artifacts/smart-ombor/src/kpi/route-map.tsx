@@ -76,6 +76,45 @@ function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: numb
   return 2 * 6371000 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
+/** Eng yaqin nuqta indeksi + masofa (m). */
+function nearestOnPath(path: Array<[number, number]>, lat: number, lng: number) {
+  let idx = 0;
+  let dist = Infinity;
+  for (let i = 0; i < path.length; i += 1) {
+    const d = haversineM({ lat, lng }, { lat: path[i][0], lng: path[i][1] });
+    if (d < dist) {
+      dist = d;
+      idx = i;
+    }
+  }
+  return { idx, dist };
+}
+
+/**
+ * Jonli GPS dan boshlab qolgan marshrut — strelka va chiziq orasida bo‘shliq qolmasin.
+ * OSRM to‘liq path saqlanadi; harakatda faqat “qolgan” qismi chiziladi.
+ */
+function pathFromLive(path: Array<[number, number]>, lat: number, lng: number): Array<[number, number]> {
+  if (!path.length) return [[lat, lng]];
+  const { idx } = nearestOnPath(path, lat, lng);
+  const rest = path.slice(idx);
+  if (!rest.length) return [[lat, lng]];
+  const head = rest[0];
+  if (haversineM({ lat, lng }, { lat: head[0], lng: head[1] }) < 4) {
+    return rest.length >= 2 ? rest : [[lat, lng], ...rest];
+  }
+  return [[lat, lng], ...rest];
+}
+
+function smoothHeading(prev: number | null, next: number) {
+  if (prev == null || !Number.isFinite(prev)) return next;
+  let delta = ((next - prev + 540) % 360) - 180;
+  return (prev + delta * 0.28 + 360) % 360;
+}
+
+const OFF_ROUTE_M = 85;
+const REROUTE_MOVE_M = 160;
+
 function fmtDistance(m: number | null | undefined) {
   if (m == null || !Number.isFinite(m)) return '';
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
@@ -211,16 +250,30 @@ export function RouteMap({
   const LRef = useRef<any>(null);
   const stopsLayerRef = useRef<any>(null);
   const routeLayerRef = useRef<any>(null);
+  const activeRouteLayerRef = useRef<any>(null);
   const trackLayerRef = useRef<any>(null);
   const agentMarkerRef = useRef<any>(null);
-  const routeOriginRef = useRef<{ lat: number; lng: number; destId: string } | null>(null);
+  const activePathRef = useRef<{
+    destId: string;
+    fullPath: Array<[number, number]>;
+    ok: boolean;
+    distanceM: number | null;
+    durationSec: number | null;
+    originLat: number;
+    originLng: number;
+  } | null>(null);
+  const activeLineRef = useRef<{ glow: any; main: any } | null>(null);
   const routeDrawGenRef = useRef(0);
   const followRef = useRef(follow);
   const userPanRef = useRef(false);
   const livePosRef = useRef<LatLng | null>(null);
+  const smoothHeadingRef = useRef<number | null>(null);
+  const agentLabelRef = useRef('');
+  const reroutePendingRef = useRef(false);
   const onSelectStopRef = useRef(onSelectStop);
   const onSelectAgentRef = useRef(onSelectAgent);
   const lastFocusNonceRef = useRef(0);
+  const [rerouteNonce, setRerouteNonce] = useState(0);
 
   const [mapReady, setMapReady] = useState(false);
   const [active, setActive] = useState(false);
@@ -352,6 +405,7 @@ export function RouteMap({
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
       stopsLayerRef.current = L.layerGroup().addTo(map);
       routeLayerRef.current = L.layerGroup().addTo(map);
+      activeRouteLayerRef.current = L.layerGroup().addTo(map);
       trackLayerRef.current = L.layerGroup().addTo(map);
       mapRef.current = map;
       map.on('dragstart', () => {
@@ -372,6 +426,9 @@ export function RouteMap({
       agentMarkerRef.current = null;
       stopsLayerRef.current = null;
       routeLayerRef.current = null;
+      activeRouteLayerRef.current = null;
+      activeLineRef.current = null;
+      activePathRef.current = null;
       trackLayerRef.current = null;
       setMapReady(false);
     };
@@ -415,7 +472,39 @@ export function RouteMap({
     }
   }, [mapReady, track]);
 
-  // Live agent marker + follow
+  const paintActiveLine = (
+    L: any,
+    layer: any,
+    path: Array<[number, number]>,
+    ok: boolean,
+  ) => {
+    if (path.length < 2) {
+      layer.clearLayers();
+      activeLineRef.current = null;
+      return;
+    }
+    const glowOpts = { color: '#1e3a8a', weight: 14, opacity: 0.2, lineCap: 'round', lineJoin: 'round' };
+    const mainOpts = {
+      color: ok ? '#2563eb' : '#64748b',
+      weight: 7,
+      opacity: 0.98,
+      dashArray: ok ? undefined : '6 8',
+      lineCap: 'round' as const,
+      lineJoin: 'round' as const,
+    };
+    if (activeLineRef.current?.glow && activeLineRef.current?.main) {
+      activeLineRef.current.glow.setLatLngs(path);
+      activeLineRef.current.main.setLatLngs(path);
+      activeLineRef.current.main.setStyle(mainOpts);
+      return;
+    }
+    layer.clearLayers();
+    const glow = L.polyline(path, glowOpts).addTo(layer);
+    const main = L.polyline(path, mainOpts).addTo(layer);
+    activeLineRef.current = { glow, main };
+  };
+
+  // Live agent marker + follow — icon HTML qayta yaratilmaydi (strelka miltillamasin)
   useEffect(() => {
     if (!mapReady) return;
     const L = LRef.current;
@@ -427,24 +516,27 @@ export function RouteMap({
         map.removeLayer(agentMarkerRef.current);
         agentMarkerRef.current = null;
       }
+      smoothHeadingRef.current = null;
       return;
     }
 
     const dest = nextStop && !nextStop.visitedToday ? nextStop : null;
-    let heading = livePos.heading ?? compassHeading ?? null;
-    if ((heading == null || !Number.isFinite(heading)) && dest) {
-      heading = bearingDeg(livePos.lat, livePos.lng, dest.lat, dest.lng);
+    let rawHeading = livePos.heading ?? compassHeading ?? null;
+    if ((rawHeading == null || !Number.isFinite(rawHeading)) && dest) {
+      rawHeading = bearingDeg(livePos.lat, livePos.lng, dest.lat, dest.lng);
     }
-    const deg = Math.round(heading || 0);
+    if (rawHeading == null || !Number.isFinite(rawHeading)) rawHeading = smoothHeadingRef.current ?? 0;
+    smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, rawHeading);
+    const deg = Math.round(smoothHeadingRef.current);
     const label = agentName || primaryAgent?.fullName || 'Agent';
-    const icon = L.divIcon({
-      className: 'rm-pin-wrap',
-      html: agentIconHtml(label, deg),
-      iconSize: [48, 48],
-      iconAnchor: [24, 24],
-    });
 
     if (!agentMarkerRef.current) {
+      const icon = L.divIcon({
+        className: 'rm-pin-wrap',
+        html: agentIconHtml(label, deg),
+        iconSize: [48, 48],
+        iconAnchor: [24, 24],
+      });
       agentMarkerRef.current = L.marker([livePos.lat, livePos.lng], {
         icon,
         zIndexOffset: 1200,
@@ -452,14 +544,60 @@ export function RouteMap({
       agentMarkerRef.current.on('click', () => {
         if (primaryAgent) onSelectAgentRef.current?.(primaryAgent.id);
       });
+      agentLabelRef.current = label;
     } else {
       agentMarkerRef.current.setLatLng([livePos.lat, livePos.lng]);
-      agentMarkerRef.current.setIcon(icon);
+      if (label !== agentLabelRef.current) {
+        agentMarkerRef.current.setIcon(
+          L.divIcon({
+            className: 'rm-pin-wrap',
+            html: agentIconHtml(label, deg),
+            iconSize: [48, 48],
+            iconAnchor: [24, 24],
+          }),
+        );
+        agentLabelRef.current = label;
+      } else {
+        const el = agentMarkerRef.current.getElement?.() as HTMLElement | null;
+        if (el) {
+          const arrow = el.querySelector('.rm-nav-arrow') as HTMLElement | null;
+          const cone = el.querySelector('.rm-nav-cone') as HTMLElement | null;
+          if (arrow) arrow.style.transform = `rotate(${deg}deg)`;
+          if (cone) cone.style.transform = `rotate(${deg}deg)`;
+        }
+      }
+    }
+
+    // Jonli chiziqni strelkaga yopishtirish (OSRM qayta so‘ralmasin)
+    const active = activePathRef.current;
+    const activeLayer = activeRouteLayerRef.current;
+    if (active && activeLayer && dest && active.destId === dest.id) {
+      const { dist } = nearestOnPath(active.fullPath, livePos.lat, livePos.lng);
+      const moved = haversineM(
+        { lat: active.originLat, lng: active.originLng },
+        { lat: livePos.lat, lng: livePos.lng },
+      );
+      if (dist > OFF_ROUTE_M || moved > REROUTE_MOVE_M) {
+        if (!reroutePendingRef.current) {
+          reroutePendingRef.current = true;
+          setRerouteNonce((n) => n + 1);
+        }
+      } else {
+        const trimmed = pathFromLive(active.fullPath, livePos.lat, livePos.lng);
+        paintActiveLine(L, activeLayer, trimmed, active.ok);
+        setRoadHint({
+          distanceM: active.distanceM != null
+            ? Math.max(0, Math.round(active.distanceM - moved * 0.85))
+            : Math.round(haversineM(livePos, dest)),
+          durationSec: active.durationSec,
+          roadOk: active.ok,
+        });
+      }
     }
 
     if (followRef.current && !userPanRef.current) {
       const z = Math.max(map.getZoom?.() || 14, 15);
-      map.panTo([livePos.lat, livePos.lng], { animate: true });
+      map.panTo([livePos.lat, livePos.lng], { animate: true, duration: 0.35 });
       if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: true });
     }
   }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
@@ -468,12 +606,8 @@ export function RouteMap({
     () => stops.map((s) => `${s.id}:${s.visitedToday ? 1 : 0}:${s.lat.toFixed(5)},${s.lng.toFixed(5)}`).join('|'),
     [stops],
   );
-  // Bucket live GPS so tiny watchPosition noise does not restart OSRM chain
-  const liveBucket = livePos
-    ? `${livePos.lat.toFixed(3)},${livePos.lng.toFixed(3)}`
-    : 'nogps';
 
-  // In-app full sequence: done (green) + live→next (blue) + next→…→last (amber)
+  // Done (yashil) + plan (oltingugurt) — kamroq yangilanadi
   useEffect(() => {
     if (!mapReady) return;
     let alive = true;
@@ -483,75 +617,22 @@ export function RouteMap({
     if (!L || !layer) return;
 
     const timer = window.setTimeout(() => {
-      const run = async () => {
+      void (async () => {
         const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
         if (!valid.length) {
           if (runId !== routeDrawGenRef.current) return;
           layer.clearLayers();
-          setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
-          routeOriginRef.current = null;
           return;
         }
-
         const doneStops = valid.filter((s) => s.visitedToday);
         const pending = valid.filter((s) => !s.visitedToday);
-        const next = pending[0] || null;
-        const seqKey = `${stopsKey}|n:${next?.id || ''}|g:${liveBucket}`;
-
-        const prev = routeOriginRef.current;
-        if (prev?.destId === seqKey) {
-          if (livePos && next) {
-            setRoadHint((h) => ({
-              distanceM: Math.round(haversineM(livePos, next)),
-              durationSec: h.durationSec,
-              roadOk: h.roadOk,
-            }));
-          }
-          return;
-        }
-
-        const drawLeg = (
-          path: Array<[number, number]>,
-          kind: 'done' | 'active' | 'plan',
-          ok: boolean,
-        ) => {
-          if (path.length < 2) return;
-          if (kind === 'done') {
-            L.polyline(path, { color: '#059669', weight: 5, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
-            return;
-          }
-          if (kind === 'active') {
-            L.polyline(path, { color: '#1e3a8a', weight: 12, opacity: 0.18, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
-            L.polyline(path, {
-              color: ok ? '#2563eb' : '#64748b',
-              weight: 6,
-              opacity: 0.96,
-              dashArray: ok ? undefined : '6 8',
-              lineCap: 'round',
-              lineJoin: 'round',
-            }).addTo(layer);
-            return;
-          }
-          L.polyline(path, {
-            color: '#d97706',
-            weight: 5,
-            opacity: 0.92,
-            dashArray: '12 8',
-            lineCap: 'round',
-            lineJoin: 'round',
-          }).addTo(layer);
-        };
-
-        const pairs: Array<{ a: [number, number]; b: [number, number]; kind: 'done' | 'active' | 'plan' }> = [];
+        const pairs: Array<{ a: [number, number]; b: [number, number]; kind: 'done' | 'plan' }> = [];
         for (let i = 0; i < doneStops.length - 1; i += 1) {
           pairs.push({
             a: [doneStops[i].lat, doneStops[i].lng],
             b: [doneStops[i + 1].lat, doneStops[i + 1].lng],
             kind: 'done',
           });
-        }
-        if (livePos && next) {
-          pairs.push({ a: [livePos.lat, livePos.lng], b: [next.lat, next.lng], kind: 'active' });
         }
         for (let i = 0; i < pending.length - 1; i += 1) {
           pairs.push({
@@ -560,44 +641,106 @@ export function RouteMap({
             kind: 'plan',
           });
         }
-
         const roads = await Promise.all(pairs.map((p) => fetchRoadRoute([p.a, p.b])));
         if (!alive || runId !== routeDrawGenRef.current) return;
-
         layer.clearLayers();
-        let activeOk = false;
-        let activeDist: number | null = null;
-        let activeDur: number | null = null;
         pairs.forEach((p, idx) => {
-          const road = roads[idx];
-          drawLeg(road.path, p.kind, road.ok);
-          if (p.kind === 'active') {
-            activeOk = road.ok;
-            activeDist = road.distanceM;
-            activeDur = road.durationSec;
+          const path = roads[idx]?.path;
+          if (!path || path.length < 2) return;
+          if (p.kind === 'done') {
+            L.polyline(path, { color: '#059669', weight: 5, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(layer);
+          } else {
+            L.polyline(path, {
+              color: '#d97706',
+              weight: 5,
+              opacity: 0.92,
+              dashArray: '12 8',
+              lineCap: 'round',
+              lineJoin: 'round',
+            }).addTo(layer);
           }
         });
-
-        routeOriginRef.current = {
-          lat: livePos?.lat ?? valid[0].lat,
-          lng: livePos?.lng ?? valid[0].lng,
-          destId: seqKey,
-        };
-        setRoadHint({
-          distanceM: activeDist ?? (livePos && next ? Math.round(haversineM(livePos, next)) : next?.distanceM ?? null),
-          durationSec: activeDur,
-          roadOk: activeOk,
-        });
-      };
-
-      void run();
-    }, 350);
+      })();
+    }, 280);
 
     return () => {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [mapReady, liveBucket, nextStop?.id, stopsKey, stops, livePos]);
+  }, [mapReady, stopsKey, stops]);
+
+  // Active live→next: OSRM faqat yangi nuqta / off-route / katta siljishda
+  useEffect(() => {
+    if (!mapReady) return;
+    let alive = true;
+    const L = LRef.current;
+    const layer = activeRouteLayerRef.current;
+    if (!L || !layer) return;
+
+    const next = nextStop && !nextStop.visitedToday ? nextStop : null;
+    const live = livePosRef.current;
+    if (!live || !next) {
+      layer.clearLayers();
+      activeLineRef.current = null;
+      activePathRef.current = null;
+      reroutePendingRef.current = false;
+      setRoadHint({ distanceM: null, durationSec: null, roadOk: false });
+      return;
+    }
+
+    const existing = activePathRef.current;
+    if (existing && existing.destId === next.id && !reroutePendingRef.current) {
+      const { dist } = nearestOnPath(existing.fullPath, live.lat, live.lng);
+      const moved = haversineM(
+        { lat: existing.originLat, lng: existing.originLng },
+        { lat: live.lat, lng: live.lng },
+      );
+      if (dist <= OFF_ROUTE_M && moved <= REROUTE_MOVE_M) {
+        paintActiveLine(L, layer, pathFromLive(existing.fullPath, live.lat, live.lng), existing.ok);
+        return;
+      }
+    }
+
+    const fromLat = live.lat;
+    const fromLng = live.lng;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const road = await fetchRoadRoute([
+          [fromLat, fromLng],
+          [next.lat, next.lng],
+        ]);
+        if (!alive) return;
+        const here = livePosRef.current;
+        const originLat = here?.lat ?? fromLat;
+        const originLng = here?.lng ?? fromLng;
+        const fullPath: Array<[number, number]> = road.path.length >= 2
+          ? road.path
+          : [[originLat, originLng], [next.lat, next.lng]];
+        activePathRef.current = {
+          destId: next.id,
+          fullPath,
+          ok: road.ok,
+          distanceM: road.distanceM,
+          durationSec: road.durationSec,
+          originLat,
+          originLng,
+        };
+        activeLineRef.current = null;
+        paintActiveLine(L, layer, pathFromLive(fullPath, originLat, originLng), road.ok);
+        setRoadHint({
+          distanceM: road.distanceM ?? Math.round(haversineM({ lat: originLat, lng: originLng }, next)),
+          durationSec: road.durationSec,
+          roadOk: road.ok,
+        });
+        reroutePendingRef.current = false;
+      })();
+    }, 180);
+
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [mapReady, nextStop?.id, nextStop?.lat, nextStop?.lng, nextStop, hasLiveGps, rerouteNonce]);
 
   // Fit whole sequence when stops load. Skip only while live GPS follow is actively driving the camera.
   useEffect(() => {

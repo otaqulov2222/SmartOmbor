@@ -475,16 +475,18 @@
   position: absolute; width: 44px; height: 44px;
   background: conic-gradient(from -32deg at 50% 50%, rgba(37, 99, 235, .38) 0deg, rgba(37, 99, 235, 0) 64deg, transparent 360deg);
   border-radius: 999px;
-  transition: transform .35s ease;
+  transition: transform .18s linear;
+  will-change: transform;
 }
 .rm-nav-arrow {
   position: relative; z-index: 2;
-  width: 32px; height: 32px; border-radius: 999px;
-  background: linear-gradient(145deg, #2563eb, #1d4ed8);
+  width: 34px; height: 34px; border-radius: 999px;
+  background: linear-gradient(145deg, #3b82f6, #1d4ed8);
   border: 2.5px solid #fff;
-  box-shadow: 0 6px 16px rgba(29, 78, 216, .45);
+  box-shadow: 0 6px 18px rgba(29, 78, 216, .5), 0 0 0 4px rgba(37, 99, 235, .18);
   display: grid; place-items: center;
-  transition: transform .35s ease;
+  transition: transform .18s linear;
+  will-change: transform;
 }
 @keyframes rmPulse {
   0% { transform: scale(.75); opacity: .9; }
