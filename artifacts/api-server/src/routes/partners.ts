@@ -470,6 +470,107 @@ async function assertSupplyMatchesOrRollback(
   }
 }
 
+/** MS da ombor qo‘lda o‘zgartirganda yuk xati miqdorini qayta yozadi. */
+async function restoreSupplyPositions(
+  supplyId: string,
+  positions: Array<Record<string, unknown>>,
+) {
+  const doc = await moysklad<{ applicable?: boolean; deleted?: string }>(`/entity/supply/${encodeURIComponent(supplyId)}`);
+  if (doc.deleted) throw new MoySkladError("Операция находится в корзине. Обновление операции запрещено.", 400);
+  if (doc.applicable) {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
+  }
+  const page = await moyskladAll<{ id: string }>(`/entity/supply/${encodeURIComponent(supplyId)}/positions`);
+  for (const row of page.rows) {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}/positions/${encodeURIComponent(row.id)}`, undefined, "DELETE");
+  }
+  for (const position of positions) {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}/positions`, {
+      quantity: position.quantity,
+      price: position.price,
+      discount: 0,
+      vat: 0,
+      vatEnabled: false,
+      assortment: position.assortment,
+    });
+  }
+  await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: true }, "PUT");
+}
+
+async function enforceSupplyMatches(
+  supplyId: string,
+  expectedPositions: Array<Record<string, unknown> & { quantity: number }>,
+  meta: { shipmentId: string; restore: boolean },
+) {
+  try {
+    return await verifySupplyQuantities(supplyId, expectedPositions);
+  } catch (error) {
+    if (!meta.restore) throw error;
+    logger.error({
+      shipment: meta.shipmentId,
+      supply: supplyId,
+      err: error instanceof Error ? error.message : error,
+    }, "MoySklad kirim qty drifted — restoring from yuk xati");
+    await restoreSupplyPositions(supplyId, expectedPositions);
+    return await verifySupplyQuantities(supplyId, expectedPositions);
+  }
+}
+
+type SupplyQtyGuard = {
+  shipmentId: string;
+  supplyId: string;
+  positions: Array<Record<string, unknown> & { quantity: number }>;
+  expectedTotal: number;
+  timers: ReturnType<typeof setTimeout>[];
+};
+
+const supplyQtyGuards = new Map<string, SupplyQtyGuard>();
+
+function clearSupplyQtyGuard(shipmentId: string) {
+  const prev = supplyQtyGuards.get(shipmentId);
+  if (!prev) return;
+  for (const timer of prev.timers) clearTimeout(timer);
+  supplyQtyGuards.delete(shipmentId);
+}
+
+/** Ombor MS UI da tahrirlaganda (odatda 2–20 daqiqa ichida) yuk xatiga qaytaradi. */
+function scheduleSupplyQtyGuard(
+  shipmentId: string,
+  supplyId: string,
+  positions: Array<Record<string, unknown> & { quantity: number }>,
+) {
+  clearSupplyQtyGuard(shipmentId);
+  const expectedTotal = positions.reduce((sum, item) => sum + Math.round(Number(item.quantity) || 0), 0);
+  const guard: SupplyQtyGuard = { shipmentId, supplyId, positions, expectedTotal, timers: [] };
+  supplyQtyGuards.set(shipmentId, guard);
+  const delays = [45_000, 180_000, 900_000];
+  for (const delay of delays) {
+    const timer = setTimeout(() => {
+      void (async () => {
+        const current = supplyQtyGuards.get(shipmentId);
+        if (!current || current.supplyId !== supplyId) return;
+        const shipment = listShipments().find((item) => item.id === shipmentId);
+        if (!shipment?.moyskladId || shipment.moyskladId !== supplyId) {
+          clearSupplyQtyGuard(shipmentId);
+          return;
+        }
+        try {
+          await enforceSupplyMatches(supplyId, current.positions, { shipmentId, restore: true });
+          logger.info({ shipment: shipmentId, supply: supplyId, expectedTotal: current.expectedTotal, delay }, "MoySklad kirim qty guard ok");
+        } catch (error) {
+          logger.error({
+            shipment: shipmentId,
+            supply: supplyId,
+            delay,
+            err: error instanceof Error ? error.message : error,
+          }, "MoySklad kirim qty guard restore failed");
+        }
+      })();
+    }, delay);
+    guard.timers.push(timer);
+  }
+}
+
 async function deleteSupplyDocument(supplyId: string) {
   try {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
@@ -1104,31 +1205,51 @@ async function writeShipmentSupply(
       });
     }
     stepAt = Date.now();
-    const created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
+    let created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
     mark("post-supply", stepAt);
     // HARD GUARD: yangi ham, conflict-reuse ham — MS aniq yuk xatiga teng bo‘lsin
-    await assertSupplyMatchesOrRollback(
-      created.id,
-      supplyPositions,
-      { shipmentId, allowDelete: true },
-    );
+    try {
+      await assertSupplyMatchesOrRollback(
+        created.id,
+        supplyPositions,
+        { shipmentId, allowDelete: true },
+      );
+    } catch (error) {
+      // Verify fail → hujjat o‘chirilgan. Bir marta qayta yozamiz (reuse/yarim yozuv).
+      logger.warn({
+        shipment: shipmentId,
+        supply: created.id,
+        reused: created.reused,
+        err: error instanceof Error ? error.message : error,
+      }, "MoySklad supply mismatched — recreating once");
+      created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
+      await assertSupplyMatchesOrRollback(
+        created.id,
+        supplyPositions,
+        { shipmentId, allowDelete: true },
+      );
+    }
+    // Narx/agent fon emas: mark dan OLDIN — keyin MS tahriri verifydan o‘tib ketmasin.
+    await ensureSupplyAgent(created.id, agentMeta);
+    try {
+      await fillZeroSupplyPrices(created.id, shipment.lines);
+    } catch (error) {
+      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
+    }
+    await enforceSupplyMatches(created.id, supplyPositions, { shipmentId, restore: true });
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;
-    // Darhol belgilash — nom/agent/narx fon rejimida.
     const saved = markShipmentPosted(shipment.id, {
       id: created.id,
       number,
       units: unitSnapshot,
       unitsTotal: waybillUnitsTotal,
     });
-    void ensureSupplyAgent(created.id, agentMeta);
     if (!(currentName === wanted || currentName.startsWith(`${wanted} `))) {
       scheduleSupplyName({ ...saved, moyskladId: created.id, moyskladNumber: number });
     }
-    void fillZeroSupplyPrices(created.id, shipment.lines).catch((error) => {
-      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
-    });
+    scheduleSupplyQtyGuard(shipment.id, created.id, supplyPositions);
     if (!created.reused) {
       applyReceiptStock(planned.positions.map((item) => ({ productId: item.stockId, warehouseId: store.id, quantity: item.quantity })));
     }
