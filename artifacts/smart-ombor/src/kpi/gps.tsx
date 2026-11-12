@@ -174,9 +174,9 @@ export function GpsPage() {
                 <i className={`gps-dot ${isOnline ? 'is-on' : ''}`} />
                 <b>{a.fullName}</b>
               </span>
-              <small>
-                ✓ {a.visitedToday} / {a.customersCount} nuqta
-                {a.lastSeenAt && !isOnline ? ` · oxirgi ${fmtTime(a.lastSeenAt)}` : ''}
+              <small className="gps-agent-pill-meta">✓ {a.visitedToday} / {a.customersCount} nuqta</small>
+              <small className="gps-agent-pill-status">
+                {isOnline ? 'Jonli GPS' : a.lastSeenAt ? `Oxirgi ${fmtTime(a.lastSeenAt)}` : 'GPS yo‘q'}
               </small>
             </button>
           );

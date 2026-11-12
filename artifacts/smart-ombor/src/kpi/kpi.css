@@ -320,17 +320,27 @@
 }
 .gps-agent-pill {
   border: 1px solid #e2e8f0; background: #fff; border-radius: 12px;
-  padding: .5rem .8rem; display: grid; gap: .1rem; text-align: left;
-  cursor: pointer; flex: 0 1 auto;
+  padding: .55rem .8rem; display: grid; gap: .12rem; text-align: left;
+  cursor: pointer; flex: 0 0 168px; width: 168px; min-height: 74px;
+  align-content: start;
   box-shadow: 0 2px 6px rgba(15, 27, 45, .03);
 }
 .gps-agent-pill.is-active {
   border-color: #2563eb; background: #eff6ff;
   box-shadow: 0 6px 16px rgba(37, 99, 235, .15);
 }
-.gps-agent-pill-top { display: flex; align-items: center; gap: .4rem; }
-.gps-agent-pill b { font-size: .88rem; color: #0f1b2d; }
-.gps-agent-pill small { font-size: .75rem; color: #64748b; }
+.gps-agent-pill-top { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.gps-agent-pill b {
+  font-size: .88rem; color: #0f1b2d;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gps-agent-pill small { font-size: .75rem; color: #64748b; line-height: 1.25; }
+.gps-agent-pill-meta,
+.gps-agent-pill-status {
+  display: block; min-height: 1.05em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gps-agent-pill-status { color: #94a3b8; }
 .gps-dot { width: 8px; height: 8px; border-radius: 999px; background: #cbd5e1; display: inline-block; }
 .gps-dot.is-on { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, .22); }
 
@@ -674,7 +684,7 @@
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   .gps-agent-strip::-webkit-scrollbar { display: none; }
-  .gps-agent-pill { min-width: 140px; flex: none; }
+  .gps-agent-pill { width: 152px; flex: 0 0 152px; min-height: 74px; }
 
   .rm-card { border-radius: 14px; }
   .rm-agent-banner { padding: .65rem .85rem; gap: .4rem; }
