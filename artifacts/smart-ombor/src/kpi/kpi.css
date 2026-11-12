@@ -475,7 +475,7 @@
   position: absolute; width: 44px; height: 44px;
   background: conic-gradient(from -32deg at 50% 50%, rgba(37, 99, 235, .38) 0deg, rgba(37, 99, 235, 0) 64deg, transparent 360deg);
   border-radius: 999px;
-  transition: transform .18s linear;
+  transition: transform .12s linear;
   will-change: transform;
 }
 .rm-nav-arrow {
@@ -485,7 +485,7 @@
   border: 2.5px solid #fff;
   box-shadow: 0 6px 18px rgba(29, 78, 216, .5), 0 0 0 4px rgba(37, 99, 235, .18);
   display: grid; place-items: center;
-  transition: transform .18s linear;
+  transition: transform .12s linear;
   will-change: transform;
 }
 @keyframes rmPulse {

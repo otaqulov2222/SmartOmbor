@@ -203,32 +203,71 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       return;
     }
     let lastPosted = 0;
+    let locked: { lat: number; lng: number; accuracy: number; heading: number | null; at: number } | null = null;
+    const STEP_M = 1.15; // ~1 qadam — darhol qabul
+    const HOLD_M = 5; // tinch joyda GPS shovqinini ushlab turish
+    const BAD_ACC_M = 65;
+    const rad = (n: number) => (n * Math.PI) / 180;
+    const distM = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+      const dLat = rad(b.lat - a.lat);
+      const dLng = rad(b.lng - a.lng);
+      const x =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * 6371000 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+    };
     const onGpsFail = () => {
       setGpsHint('GPS ruxsati yo‘q yoki o‘chiq. Sozlamadan GPS ni yoqing.');
     };
     const sendLoc = (pos: GeolocationPosition) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
       const accuracy = Number(pos.coords.accuracy);
-      if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)) return;
+      const speed = pos.coords.speed != null && Number.isFinite(pos.coords.speed) ? pos.coords.speed : null;
+      const rawHeading =
+        pos.coords.heading != null && Number.isFinite(pos.coords.heading) && pos.coords.heading >= 0
+          ? pos.coords.heading
+          : null;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       if (!Number.isFinite(accuracy) || accuracy <= 0) return;
+      if (accuracy > BAD_ACC_M && locked && locked.accuracy <= BAD_ACC_M) return;
+
+      const moved = locked ? distM(locked, { lat, lng }) : Infinity;
+      const walking = (speed != null && speed >= 0.45) || moved >= STEP_M;
+
+      // Tinch o‘tirganda nuqtani qimirlatmaymiz — faqat aniqroq accuracy saqlanadi
+      if (locked && !walking) {
+        if (accuracy + 1 < locked.accuracy) {
+          locked = { ...locked, accuracy, at: Date.now() };
+          setCoords({ lat: locked.lat, lng: locked.lng, accuracy: locked.accuracy, heading: null });
+        }
+        setGpsHint(null);
+        return;
+      }
+
+      // Kichik siljish + yomonroq accuracy = shovqin
+      if (locked && moved < HOLD_M && accuracy > locked.accuracy * 1.4 && !(speed != null && speed >= 0.8)) {
+        setGpsHint(null);
+        return;
+      }
+
       const next = {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
+        lat,
+        lng,
         accuracy,
-        heading: pos.coords.heading != null && Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
+        // Yurishda GPS kurs; tinchda strelka telefon kompasi orqali (route-map)
+        heading: walking ? rawHeading : null,
       };
+      locked = { ...next, at: Date.now() };
       setGpsHint(null);
-      // Local map follows immediately (navigator feel) — only real phone GPS
       setCoords(next);
       const now = Date.now();
-      // Server + admin see live trail every ~8s
       if (now - lastPosted < 8_000) return;
       lastPosted = now;
       void kpiFetch('/kpi/agent/location', {
         method: 'POST',
         body: JSON.stringify({ ...next, source: 'live' }),
       }, mode).catch(() => undefined);
-      // Do NOT invalidate cabinet on every GPS ping — it remounts stop arrays and
-      // aborts in-flight 1→2→3… OSRM draws before amber legs appear.
     };
     navigator.geolocation.getCurrentPosition(sendLoc, onGpsFail, {
       enableHighAccuracy: true,
@@ -237,7 +276,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     });
     const watchId = navigator.geolocation.watchPosition(sendLoc, onGpsFail, {
       enableHighAccuracy: true,
-      maximumAge: 2000,
+      maximumAge: 0,
       timeout: 15000,
     });
     return () => navigator.geolocation.clearWatch(watchId);

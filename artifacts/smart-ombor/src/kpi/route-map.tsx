@@ -109,7 +109,10 @@ function pathFromLive(path: Array<[number, number]>, lat: number, lng: number): 
 function smoothHeading(prev: number | null, next: number) {
   if (prev == null || !Number.isFinite(prev)) return next;
   let delta = ((next - prev + 540) % 360) - 180;
-  return (prev + delta * 0.28 + 360) % 360;
+  const abs = Math.abs(delta);
+  // Katta burilish (telefonni to‘g‘rilash) — tez; mikro tebranish — sekin
+  const k = abs > 28 ? 0.9 : abs > 10 ? 0.55 : 0.2;
+  return (prev + delta * k + 360) % 360;
 }
 
 const OFF_ROUTE_M = 85;
@@ -268,8 +271,11 @@ export function RouteMap({
   const userPanRef = useRef(false);
   const livePosRef = useRef<LatLng | null>(null);
   const smoothHeadingRef = useRef<number | null>(null);
+  const compassRawRef = useRef<number | null>(null);
   const agentLabelRef = useRef('');
   const reroutePendingRef = useRef(false);
+  const lastPanRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastMarkerPosRef = useRef<{ lat: number; lng: number } | null>(null);
   const onSelectStopRef = useRef(onSelectStop);
   const onSelectAgentRef = useRef(onSelectAgent);
   const lastFocusNonceRef = useRef(0);
@@ -343,15 +349,57 @@ export function RouteMap({
   }, [mapReady, focusStopId, focusNonce, stops]);
 
   useEffect(() => {
+    let alive = true;
+    const applyHeadingDom = (deg: number) => {
+      const el = agentMarkerRef.current?.getElement?.() as HTMLElement | null;
+      if (!el) return;
+      const arrow = el.querySelector('.rm-nav-arrow') as HTMLElement | null;
+      const cone = el.querySelector('.rm-nav-cone') as HTMLElement | null;
+      if (arrow) arrow.style.transform = `rotate(${deg}deg)`;
+      if (cone) cone.style.transform = `rotate(${deg}deg)`;
+    };
     const onOrient = (e: DeviceOrientationEvent) => {
       const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
       let h: number | null = null;
-      if (typeof webkit === 'number' && Number.isFinite(webkit)) h = webkit;
-      else if (e.absolute && e.alpha != null && Number.isFinite(e.alpha)) h = (360 - e.alpha) % 360;
-      if (h != null) setCompassHeading(h);
+      if (typeof webkit === 'number' && Number.isFinite(webkit)) h = ((webkit % 360) + 360) % 360;
+      else if (e.absolute && e.alpha != null && Number.isFinite(e.alpha)) h = (360 - e.alpha + 360) % 360;
+      else if (e.alpha != null && Number.isFinite(e.alpha)) h = (360 - e.alpha + 360) % 360;
+      if (h == null) return;
+      const prev = compassRawRef.current;
+      if (prev != null) {
+        const delta = Math.abs(((h - prev + 540) % 360) - 180);
+        // Mikro tebranishni yutamiz; telefonni buraganda (≥3°) darhol
+        if (delta < 3) return;
+      }
+      compassRawRef.current = h;
+      // Kompas ustun — telefon qayerga qarasa strelka shu tomonga
+      smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, h);
+      const deg = Math.round(smoothHeadingRef.current);
+      applyHeadingDom(deg);
+      setCompassHeading((cur) => {
+        if (cur != null && Math.abs(((deg - cur + 540) % 360) - 180) < 4) return cur;
+        return deg;
+      });
     };
-    window.addEventListener('deviceorientation', onOrient, true);
-    return () => window.removeEventListener('deviceorientation', onOrient, true);
+    const boot = async () => {
+      const DOE = DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<PermissionState> };
+      try {
+        if (typeof DOE.requestPermission === 'function') {
+          await DOE.requestPermission();
+        }
+      } catch {
+        /* iOS ruxsatisiz ham tinglaymiz */
+      }
+      if (!alive) return;
+      window.addEventListener('deviceorientationabsolute', onOrient as EventListener, true);
+      window.addEventListener('deviceorientation', onOrient as EventListener, true);
+    };
+    void boot();
+    return () => {
+      alive = false;
+      window.removeEventListener('deviceorientationabsolute', onOrient as EventListener, true);
+      window.removeEventListener('deviceorientation', onOrient as EventListener, true);
+    };
   }, []);
 
   useEffect(() => {
@@ -504,7 +552,7 @@ export function RouteMap({
     activeLineRef.current = { glow, main };
   };
 
-  // Live agent marker + follow — icon HTML qayta yaratilmaydi (strelka miltillamasin)
+  // Live agent marker + follow — joy GPS dan; burilish telefon kompasidan
   useEffect(() => {
     if (!mapReady) return;
     const L = LRef.current;
@@ -516,19 +564,29 @@ export function RouteMap({
         map.removeLayer(agentMarkerRef.current);
         agentMarkerRef.current = null;
       }
-      smoothHeadingRef.current = null;
+      lastMarkerPosRef.current = null;
+      lastPanRef.current = null;
       return;
     }
 
     const dest = nextStop && !nextStop.visitedToday ? nextStop : null;
-    let rawHeading = livePos.heading ?? compassHeading ?? null;
+    // Ustuvorlik: kompas (telefon tomoni) → GPS kurs (yurishda) → oxirgi burchak
+    let rawHeading = compassRawRef.current ?? compassHeading ?? livePos.heading ?? null;
     if ((rawHeading == null || !Number.isFinite(rawHeading)) && dest) {
       rawHeading = bearingDeg(livePos.lat, livePos.lng, dest.lat, dest.lng);
     }
     if (rawHeading == null || !Number.isFinite(rawHeading)) rawHeading = smoothHeadingRef.current ?? 0;
-    smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, rawHeading);
-    const deg = Math.round(smoothHeadingRef.current);
+    // Kompas allaqachon DOM ga yozilgan; GPS yangilanganda ham bir xil burchakni saqlaymiz
+    if (compassRawRef.current == null) {
+      smoothHeadingRef.current = smoothHeading(smoothHeadingRef.current, rawHeading);
+    }
+    const deg = Math.round(smoothHeadingRef.current ?? rawHeading);
     const label = agentName || primaryAgent?.fullName || 'Agent';
+
+    const prevPos = lastMarkerPosRef.current;
+    const jump = prevPos ? haversineM(prevPos, livePos) : Infinity;
+    // Sub-metr shovqinni markerda ko‘rsatmaymiz; ≥1 qadam — kuchli siljish
+    const shouldMoveMarker = !prevPos || jump >= 0.9;
 
     if (!agentMarkerRef.current) {
       const icon = L.divIcon({
@@ -545,8 +603,12 @@ export function RouteMap({
         if (primaryAgent) onSelectAgentRef.current?.(primaryAgent.id);
       });
       agentLabelRef.current = label;
+      lastMarkerPosRef.current = { lat: livePos.lat, lng: livePos.lng };
     } else {
-      agentMarkerRef.current.setLatLng([livePos.lat, livePos.lng]);
+      if (shouldMoveMarker) {
+        agentMarkerRef.current.setLatLng([livePos.lat, livePos.lng]);
+        lastMarkerPosRef.current = { lat: livePos.lat, lng: livePos.lng };
+      }
       if (label !== agentLabelRef.current) {
         agentMarkerRef.current.setIcon(
           L.divIcon({
@@ -568,14 +630,17 @@ export function RouteMap({
       }
     }
 
+    const markerLat = lastMarkerPosRef.current?.lat ?? livePos.lat;
+    const markerLng = lastMarkerPosRef.current?.lng ?? livePos.lng;
+
     // Jonli chiziqni strelkaga yopishtirish (OSRM qayta so‘ralmasin)
     const active = activePathRef.current;
     const activeLayer = activeRouteLayerRef.current;
     if (active && activeLayer && dest && active.destId === dest.id) {
-      const { dist } = nearestOnPath(active.fullPath, livePos.lat, livePos.lng);
+      const { dist } = nearestOnPath(active.fullPath, markerLat, markerLng);
       const moved = haversineM(
         { lat: active.originLat, lng: active.originLng },
-        { lat: livePos.lat, lng: livePos.lng },
+        { lat: markerLat, lng: markerLng },
       );
       if (dist > OFF_ROUTE_M || moved > REROUTE_MOVE_M) {
         if (!reroutePendingRef.current) {
@@ -583,22 +648,27 @@ export function RouteMap({
           setRerouteNonce((n) => n + 1);
         }
       } else {
-        const trimmed = pathFromLive(active.fullPath, livePos.lat, livePos.lng);
+        const trimmed = pathFromLive(active.fullPath, markerLat, markerLng);
         paintActiveLine(L, activeLayer, trimmed, active.ok);
         setRoadHint({
           distanceM: active.distanceM != null
             ? Math.max(0, Math.round(active.distanceM - moved * 0.85))
-            : Math.round(haversineM(livePos, dest)),
+            : Math.round(haversineM({ lat: markerLat, lng: markerLng }, dest)),
           durationSec: active.durationSec,
           roadOk: active.ok,
         });
       }
     }
 
-    if (followRef.current && !userPanRef.current) {
-      const z = Math.max(map.getZoom?.() || 14, 15);
-      map.panTo([livePos.lat, livePos.lng], { animate: true, duration: 0.35 });
-      if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: true });
+    if (followRef.current && !userPanRef.current && shouldMoveMarker) {
+      const lastPan = lastPanRef.current;
+      const panJump = lastPan ? haversineM(lastPan, { lat: markerLat, lng: markerLng }) : Infinity;
+      if (panJump >= 2.2) {
+        const z = Math.max(map.getZoom?.() || 14, 15);
+        map.panTo([markerLat, markerLng], { animate: true, duration: 0.25 });
+        if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: true });
+        lastPanRef.current = { lat: markerLat, lng: markerLng };
+      }
     }
   }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
 
