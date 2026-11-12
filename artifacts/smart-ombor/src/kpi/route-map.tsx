@@ -25,11 +25,12 @@ export type AgentMarker = {
   lat: number | null;
   lng: number | null;
   heading?: number | null;
+  speed?: number | null;
   visitedToday?: number;
   debtorsCount?: number;
 };
 
-type LatLng = { lat: number; lng: number; heading?: number | null };
+type LatLng = { lat: number; lng: number; heading?: number | null; speed?: number | null };
 
 let leafletPromise: Promise<any> | null = null;
 
@@ -320,13 +321,27 @@ export function RouteMap({
   const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
   const livePos: LatLng | null = useMemo(() => {
     if (agentPos?.lat != null && agentPos?.lng != null) {
-      return { lat: agentPos.lat, lng: agentPos.lng, heading: agentPos.heading };
+      return { lat: agentPos.lat, lng: agentPos.lng, heading: agentPos.heading, speed: agentPos.speed };
     }
     if (primaryAgent?.lat != null && primaryAgent?.lng != null) {
-      return { lat: primaryAgent.lat, lng: primaryAgent.lng, heading: primaryAgent.heading };
+      return {
+        lat: primaryAgent.lat,
+        lng: primaryAgent.lng,
+        heading: primaryAgent.heading,
+        speed: primaryAgent.speed,
+      };
     }
     return null;
-  }, [agentPos?.lat, agentPos?.lng, agentPos?.heading, primaryAgent?.lat, primaryAgent?.lng, primaryAgent?.heading]);
+  }, [
+    agentPos?.lat,
+    agentPos?.lng,
+    agentPos?.heading,
+    agentPos?.speed,
+    primaryAgent?.lat,
+    primaryAgent?.lng,
+    primaryAgent?.heading,
+    primaryAgent?.speed,
+  ]);
 
   const hasLiveGps = Boolean(livePos);
   livePosRef.current = livePos;
@@ -585,8 +600,9 @@ export function RouteMap({
 
     const prevPos = lastMarkerPosRef.current;
     const jump = prevPos ? haversineM(prevPos, livePos) : Infinity;
-    // Sub-metr shovqinni markerda ko‘rsatmaymiz; ≥1 qadam — kuchli siljish
-    const shouldMoveMarker = !prevPos || jump >= 0.9;
+    const walking = (livePos.speed != null && livePos.speed >= 0.25) || jump >= 0.7;
+    // Upstream filter bor — yurishda darhol, tinchda faqat real siljish
+    const shouldMoveMarker = !prevPos || walking || jump >= 0.5;
 
     if (!agentMarkerRef.current) {
       const icon = L.divIcon({
@@ -663,10 +679,11 @@ export function RouteMap({
     if (followRef.current && !userPanRef.current && shouldMoveMarker) {
       const lastPan = lastPanRef.current;
       const panJump = lastPan ? haversineM(lastPan, { lat: markerLat, lng: markerLng }) : Infinity;
-      if (panJump >= 2.2) {
+      // Yurishda kamera kechikmasin — kichik siljishda ham tez kuzatsin
+      if (panJump >= (walking ? 0.8 : 1.6)) {
         const z = Math.max(map.getZoom?.() || 14, 15);
-        map.panTo([markerLat, markerLng], { animate: true, duration: 0.25 });
-        if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: true });
+        map.panTo([markerLat, markerLng], { animate: true, duration: walking ? 0.12 : 0.2 });
+        if ((map.getZoom?.() || 0) < 15) map.setZoom(z, { animate: false });
         lastPanRef.current = { lat: markerLat, lng: markerLng };
       }
     }

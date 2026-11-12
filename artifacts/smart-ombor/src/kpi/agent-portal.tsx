@@ -164,7 +164,13 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
   const [focusStopId, setFocusStopId] = useState<string | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
   const [mapFullscreen, setMapFullscreen] = useState(false);
-  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
+  const [coords, setCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracy: number;
+    heading: number | null;
+    speed?: number | null;
+  } | null>(null);
   const [gpsHint, setGpsHint] = useState<string | null>(null);
   const stopRefs = useRef<Record<string, HTMLElement | null>>({});
   const cache = useQueryClient();
@@ -203,10 +209,18 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       return;
     }
     let lastPosted = 0;
-    let locked: { lat: number; lng: number; accuracy: number; heading: number | null; at: number } | null = null;
-    const STEP_M = 1.15; // ~1 qadam — darhol qabul
-    const HOLD_M = 5; // tinch joyda GPS shovqinini ushlab turish
-    const BAD_ACC_M = 65;
+    let locked: {
+      lat: number;
+      lng: number;
+      accuracy: number;
+      heading: number | null;
+      speed: number | null;
+      at: number;
+    } | null = null;
+    // Yurish kechikmasin: kichik qadam ham o‘tsin; faqat mikro-shovqin ushlansin
+    const NOISE_M = 0.45;
+    const STEP_M = 0.7;
+    const BAD_ACC_M = 80;
     const rad = (n: number) => (n * Math.PI) / 180;
     const distM = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
       const dLat = rad(b.lat - a.lat);
@@ -223,30 +237,42 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
       const accuracy = Number(pos.coords.accuracy);
-      const speed = pos.coords.speed != null && Number.isFinite(pos.coords.speed) ? pos.coords.speed : null;
+      const speed = pos.coords.speed != null && Number.isFinite(pos.coords.speed) ? Math.max(0, pos.coords.speed) : null;
       const rawHeading =
         pos.coords.heading != null && Number.isFinite(pos.coords.heading) && pos.coords.heading >= 0
           ? pos.coords.heading
           : null;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       if (!Number.isFinite(accuracy) || accuracy <= 0) return;
-      if (accuracy > BAD_ACC_M && locked && locked.accuracy <= BAD_ACC_M) return;
+      if (accuracy > BAD_ACC_M && locked && locked.accuracy + 10 < accuracy) return;
 
       const moved = locked ? distM(locked, { lat, lng }) : Infinity;
-      const walking = (speed != null && speed >= 0.45) || moved >= STEP_M;
+      const speedWalk = speed != null && speed >= 0.25;
+      const walking = speedWalk || moved >= STEP_M;
 
-      // Tinch o‘tirganda nuqtani qimirlatmaymiz — faqat aniqroq accuracy saqlanadi
-      if (locked && !walking) {
-        if (accuracy + 1 < locked.accuracy) {
+      // Tinch: faqat ±0.45 m ichidagi tebranishni yutamiz
+      if (locked && !walking && moved < NOISE_M) {
+        if (accuracy + 0.5 < locked.accuracy) {
           locked = { ...locked, accuracy, at: Date.now() };
-          setCoords({ lat: locked.lat, lng: locked.lng, accuracy: locked.accuracy, heading: null });
+          setCoords({
+            lat: locked.lat,
+            lng: locked.lng,
+            accuracy: locked.accuracy,
+            heading: null,
+            speed: 0,
+          });
         }
         setGpsHint(null);
         return;
       }
 
-      // Kichik siljish + yomonroq accuracy = shovqin
-      if (locked && moved < HOLD_M && accuracy > locked.accuracy * 1.4 && !(speed != null && speed >= 0.8)) {
+      // Aniq yomonlashgan accuracy + kichik sakrash = shovqin (yurishni bloklamaydi)
+      if (
+        locked &&
+        !speedWalk &&
+        moved < 1.5 &&
+        accuracy > locked.accuracy + 30
+      ) {
         setGpsHint(null);
         return;
       }
@@ -255,18 +281,26 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
         lat,
         lng,
         accuracy,
-        // Yurishda GPS kurs; tinchda strelka telefon kompasi orqali (route-map)
         heading: walking ? rawHeading : null,
+        speed: speedWalk ? speed : walking ? Math.max(speed ?? 0, 0.5) : 0,
       };
       locked = { ...next, at: Date.now() };
       setGpsHint(null);
       setCoords(next);
       const now = Date.now();
-      if (now - lastPosted < 8_000) return;
+      // Yurishda serverga tezroq yozamiz — admin ham kam kechiksin
+      const postEvery = walking ? 3_500 : 8_000;
+      if (now - lastPosted < postEvery) return;
       lastPosted = now;
       void kpiFetch('/kpi/agent/location', {
         method: 'POST',
-        body: JSON.stringify({ ...next, source: 'live' }),
+        body: JSON.stringify({
+          lat: next.lat,
+          lng: next.lng,
+          accuracy: next.accuracy,
+          heading: next.heading,
+          source: 'live',
+        }),
       }, mode).catch(() => undefined);
     };
     navigator.geolocation.getCurrentPosition(sendLoc, onGpsFail, {
@@ -277,7 +311,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     const watchId = navigator.geolocation.watchPosition(sendLoc, onGpsFail, {
       enableHighAccuracy: true,
       maximumAge: 0,
-      timeout: 15000,
+      timeout: 10000,
     });
     return () => navigator.geolocation.clearWatch(watchId);
   }, [mode, cache]);
@@ -590,7 +624,9 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
             fullscreen={mapFullscreen}
             onFullscreenChange={setMapFullscreen}
             agentPos={
-              coords ? { lat: coords.lat, lng: coords.lng, heading: coords.heading } : null
+              coords
+                ? { lat: coords.lat, lng: coords.lng, heading: coords.heading, speed: coords.speed ?? null }
+                : null
             }
             selectedStopId={selectedStopId}
             focusStopId={focusStopId}
