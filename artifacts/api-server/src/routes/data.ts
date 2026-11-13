@@ -950,7 +950,10 @@ router.get("/products/passport", async (req, res, next) => {
     const prior = findLastWaybillLine({ factoryCode: factory, productCode: code, size, groupCode: group });
     const priorMarkups = prior?.markup && typeof prior.markup === "object" ? prior.markup : {};
     const priorHasMarkup = SALE_TYPES.some((type) => priorMarkups[type] != null);
-    const priorPack = prior && (prior.pachka > 1 ? prior.pachka : prior.pairs > 1 ? prior.pairs : 0) ? (prior.pachka > 1 ? prior.pachka : prior.pairs) : null;
+    // Faqat haqiqiy pachka — juft (pairs) ni pachkaga ko‘chirmaymiz (120 juft → 120 pachka bug).
+    const priorPack = prior && prior.pachka > 1 && !(prior.pairs > 1 && prior.pachka === prior.pairs && prior.pachka >= 20)
+      ? prior.pachka
+      : null;
     const priorCost = prior && prior.price > 0 ? prior.price : null;
     const priorGroup = prior?.sectionCode?.trim() || "";
     const optionCost = options.find((item) => item.cost && item.cost > 0)?.cost ?? null;
@@ -987,7 +990,10 @@ router.get("/products/passport", async (req, res, next) => {
         sales,
         options,
         groupCode: priorGroup || optionGroup || "",
-        packSize: priorPack ?? optionPack,
+        packSize: (() => {
+          const raw = priorPack ?? optionPack;
+          return raw && raw > 1 && raw <= 36 ? raw : null;
+        })(),
         cost: priorCost ?? optionCost,
         salePrice: null,
         fromWaybill: Boolean(prior || optionCost || optionPack || optionGroup),
@@ -1016,14 +1022,15 @@ router.get("/products/passport", async (req, res, next) => {
       ?? (inherited.cost && inherited.cost > 0 ? inherited.cost : null)
       ?? (product.cost && product.cost > 0 ? product.cost : null)
       ?? optionCost;
-    const pack = packSize > 1 ? packSize : (priorPack ?? optionPack);
+    const rawPack = packSize > 1 ? packSize : (priorPack ?? optionPack);
+    const pack = rawPack && rawPack > 1 && rawPack <= 36 ? rawPack : null;
     res.json({
       found: true,
       productId: matched.id,
       name: matched.name,
       groupCode: parts?.groupCode || priorGroup || "",
       size: parts?.size || size,
-      packSize: pack && pack > 1 ? pack : null,
+      packSize: pack,
       cost,
       salePrice: inherited.salePrice,
       priceType: inherited.priceType || prior?.priceType || "",

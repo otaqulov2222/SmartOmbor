@@ -1054,8 +1054,8 @@ async function writeShipmentSupply(
         factory: agent?.name || account?.catalogName || account?.name || null,
         category: product.folderName || null,
         unit: "шт",
-        packType: source && source.pachka > 1 ? "pachka" : null,
-        packSize: source && source.pachka > 1 ? source.pachka : 1,
+        packType: source && source.pachka > 1 && source.pachka <= 36 ? "pachka" : null,
+        packSize: source && source.pachka > 1 && source.pachka <= 36 ? source.pachka : 1,
         imageUrl: null,
         stock: 0,
         available: 0,
@@ -1128,18 +1128,7 @@ async function writeShipmentSupply(
         { shipmentId, allowDelete: true },
       );
     }
-    // Mark dan oldin agent/narx — faqat kirim paytidagi VHK=MS tekshiruvi (ombor keyin MS ni o‘zgartirsa tegmaymiz).
-    await ensureSupplyAgent(created.id, agentMeta);
-    try {
-      await fillZeroSupplyPrices(created.id, shipment.lines);
-    } catch (error) {
-      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
-    }
-    await assertSupplyMatchesOrRollback(
-      created.id,
-      supplyPositions,
-      { shipmentId, allowDelete: true },
-    );
+    // Verify OK → darhol mark (UI ochiladi). Agent/narx fonida — 5–10 daqiqa kutishning asosiy sababi shu edi.
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;
@@ -1160,6 +1149,12 @@ async function writeShipmentSupply(
       entityType: "shipment",
       entityId: shipment.id,
       details: `${number}; units=${waybillUnitsTotal}`,
+    });
+    void ensureSupplyAgent(created.id, agentMeta).catch((error) => {
+      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply agent deferred failed");
+    });
+    void fillZeroSupplyPrices(created.id, shipment.lines).catch((error) => {
+      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
     });
     mark("done", t0);
     return { id: created.id, number, shipment: saved, already: created.reused };
@@ -1232,9 +1227,9 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
       { confirmPairs },
     );
   }
-  // Tez yo‘l: kirim tayyor bo‘lsa shu so‘rovda qaytarish (poll kutmasin).
+  // Tez yo‘l: qisqa kutish; uzoq ish — 202 + poll (UI bloklanmasin).
   const started = Date.now();
-  while (Date.now() - started < 25_000) {
+  while (Date.now() - started < 4_000) {
     const payload = supplyJobPayload(shipmentId);
     if (!payload.pending) {
       if ("error" in payload && payload.error && payload.error !== "idle") {

@@ -632,8 +632,10 @@ export function linkExactShipmentLines(factoryId: string, match: (line: Shipment
         line.sectionCode = product.groupCode;
         changed = true;
       }
-      if (!(line.pachka > 1) && product.packSize && product.packSize > 1) {
-        line.pachka = Math.round(product.packSize);
+      // Faqat real pachka (odatda ≤36). Juft bilan bir xil katta son — chalkashlik.
+      const pack = Math.round(Number(product.packSize) || 0);
+      if (!(line.pachka > 1) && pack > 1 && pack <= 36 && !(line.pairs > 1 && pack === line.pairs)) {
+        line.pachka = pack;
         changed = true;
       }
     }
@@ -643,12 +645,14 @@ export function linkExactShipmentLines(factoryId: string, match: (line: Shipment
 
 export function fillMissingLinePachka(shipmentId: string, lineId: string, packSize: number) {
   const size = Math.round(Number(packSize) || 0);
-  if (!(size > 1)) return;
+  // Juft chalkashuvi (120) va g‘ayritabiiy katta pachkani yozmaymiz.
+  if (!(size > 1) || size > 36) return;
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment || shipment.moyskladId) return;
   const line = shipment.lines.find((item) => item.id === lineId);
   if (!line || line.pachka > 1) return;
+  if (line.pairs > 1 && size === line.pairs) return;
   line.pachka = size;
   save(store);
 }

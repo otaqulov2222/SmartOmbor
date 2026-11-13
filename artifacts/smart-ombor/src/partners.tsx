@@ -196,7 +196,12 @@ function fromPassport(current: { group: string; size: string; pack: string; pric
   // Bo‘sh maydonlarni katalog yoki oxirgi yuk xatidan to‘ldiramiz — yozilgan qiymatni ustiga yozmaymiz.
   if (!current.group && data.groupCode) patch.sectionCode = data.groupCode;
   if (!current.size && data.size) patch.size = data.size;
-  if (!(Number(current.pachka) > 1) && data.packSize && data.packSize > 1) patch.pachka = data.packSize;
+  // Yangi tovar / juft chalkashuvi: packSize juftga teng yoki juda katta bo‘lsa pachkani bo‘sh qoldiramiz.
+  const pack = data.packSize && data.packSize > 1 ? data.packSize : 0;
+  const juftHint = Math.round(Number(current.pack) || 0);
+  if (!(Number(current.pachka) > 1) && pack > 1 && pack <= 36 && !(juftHint > 1 && pack === juftHint)) {
+    patch.pachka = pack;
+  }
   const amount = data.cost || data.salePrice || 0;
   if (!current.price && amount > 0) patch.price = amount;
   if (data.found && data.productId) {
@@ -319,7 +324,9 @@ function WaybillCells({ line, locked, markup, onSave, onEditFocus }: { line: Lin
     passportKey.current = key;
     void loadPassport({ factory: line.factoryCode, code: line.productCode, size: line.size, group: line.sectionCode }).then(data => {
       const pack = data?.packSize && data.packSize > 1 ? data.packSize : 0;
-      if (!(pack > 1)) return;
+      const juft = Math.round(Number(line.pairs) || 0);
+      // Birinchi marta / juft=pack chalkashuvi — pachka bo‘sh qoladi; eski 6 kabi qiymat saqlanadi.
+      if (!(pack > 1) || pack > 36 || (juft > 1 && pack === juft)) return;
       setPachka(String(pack));
       void onSave({ pachka: pack });
     }).catch(() => undefined);

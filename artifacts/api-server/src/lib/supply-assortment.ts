@@ -138,9 +138,13 @@ function colorRows(line: Pick<ShipmentLine, "colors">) {
   return [...merged.values()];
 }
 
-export function packSizeOf(line: { pachka?: number }): number {
+export function packSizeOf(line: { pachka?: number; pairs?: number }): number {
   const pachka = Math.max(0, Math.round(Number(line.pachka) || 0));
-  return pachka > 1 ? pachka : 0;
+  if (!(pachka > 1) || pachka > 36) return 0;
+  const pairs = Math.max(0, Math.round(Number(line.pairs) || 0));
+  // Juft sonini pachka deb yozib yubormaslik (120 juft → packs.quantity=120).
+  if (pairs > 1 && pachka === pairs) return 0;
+  return pachka;
 }
 
 export function pieceCount(line: Pick<ShipmentLine, "pairs" | "boxes" | "quantity" | "colors">): number {
@@ -1373,7 +1377,9 @@ export async function findExistingBordoProduct(
     const hit = pickIdentityProduct(aliasTwins, line, scope) ?? rankProductRows(aliasTwins);
     if (hit) return rememberProduct(hit, [name, alias]);
   }
-  // Har doim remote identity — katalog/nom miss bo‘lsa ham yangi 128… ochilmasin.
+  // remote:"exact" — faqat aniq nom; fuzzy search (4–5 so‘rov/qator) kirimni 1–2 daqiqaga cho‘zardi.
+  if (opts?.remote === "exact") return null;
+  // Katalog/nom miss — MoySklad search orqali identity (dublikat 128… ochilmasin).
   const byIdentity = await findRemoteByIdentity({
     factoryCode: factory,
     sectionCode: groupCode,
@@ -1497,8 +1503,9 @@ export async function buildSupplyPositions(
         listedCache.set(salesKey, listed);
       }
       const product = await createOnce(item.name, async () => {
-        // Oxirgi himoya: create oldidan yana bir marta identity qidiruv.
-        const again = await findExistingBordoProduct(item.line, scope, { remote: "exact" }).catch(() => null);
+        // Birinchi findOnce natijasi (null ham) qayta ishlatiladi — ikkinchi to‘liq MS qidiruv yo‘q.
+        const cacheKey = String(item.line.productId || productIdentity(item.line, scope.factoryCode) || item.name);
+        const again = await findOnce(cacheKey, item.line).catch(() => null);
         if (again?.id) {
           logger.info({ name: item.name, reuse: again.id, code: again.code }, "kirim create aborted — existing identity");
           return asCreated(again);
