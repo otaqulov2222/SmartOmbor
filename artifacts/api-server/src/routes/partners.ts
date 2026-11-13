@@ -930,7 +930,8 @@ async function writeShipmentSupply(
 ): Promise<SupplyResult> {
   const unlock = await acquireSupplyLock(shipmentId);
   beginSupplyInflight(shipmentId);
-  reserveMoySkladSlots(8);
+  // Kam reserve — kirim o‘zi parallel qidiruv/create qilsin (8 bo‘lsa slotLimit=4, sekinlashardi).
+  reserveMoySkladSlots(2);
   const t0 = Date.now();
   const mark = (step: string, started: number) => {
     logger.info({ shipment: shipmentId, step, ms: Date.now() - started, totalMs: Date.now() - t0 }, "MoySklad kirim timing");
