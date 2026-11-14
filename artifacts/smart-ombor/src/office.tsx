@@ -103,7 +103,8 @@ export function OfficePage() {
   const [gps, setGps] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
   const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied' | 'error'>('pending');
   const [method, setMethod] = useState<'face' | 'qr'>('face');
-  const [stage, setStage] = useState<null | 'face' | 'qr'>(null);
+  const [stage, setStage] = useState<null | 'face' | 'enroll' | 'qr' | 'qr-confirm'>(null);
+  const pendingQr = useRef('');
   const [facing, setFacing] = useState<'user' | 'environment'>('user');
   const [camDenied, setCamDenied] = useState(false);
   const [camReady, setCamReady] = useState(false);
@@ -318,6 +319,7 @@ export function OfficePage() {
   useEffect(() => {
     if (!stage || inZone) return;
     stopCam();
+    pendingQr.current = '';
     setStage(null);
     setNote(t('office.distFar', { m: Math.round(meters || 0) }));
   }, [stage, inZone, meters, t]);
@@ -343,10 +345,21 @@ export function OfficePage() {
 
   const closeStage = () => {
     stopCam();
+    pendingQr.current = '';
     setStage(null);
   };
 
-  const doPunch = async (kind: 'in' | 'out', extra: { faceHash?: string; qrToken?: string }, used: 'face' | 'qr') => {
+  const captureFaceSamples = async () => {
+    const samples: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      if (i > 0) await new Promise(resolve => setTimeout(resolve, 160));
+      const hash = video.current ? faceHash(video.current) : null;
+      if (hash) samples.push(hash);
+    }
+    return [...new Set(samples)];
+  };
+
+  const doPunch = async (kind: 'in' | 'out', extra: { faceHash?: string; faceHashes?: string[]; qrToken?: string }, used: 'face' | 'qr') => {
     if (!gps || gpsState === 'denied') { setNote(t('office.gpsNeed')); return false; }
     if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return false; }
     if (!inZone) {
@@ -384,18 +397,39 @@ export function OfficePage() {
     if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
     if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); closeStage(); return; }
     if (!video.current) { setCamDenied(true); return; }
-    const hash = faceHash(video.current);
-    if (!hash) { setNote(t('office.faceDark')); return; }
-    if (!me?.face) {
-      const response = await fetch('/api/office/face', { method: 'POST', headers: officeHeaders(), body: JSON.stringify({ hash, lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy }) });
+    setBusy(true); setNote('');
+    const samples = await captureFaceSamples();
+    setBusy(false);
+    if (!samples.length) { setNote(t('office.faceDark')); return; }
+    // Birinchi marta — faqat enroll (punch emas). Boshqa akkauntga yuz band bo‘lmasin.
+    if (stage === 'enroll' || !me?.face) {
+      setBusy(true);
+      const response = await fetch('/api/office/face', {
+        method: 'POST',
+        headers: officeHeaders(),
+        body: JSON.stringify({ hash: samples[0], hashes: samples, lat: gps.lat, lng: gps.lng, accuracy: gps.accuracy }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; meters?: number };
+      setBusy(false);
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({})) as { error?: string; meters?: number };
-        setNote(payload.error === 'radius' ? t('office.distFar', { m: Math.round(payload.meters || meters || 0) }) : t('office.faceFail'));
+        if (payload.error === 'radius') setNote(t('office.distFar', { m: Math.round(payload.meters || meters || 0) }));
+        else if (payload.error === 'taken') setNote(t('office.faceTaken'));
+        else if (payload.error === 'exists') setNote(t('office.faceExists'));
+        else setNote(t('office.faceFail'));
         return;
       }
       await loadMe();
+      setOk(t('office.faceOk'));
+      closeStage();
+      return;
     }
-    await doPunch(punchKind.current, { faceHash: hash }, 'face');
+    await doPunch(punchKind.current, { faceHash: samples[0], faceHashes: samples }, 'face');
+  };
+
+  const confirmQrPunch = async () => {
+    const token = pendingQr.current.trim();
+    if (!token) { setNote(t('office.qrNeed')); closeStage(); return; }
+    await doPunch(punchKind.current, { qrToken: token }, 'qr');
   };
 
   const readQr = async (el: HTMLVideoElement) => {
@@ -425,6 +459,16 @@ export function OfficePage() {
     punchKind.current = kind;
     setMethod(used);
     setNote('');
+    setOk('');
+    pendingQr.current = '';
+    // Face ID yo‘q — avval enroll (boshqa odam yuzi bilan punch ochilmasin).
+    if (used === 'face' && !me?.face) {
+      setFacing('user');
+      setStage('enroll');
+      const readyEnroll = await startCam('user');
+      if (!readyEnroll) setStage(null);
+      return;
+    }
     const mode = used === 'qr' ? 'environment' : 'user';
     setFacing(mode);
     setStage(used);
@@ -437,7 +481,9 @@ export function OfficePage() {
       if (scanStop.current || !video.current) return;
       const text = await readQr(video.current);
       if (text.includes('BORDO-OFFICE-') || text.startsWith('BORDO-')) {
-        await doPunch(kind, { qrToken: text.trim() }, 'qr');
+        scanStop.current = true;
+        pendingQr.current = text.trim();
+        setStage('qr-confirm');
         return;
       }
       if (Date.now() - started > 25000) { setNote(t('office.qrNeed')); return; }
@@ -574,14 +620,24 @@ export function OfficePage() {
           </button>
         </div>
         <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
-          <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
+          <b>→ {!canPunch
+            ? t('office.locked')
+            : ctaNeedCam
+              ? t('office.camAsk')
+              : method === 'face' && !me?.face
+                ? t('office.enrollSave')
+                : t('office.continue')}</b>
           <small>{!canPunch
             ? (gpsState === 'denied' || !gps
               ? t('office.lockedGps')
               : nearOffice && !gpsAccurate
                 ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
                 : t('office.distFar', { m: Math.round(meters || 0) }))
-            : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
+            : ctaNeedCam
+              ? t('office.camBody')
+              : method === 'face'
+                ? (me?.face ? t('office.faceGo') : t('office.faceEnroll'))
+                : t('office.qrHint')}</small>
         </button>
       </div>
       <div ref={historyRef} id="office-history" className="office-card office-block">
@@ -617,20 +673,34 @@ export function OfficePage() {
     </div>
     {stage && <div className="office-stage">
       <video ref={video} className="is-on" playsInline muted autoPlay/>
-      {stage === 'face' && <div className="office-oval"/>}
-      {stage === 'qr' && <div className="office-qr-frame"/>}
+      {(stage === 'face' || stage === 'enroll') && <div className="office-oval"/>}
+      {(stage === 'qr' || stage === 'qr-confirm') && <div className="office-qr-frame"/>}
       <div className="office-stage-top">
-        <b>{stage === 'face' ? t('office.look') : punchKind.current === 'out' ? t('office.scanOut') : t('office.scanIn')}</b>
+        <b>{stage === 'enroll'
+          ? t('office.enrollTitle')
+          : stage === 'face'
+            ? t('office.look')
+            : stage === 'qr-confirm'
+              ? (punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn'))
+              : punchKind.current === 'out' ? t('office.scanOut') : t('office.scanIn')}</b>
         <div>
-          <button type="button" className="office-stage-btn" onClick={() => void flipCam()} aria-label={t('office.flip')}><SwitchCamera size={18}/></button>
+          {stage !== 'qr-confirm' && <button type="button" className="office-stage-btn" onClick={() => void flipCam()} aria-label={t('office.flip')}><SwitchCamera size={18}/></button>}
           <button type="button" className="office-stage-btn" onClick={closeStage} aria-label={t('common.close')}><X size={18}/></button>
         </div>
       </div>
       <div className="office-stage-copy">
-        {stage === 'face' ? t('office.look') : t('office.scanHint')}
-        {stage === 'face' && <small>{t('office.frontCam')}</small>}
+        {stage === 'enroll'
+          ? t('office.enrollBody')
+          : stage === 'face'
+            ? t('office.look')
+            : stage === 'qr-confirm'
+              ? (punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn'))
+              : t('office.scanHint')}
+        {(stage === 'face' || stage === 'enroll') && <small>{t('office.frontCam')}</small>}
       </div>
-      {stage === 'face' && <button type="button" className="office-cam office-stage-go" disabled={busy} onClick={() => void confirmFace()}>{t('office.continue')}</button>}
+      {stage === 'enroll' && <button type="button" className="office-cam office-stage-go" disabled={busy} onClick={() => void confirmFace()}>{t('office.enrollSave')}</button>}
+      {stage === 'face' && <button type="button" className="office-cam office-stage-go" disabled={busy} onClick={() => void confirmFace()}>{punchKind.current === 'out' ? t('office.qrConfirmGoOut') : t('office.qrConfirmGoIn')}</button>}
+      {stage === 'qr-confirm' && <button type="button" className="office-cam office-stage-go" disabled={busy} onClick={() => void confirmQrPunch()}>{punchKind.current === 'out' ? t('office.qrConfirmGoOut') : t('office.qrConfirmGoIn')}</button>}
       {stage === 'qr' && <p className="office-stage-hint">{t('office.scanHint')}</p>}
       <button type="button" className="office-stage-cancel" onClick={closeStage}><X size={14}/> {t('common.cancel')}</button>
     </div>}

@@ -72,7 +72,10 @@ router.post("/office/face", (req, res) => {
     return;
   }
   try {
-    enrollFace(user.id, String(req.body?.hash ?? ""));
+    const hashes = Array.isArray(req.body?.hashes)
+      ? req.body.hashes.map((item: unknown) => String(item ?? ""))
+      : [String(req.body?.hash ?? "")];
+    enrollFace(user.id, hashes);
     res.json({ ok: true, face: true });
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
@@ -86,6 +89,9 @@ router.post("/office/punch", (req, res) => {
   const kind = String(req.body?.kind ?? "") === "out" ? "out" : "in";
   const method = String(req.body?.method ?? "") === "qr" ? "qr" : "face";
   try {
+    const faceHashes = Array.isArray(req.body?.faceHashes)
+      ? req.body.faceHashes.map((item: unknown) => String(item ?? ""))
+      : undefined;
     const row = punch({
       accountId: user.id,
       kind,
@@ -94,6 +100,7 @@ router.post("/office/punch", (req, res) => {
       lng: Number(req.body?.lng),
       accuracy: Number(req.body?.accuracy),
       faceHash: String(req.body?.faceHash ?? ""),
+      faceHashes,
       qrToken: String(req.body?.qrToken ?? ""),
     });
     res.json({ today: punchView(row) });

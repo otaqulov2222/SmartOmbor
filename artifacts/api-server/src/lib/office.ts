@@ -57,7 +57,10 @@ export type OfficeTask = {
   note: string;
 };
 
-type FaceRow = { hash: string; enrolledAt: string };
+type FaceRow = { hash: string; hashes?: string[]; enrolledAt: string };
+/** Bitta odam / turli yoritish — biroz bo‘sh. Boshqa odam o‘tmasligi uchun 14 emas. */
+const FACE_MATCH_MAX = 10;
+const FACE_UNIQUE_MAX = 10;
 type Store = {
   secret: string;
   punches: OfficePunch[];
@@ -220,22 +223,61 @@ function hamming(left: string, right: string) {
   return n;
 }
 
-export function faceEnrolled(accountId: string) {
-  return Boolean(load().faces[accountId]?.hash);
+function normalizeFaceHash(value: unknown) {
+  const clean = String(value || "").trim().toLowerCase();
+  return /^[0-9a-f]{16}$/.test(clean) ? clean : "";
 }
 
-export function enrollFace(accountId: string, hash: string) {
-  const clean = hash.trim().toLowerCase();
-  if (!/^[0-9a-f]{16}$/.test(clean)) throw Object.assign(new Error("face"), { status: 400 });
+function faceHashesOf(row: FaceRow | undefined) {
+  if (!row) return [] as string[];
+  const list = [...(Array.isArray(row.hashes) ? row.hashes : []), row.hash]
+    .map(normalizeFaceHash)
+    .filter(Boolean);
+  return [...new Set(list)];
+}
+
+export function faceEnrolled(accountId: string) {
+  return faceHashesOf(load().faces[accountId]).length > 0;
+}
+
+export function enrollFace(accountId: string, hashOrHashes: string | string[]) {
+  const cleaned = [...new Set(
+    (Array.isArray(hashOrHashes) ? hashOrHashes : [hashOrHashes])
+      .map(normalizeFaceHash)
+      .filter(Boolean),
+  )].slice(0, 3);
+  if (!cleaned.length) throw Object.assign(new Error("face"), { status: 400 });
+  if (faceEnrolled(accountId)) throw Object.assign(new Error("exists"), { status: 409 });
   const store = load();
-  store.faces[accountId] = { hash: clean, enrolledAt: new Date().toISOString() };
+  // Boshqa akkauntga birikkan yuz — shu odam boshqa login bilan o‘tmasin.
+  for (const [id, row] of Object.entries(store.faces)) {
+    if (id === accountId) continue;
+    for (const saved of faceHashesOf(row)) {
+      for (const probe of cleaned) {
+        if (hamming(saved, probe) <= FACE_UNIQUE_MAX) {
+          throw Object.assign(new Error("taken"), { status: 409 });
+        }
+      }
+    }
+  }
+  store.faces[accountId] = {
+    hash: cleaned[0]!,
+    hashes: cleaned,
+    enrolledAt: new Date().toISOString(),
+  };
   save(store);
 }
 
-export function faceMatches(accountId: string, hash: string) {
-  const saved = load().faces[accountId]?.hash;
-  if (!saved) return false;
-  return hamming(saved, hash) <= 14;
+export function faceMatches(accountId: string, hashOrHashes: string | string[]) {
+  const saved = faceHashesOf(load().faces[accountId]);
+  if (!saved.length) return false;
+  const probes = [...new Set(
+    (Array.isArray(hashOrHashes) ? hashOrHashes : [hashOrHashes])
+      .map(normalizeFaceHash)
+      .filter(Boolean),
+  )];
+  if (!probes.length) return false;
+  return probes.some((probe) => saved.some((item) => hamming(item, probe) <= FACE_MATCH_MAX));
 }
 
 function wallToken(secret: string) {
@@ -267,6 +309,7 @@ export function punch(input: {
   lng: number;
   accuracy?: number;
   faceHash?: string;
+  faceHashes?: string[];
   qrToken?: string;
 }) {
   if (!insideOffice(input.lat, input.lng, input.accuracy)) {
@@ -274,7 +317,11 @@ export function punch(input: {
   }
   if (input.method === "face") {
     if (!faceEnrolled(input.accountId)) throw Object.assign(new Error("enroll"), { status: 409 });
-    if (!faceMatches(input.accountId, String(input.faceHash || ""))) throw Object.assign(new Error("face"), { status: 403 });
+    const probes = [
+      ...(Array.isArray(input.faceHashes) ? input.faceHashes : []),
+      String(input.faceHash || ""),
+    ];
+    if (!faceMatches(input.accountId, probes)) throw Object.assign(new Error("face"), { status: 403 });
   } else if (input.method === "qr") {
     if (!qrTokenOk(String(input.qrToken || ""))) throw Object.assign(new Error("qr"), { status: 403 });
   } else {
