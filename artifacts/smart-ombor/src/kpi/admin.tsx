@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Banknote, CalendarRange, Download, ExternalLink, Gauge, Handshake, KeyRound,
+  Pencil, RefreshCw, Trash2, Users, Wallet, X,
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { kpiFetch, kpiStatusLabel, readStaffToken, uzs } from '@/kpi/api';
 import './kpi.css';
 
@@ -164,14 +167,28 @@ type Calc = {
   status: string; stageName: string; daysRemaining: number | null;
 };
 
-function Card({ label, value, hint, tone }: { label: string; value: string | number; hint?: string; tone?: string }) {
+function Card({
+  label, value, hint, tone, icon,
+}: {
+  label: string; value: string | number; hint?: string; tone?: string; icon?: ReactNode;
+}) {
   return (
     <article className={`kpi-card ${tone || ''}`}>
-      <span>{label}</span>
+      <div className="kpi-card-top">
+        <span>{label}</span>
+        {icon ? <span className="kpi-card-ico" aria-hidden>{icon}</span> : null}
+      </div>
       <strong>{value}</strong>
       {hint ? <small className="kpi-card-hint">{hint}</small> : null}
     </article>
   );
+}
+
+function agentInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
 }
 
 async function downloadExcel(kind: string, label: string) {
@@ -298,43 +315,72 @@ function useMsSync(from?: string, to?: string, preset?: PeriodPreset) {
   });
 }
 
+const PERIOD_PRIMARY: PeriodPreset[] = ['today', 'week', 'month', 'days30', 'quarter'];
+const PERIOD_SECONDARY: PeriodPreset[] = ['yesterday', 'last_week', 'last_month', 'days7', 'year', 'custom'];
+
 function PeriodBar({
-  from, to, preset, onPreset, onFrom, onTo, onSync, syncing,
+  from, to, preset, onPreset, onFrom, onTo, onSync, syncing, compact,
 }: {
   from: string; to: string; preset: PeriodPreset;
   onPreset: (p: PeriodPreset) => void;
   onFrom: (v: string) => void; onTo: (v: string) => void;
   onSync: () => void; syncing: boolean;
+  compact?: boolean;
 }) {
+  const primary = PERIOD_PRESETS.filter((p) => PERIOD_PRIMARY.includes(p.id));
+  const secondary = PERIOD_PRESETS.filter((p) => PERIOD_SECONDARY.includes(p.id));
   return (
-    <div className="kpi-period-wrap">
-      <div className="kpi-period-presets" role="tablist" aria-label="Davr">
-        {PERIOD_PRESETS.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            role="tab"
-            aria-selected={preset === p.id}
-            className={preset === p.id ? 'is-on' : ''}
-            onClick={() => onPreset(p.id)}
-          >
-            {p.label}
+    <div className={`kpi-period-wrap${compact ? ' is-compact' : ''}`}>
+      <div className="kpi-period-toolbar">
+        <div className="kpi-period-left">
+          <div className="kpi-period-label">
+            <CalendarRange size={15} />
+            <span>Davr</span>
+          </div>
+          <div className="kpi-period-presets" role="tablist" aria-label="Asosiy davr">
+            {primary.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="tab"
+                aria-selected={preset === p.id}
+                className={preset === p.id ? 'is-on' : ''}
+                onClick={() => onPreset(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="kpi-period-presets is-secondary" role="tablist" aria-label="Boshqa davr">
+            {secondary.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="tab"
+                aria-selected={preset === p.id}
+                className={preset === p.id ? 'is-on' : ''}
+                onClick={() => onPreset(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="kpi-period-bar">
+          <label>
+            <span>Dan</span>
+            <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} />
+          </label>
+          <span className="kpi-period-dash" aria-hidden>—</span>
+          <label>
+            <span>Gacha</span>
+            <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
+          </label>
+          <button type="button" className="btn btn-primary kpi-sync-btn" disabled={syncing} onClick={onSync}>
+            <RefreshCw size={15} className={syncing ? 'kpi-spin' : undefined} />
+            {syncing ? 'Yangilanmoqda…' : 'MS yangilash'}
           </button>
-        ))}
-      </div>
-      <div className="kpi-period-bar">
-        <label>
-          <span>Dan</span>
-          <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} />
-        </label>
-        <span className="kpi-period-dash">→</span>
-        <label>
-          <span>Gacha</span>
-          <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
-        </label>
-        <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
-          <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
-        </button>
+        </div>
       </div>
     </div>
   );
@@ -389,15 +435,19 @@ export function KpiDashboardPage() {
     setFrom(range.from);
     setTo(range.to);
   };
+  const presetLabel = PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus';
   return (
-    <div className="kpi-page" data-testid="page-kpi-dashboard">
-      <header className="kpi-head">
-        <div>
-          <h1>KPI boshqaruv</h1>
-          <p>MoySklad Взаиморасчеты (davr aylanmasi) — GPS marshrutdagi barcha mijozlar emas</p>
-          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
-            Davr: <b>{PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus'}</b> · {from} — {to}
-          </p>
+    <div className="kpi-page kpi-dash" data-testid="page-kpi-dashboard">
+      <header className="kpi-head kpi-dash-head">
+        <div className="kpi-dash-title">
+          <div className="kpi-dash-title-row">
+            <h1>KPI boshqaruv</h1>
+            <span className="kpi-period-badge">
+              <CalendarRange size={13} />
+              {presetLabel} · {from} — {to}
+            </span>
+          </div>
+          <p>MoySklad взаиморасчеты — tanlangan davr aylanmasi (GPS marshrutdagi barcha mijozlar emas)</p>
         </div>
         <div className="kpi-actions">
           <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
@@ -412,44 +462,57 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-      {msWarming ? <p className="kpi-muted">MS hisobot fonda yangilanmoqda…</p> : null}
+      {msWarming ? <p className="kpi-status-banner">MS hisobot fonda yangilanmoqda…</p> : null}
       {d ? (
-        <div className="kpi-grid">
-          <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" />
-          <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} hint="To‘lov tasdiqlangan komissiya" tone="ok" />
-          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} hint="Hali tasdiqlanmagan" tone="warn" />
-          <Card label="KPI jami" value={uzs(d.kpiAccrued)} hint="Tanlangan davr bo‘yicha jami" tone="purple" />
+        <div className="kpi-grid kpi-grid-4">
+          <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" icon={<Users size={16} />} />
+          <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} hint="To‘lov tasdiqlangan komissiya" tone="ok" icon={<Banknote size={16} />} />
+          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} hint="Hali tasdiqlanmagan" tone="warn" icon={<Wallet size={16} />} />
+          <Card label="KPI jami" value={uzs(d.kpiAccrued)} hint="Tanlangan davr bo‘yicha jami" tone="purple" icon={<Gauge size={16} />} />
         </div>
       ) : null}
-      <div className="kpi-table-wrap">
-        <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
-          <h3>Agentlar — MoySklad взаиморасчеты</h3>
-          <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
-            {from} — {to} · Mijozlar = MS teg (nol aylanmasizlar yashirin) · Agentga bosing → batafsil
-          </p>
+      <section className="kpi-panel kpi-agents-panel">
+        <div className="kpi-panel-head">
+          <div>
+            <h2><Handshake size={17} /> Agentlar — взаиморасчеты</h2>
+            <p className="kpi-muted">Mijozlar = MS teg · nol aylanma yashirin · qatorga bosing → batafsil</p>
+          </div>
+          <span className="kpi-count-pill">{sorted.length} agent</span>
         </div>
-        <table className="kpi-table">
-          <thead>
-            <tr>
-              <th>Agent</th><th>Login</th><th>Mijozlari</th>
-              <th>Kirim (Приход)</th><th>Chiqim (Расход)</th><th>Reja %</th><th>KPI</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((a) => (
-              <tr key={a.id} className="kpi-row-click" onClick={() => setOpenAgentId(a.id)}>
-                <td data-label="Agent"><button type="button" className="kpi-link">{a.fullName}</button></td>
-                <td data-label="Login" className="kpi-muted">{a.login}</td>
-                <td data-label="Mijozlari">{a.customers}</td>
-                <td data-label="Kirim">{uzs(a.paidTotal ?? 0)}</td>
-                <td data-label="Chiqim">{uzs(a.salesTotal)}</td>
-                <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
-                <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+        <div className="kpi-table-wrap is-flush">
+          <table className="kpi-table kpi-table-agents">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Login</th>
+                <th className="is-num">Mijozlari</th>
+                <th className="is-num">Kirim</th>
+                <th className="is-num">Chiqim</th>
+                <th className="is-num">Reja %</th>
+                <th className="is-num">KPI</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {sorted.map((a) => (
+                <tr key={a.id} className="kpi-row-click" onClick={() => setOpenAgentId(a.id)}>
+                  <td data-label="Agent">
+                    <button type="button" className="kpi-agent-cell">
+                      <span className="kpi-avatar" aria-hidden>{agentInitials(a.fullName)}</span>
+                      <span className="kpi-agent-name">{a.fullName}</span>
+                    </button>
+                  </td>
+                  <td data-label="Login" className="kpi-muted">{a.login}</td>
+                  <td data-label="Mijozlari" className="is-num">{a.customers}</td>
+                  <td data-label="Kirim" className="is-num">{uzs(a.paidTotal ?? 0)}</td>
+                  <td data-label="Chiqim" className="is-num">{uzs(a.salesTotal)}</td>
+                  <td data-label="Reja %" className="is-num">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
+                  <td data-label="KPI" className="is-num"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {openAgentId ? (
         <div className="kpi-drawer-bg" role="presentation" onClick={() => setOpenAgentId(null)}>
