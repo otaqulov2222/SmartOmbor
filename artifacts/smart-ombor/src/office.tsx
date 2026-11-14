@@ -272,7 +272,7 @@ export function OfficePage() {
 
   const meters = me && gps ? haversine(gps.lat, gps.lng, me.office.lat, me.office.lng) : null;
   const maxAcc = me?.office.accuracyM || 500;
-  const radiusM = me?.office.radiusM || 120;
+  const radiusM = me?.office.radiusM || 100;
   const gpsAccurate = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= maxAcc);
   const nearOffice = Boolean(
     meters != null && (

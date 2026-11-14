@@ -240,7 +240,7 @@ export function OfficeReportPage() {
       office: t('office.officeName'),
       title: t('office.qrPaper'),
       hint: t('office.qrPaperHint'),
-      geo: '41.258556, 69.150964 · 120 m',
+      geo: '41.258556, 69.150964 · 100 m',
     });
   };
 

@@ -6,7 +6,7 @@ import { dataFile } from "./data-dir";
 
 export const OFFICE_LAT = 41.258556;
 export const OFFICE_LNG = 69.150964;
-export const OFFICE_RADIUS_M = 120;
+export const OFFICE_RADIUS_M = 100;
 /** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
 export const OFFICE_ACCURACY_M = 500;
 
