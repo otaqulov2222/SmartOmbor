@@ -47,6 +47,7 @@ import {
   reverseGeocode,
 } from "../lib/kpi/geocode";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
+import { getAgentMsSettlements, getAgentsMsSettlementSummaries } from "../lib/kpi/ms-settlements";
 import { defaultKpiPeriod, resolveKpiPeriod } from "../lib/kpi/period";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 import { buildXlsx, type Cell } from "../lib/xlsx-file";
@@ -427,11 +428,17 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
+    // MS Взаиморасчеты — guruh bo‘yicha aniq mijoz/kirim/chiqim (UI bilan bir xil).
+    const msMap = await getAgentsMsSettlementSummaries(
+      agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+      period.from,
+      period.to,
+    ).catch(() => new Map());
     const out = [];
     for (const agent of agents) {
-      const [cust] = await db.select({ n: sql<number>`count(*)::int` }).from(kpiCustomerAssignmentsTable)
-        .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
-      const salesTotal = await agentPeriodSales(agent.id, period.from, period.to);
+      const ms = msMap.get(agent.login.toLowerCase());
+      const salesTotal = ms?.expense || await agentPeriodSales(agent.id, period.from, period.to);
+      const paidTotal = ms?.income || "0.00";
       const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
       const salesPlan = money(agent.salesPlan);
       out.push({
@@ -444,9 +451,13 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         startedAt: agent.startedAt,
         salesPlan,
         notes: agent.notes,
-        customers: cust?.n ?? 0,
+        customers: ms?.customers ?? 0,
         salesTotal,
         monthSales: salesTotal,
+        paidTotal,
+        opening: ms?.opening || "0.00",
+        closing: ms?.closing || "0.00",
+        folderName: ms?.folderName || null,
         planPct: computePlanPct(salesTotal, salesPlan),
         kpiTotal,
         createdAt: agent.createdAt,
@@ -454,9 +465,37 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         periodEnd: period.to,
         periodLabel: period.label,
         periodPreset: period.preset,
+        source: "moysklad_settlements",
       });
     }
     res.json(out);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Agent → MS guruh Взаиморасчеты (mijozlar jadvali). */
+router.get("/kpi/agents/:id/settlements", requireKpiAdmin(), async (req, res, next) => {
+  try {
+    const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
+    const [agent] = await db.select().from(kpiAgentsTable).where(eq(kpiAgentsTable.id, String(req.params.id))).limit(1);
+    if (!agent) {
+      res.status(404).json({ error: "Agent topilmadi." });
+      return;
+    }
+    const data = await getAgentMsSettlements({
+      login: agent.login,
+      fullName: agent.fullName,
+      from: period.from,
+      to: period.to,
+    });
+    const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
+    res.json({
+      ...data,
+      agentId: agent.id,
+      kpiTotal,
+      periodLabel: period.label,
+    });
   } catch (error) {
     next(error);
   }

@@ -524,34 +524,17 @@ async function syncAgentOwnedCounterparties(
     const agentId = await ensureAgentByName(agentCache, fullName);
     if (!agentId) continue;
 
+    // Faqat MS «Группа контрагента» — teg qo‘shib sanash 13→15 chalkashtirardi.
     const folderHref = folderByAgent.get(fullName.toLowerCase());
-    if (folderHref) {
-      for (let offset = 0; offset < 1000; offset += 100) {
-        const page = await moysklad<{ rows?: MsCounterparty[] }>(
-          `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`group=${folderHref}`)}`,
-        ).catch(() => ({ rows: [] as MsCounterparty[] }));
-        const rows = page.rows || [];
-        if (!rows.length) break;
-        for (const cp of rows) await upsertMsCustomer(cp, agentId, customerByMsId);
-        if (rows.length < 100) break;
-      }
-    }
-
-    // Teg bo‘yicha ham (guruh bo‘lmasa yoki qo‘shimcha).
-    for (const tag of [fullName, fullName.toLowerCase(), ...Object.keys(ALIAS).filter((k) => ALIAS[k] === fullName)]) {
-      for (let offset = 0; offset < 500; offset += 100) {
-        const page = await moysklad<{ rows?: MsCounterparty[] }>(
-          `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
-        ).catch(() => ({ rows: [] as MsCounterparty[] }));
-        const rows = page.rows || [];
-        if (!rows.length) break;
-        for (const cp of rows) {
-          const tags = cp.tags || [];
-          if (tags.includes("поставщик") && !tags.includes("покупатель")) continue;
-          await upsertMsCustomer(cp, agentId, customerByMsId);
-        }
-        if (rows.length < 100) break;
-      }
+    if (!folderHref) continue;
+    for (let offset = 0; offset < 1000; offset += 100) {
+      const page = await moysklad<{ rows?: MsCounterparty[] }>(
+        `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`group=${folderHref}`)}`,
+      ).catch(() => ({ rows: [] as MsCounterparty[] }));
+      const rows = page.rows || [];
+      if (!rows.length) break;
+      for (const cp of rows) await upsertMsCustomer(cp, agentId, customerByMsId);
+      if (rows.length < 100) break;
     }
   }
 }

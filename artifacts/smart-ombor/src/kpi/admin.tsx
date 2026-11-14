@@ -133,8 +133,16 @@ type Dash = {
 type Agent = {
   id: string; fullName: string; phone: string; login: string; status: string;
   salesPlan: string; customers: number; salesTotal: string; monthSales?: string;
+  paidTotal?: string; opening?: string; closing?: string; folderName?: string | null;
   planPct?: number | null; kpiTotal: string;
   periodStart?: string; periodEnd?: string; periodLabel?: string;
+};
+type AgentSettlement = {
+  agentId: string; agentName: string; agentLogin: string; folderName: string | null;
+  period: { from: string; to: string }; periodLabel?: string;
+  customers: number; income: string; expense: string; opening: string; closing: string;
+  kpiTotal?: string;
+  rows: Array<{ id: string; name: string; opening: string; income: string; expense: string; closing: string }>;
 };
 type Customer = {
   id: string; name: string; phone: string; type: string; status: string; address: string;
@@ -346,11 +354,19 @@ export function KpiDashboardPage() {
   const q = useQuery({ queryKey: ['kpi-dash', from, to, preset], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
   const agents = useQuery({ queryKey: ['kpi-agents', from, to, preset], queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`) });
   const sync = useMsSync(from, to, preset);
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
   const d = q.data;
   const sorted = useMemo(
     () => [...(agents.data || [])].sort((a, b) => Number(b.salesTotal) - Number(a.salesTotal)),
     [agents.data],
   );
+  const detail = useQuery({
+    queryKey: ['kpi-agent-settle', openAgentId, from, to, preset],
+    enabled: Boolean(openAgentId),
+    queryFn: () => kpiFetch<AgentSettlement>(
+      `/kpi/agents/${openAgentId}/settlements?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`,
+    ),
+  });
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -366,7 +382,7 @@ export function KpiDashboardPage() {
       <header className="kpi-head">
         <div>
           <h1>KPI boshqaruv</h1>
-          <p>MoySklad otgruzka + agent guruhlari — kunlik / haftalik / oylik / maxsus</p>
+          <p>MoySklad Взаиморасчеты — agent guruhidagi mijozlar (MS bilan bir xil)</p>
           <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
             Davr: <b>{PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus'}</b> · {from} — {to}
           </p>
@@ -384,65 +400,105 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
+      {agents.isFetching ? <p className="kpi-muted">MoySklad guruh hisoboti yuklanmoqda…</p> : null}
       {d ? (
         <div className="kpi-grid">
-          <Card label="Agentlar (MoySklad)" value={d.agentsActive} tone="blue" />
-          <Card label="Mijozlar (MS guruh)" value={d.customersTotal} tone="slate" />
-          <Card label="Savdo (davr)" value={uzs(d.salesTotal)} tone="blue" />
-          <Card label="To‘langan (davr)" value={uzs(d.paidTotal)} tone="ok" />
-          <Card label="Qarzdorlik" value={uzs(d.dueTotal)} tone="bad" />
+          <Card label="Agentlar" value={d.agentsActive} tone="blue" />
           <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} tone="ok" />
           <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} tone="warn" />
-          <Card label="KPI jami hisob" value={uzs(d.kpiAccrued)} tone="purple" />
+          <Card label="KPI jami" value={uzs(d.kpiAccrued)} tone="purple" />
         </div>
       ) : null}
-      <div className="kpi-panel" style={{ marginBottom: '.85rem' }}>
-        <div className="kpi-panel-head" style={{ padding: '0 0 .65rem' }}>
-          <div>
-            <h3 style={{ margin: 0 }}>Hisobotlarni yuklash</h3>
-            <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>Rangli Excel (.xlsx) — ustunlar keng, holatlar rangli</p>
-          </div>
-        </div>
-        <div className="kpi-export-grid">
-          {[
-            ['orders', 'Savdolar', 'Buyurtmalar va summalar'],
-            ['kpi', 'KPI', 'Komissiya hisoblari'],
-            ['agents', 'Agentlar', 'Login va reja'],
-            ['customers', 'Mijozlar', 'Manzil va GPS'],
-          ].map(([k, title, sub]) => (
-            <button key={k} type="button" className="kpi-export-card" onClick={() => void downloadExcel(k, title)}>
-              <span className="kpi-export-ico"><Download size={18} /></span>
-              <span>
-                <b>{title} · Excel</b>
-                <small>{sub}</small>
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
       <div className="kpi-table-wrap">
         <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
-          <h3>Agentlar reytingi (MoySklad)</h3>
+          <h3>Agentlar — MoySklad взаиморасчеты</h3>
           <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
-            {from} — {to} · Mijozlar = MS guruh/teg · Savdo = MS otgruzka (shu davr)
+            {from} — {to} · Mijozlar = MS guruh · Kirim = Приход · Chiqim = Расход · Agentga bosing → batafsil
           </p>
         </div>
         <table className="kpi-table">
-          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MS)</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Agent</th><th>Login</th><th>Mijozlari</th>
+              <th>Kirim (Приход)</th><th>Chiqim (Расход)</th><th>Reja %</th><th>KPI</th>
+            </tr>
+          </thead>
           <tbody>
             {sorted.map((a) => (
-              <tr key={a.id}>
-                <td data-label="Agent"><b>{a.fullName}</b></td>
+              <tr key={a.id} className="kpi-row-click" onClick={() => setOpenAgentId(a.id)}>
+                <td data-label="Agent"><button type="button" className="kpi-link">{a.fullName}</button></td>
                 <td data-label="Login" className="kpi-muted">{a.login}</td>
                 <td data-label="Mijozlari">{a.customers}</td>
-                <td data-label="Savdo (MS)">{uzs(a.salesTotal)}</td>
+                <td data-label="Kirim">{uzs(a.paidTotal ?? 0)}</td>
+                <td data-label="Chiqim">{uzs(a.salesTotal)}</td>
                 <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
-                <td data-label="KPI daromad"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+                <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {openAgentId ? (
+        <div className="kpi-drawer-bg" role="presentation" onClick={() => setOpenAgentId(null)}>
+          <div className="kpi-drawer" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="kpi-drawer-head">
+              <div>
+                <h3>{detail.data?.agentName || 'Agent'}</h3>
+                <p className="kpi-muted">
+                  MS guruh: <b>{detail.data?.folderName || '—'}</b> · {from} — {to}
+                </p>
+              </div>
+              <button type="button" className="btn" onClick={() => setOpenAgentId(null)}><X size={16} /> Yopish</button>
+            </div>
+            {detail.isLoading ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
+            {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
+            {detail.data ? (
+              <>
+                <div className="kpi-grid" style={{ marginBottom: '.75rem' }}>
+                  <Card label="Mijozlar" value={detail.data.customers} tone="slate" />
+                  <Card label="Kirim (Приход)" value={uzs(detail.data.income)} tone="ok" />
+                  <Card label="Chiqim (Расход)" value={uzs(detail.data.expense)} tone="blue" />
+                  <Card label="KPI" value={uzs(detail.data.kpiTotal || 0)} tone="purple" />
+                </div>
+                <div className="kpi-table-wrap" style={{ maxHeight: '55vh' }}>
+                  <table className="kpi-table">
+                    <thead>
+                      <tr>
+                        <th>Kontragent</th>
+                        <th>Boshlang‘ich</th>
+                        <th>Kirim</th>
+                        <th>Chiqim</th>
+                        <th>Yakuniy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.data.rows.map((row) => (
+                        <tr key={row.id}>
+                          <td data-label="Kontragent"><b>{row.name}</b></td>
+                          <td data-label="Boshlang‘ich">{uzs(row.opening)}</td>
+                          <td data-label="Kirim">{uzs(row.income)}</td>
+                          <td data-label="Chiqim">{uzs(row.expense)}</td>
+                          <td data-label="Yakuniy">{uzs(row.closing)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td><b>Jami ({detail.data.customers})</b></td>
+                        <td><b>{uzs(detail.data.opening)}</b></td>
+                        <td><b>{uzs(detail.data.income)}</b></td>
+                        <td><b>{uzs(detail.data.expense)}</b></td>
+                        <td><b>{uzs(detail.data.closing)}</b></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
