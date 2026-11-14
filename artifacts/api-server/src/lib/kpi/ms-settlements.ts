@@ -1,39 +1,36 @@
 /**
- * MoySklad «Взаиморасчеты» — agent guruhidagi kontragentlar hisoboti.
- * KPI reyting/detail shu manbadan (otgruzka taxmini emas).
+ * MoySklad «Взаиморасчеты» — agent TEGidagi kontragentlar.
+ * Bu akkauntda counterpartyfolder yo‘q; guruh = tags (oisha, шахзод, …).
+ * Приход/Расход = davrdagi hujjatlar; yakuniy = report.balance.
  */
 import { moysklad, moyskladConfigured } from "../moysklad";
 import { money } from "./money";
 
-const AGENT_FOLDER_ALIASES: Record<string, string[]> = {
-  shaxzod: ["shaxzod", "шахзод", "Shaxzod", "Шаход", "Шахзод"],
-  oysha: ["oysha", "oisha", "Oysha", "Ойша"],
-  farzona: ["farzona", "Farzona", "Фарзона"],
-  elyor: ["elyor", "Elyor", "Элёр", "Элер"],
-  abbos: ["abbos", "Abbos", "Аббос"],
-  baxodir: ["baxodir", "Baxodir", "Боходир", "Баходир"],
-  muzaffar: ["muzaffar", "Muzaffar", "Музаффар"],
-  avliyo: ["avliyo", "Avliyo", "Авлиё"],
-  gulzoda: ["gulzoda", "Gulzoda"],
-  nafisa: ["nafisa", "Nafisa"],
-  nozim: ["nozim", "Nozim"],
-  abdugani: ["abdugani", "abdug'ani", "Abdug'ani"],
-  farxodaka: ["farxodaka", "farxod aka", "Farxod aka"],
+const AGENT_TAG_ALIASES: Record<string, string[]> = {
+  shaxzod: ["шахзод", "shaxzod"],
+  oysha: ["oisha", "oysha", "ойша"],
+  farzona: ["farzona"],
+  elyor: ["elyor"],
+  abbos: ["abbos"],
+  baxodir: ["боходир", "baxodir", "баходир"],
+  muzaffar: ["музаффар", "muzaffar"],
+  avliyo: ["avliyo"],
+  gulzoda: ["gulzoda"],
+  nafisa: ["nafisa"],
+  nozim: ["nozim"],
+  abdugani: ["abdugani", "abdug'ani"],
+  farxodaka: ["farxodaka", "farxod aka"],
+  sevinch: ["sevinch"],
 };
 
-type MsFolder = { id?: string; name?: string; meta?: { href?: string } };
-type MsCp = { id?: string; name?: string; meta?: { href?: string } };
-type MsSettlementRow = {
+type MsCp = { id?: string; name?: string; tags?: string[]; meta?: { href?: string } };
+type MsDoc = {
+  sum?: number;
+  agent?: { id?: string; meta?: { href?: string }; name?: string };
+};
+type MsReportRow = {
+  balance?: number;
   counterparty?: { id?: string; name?: string; meta?: { href?: string } };
-  firstDebt?: number;
-  credit?: number;
-  debit?: number;
-  lastDebt?: number;
-  // ba’zi akkauntlarda boshqa nomlar
-  firstBalance?: number;
-  lastBalance?: number;
-  creditSum?: number;
-  debitSum?: number;
 };
 
 function som(kopecks: unknown) {
@@ -45,50 +42,57 @@ function foldName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function aliasesForLogin(login: string) {
+function aliasesForLogin(login: string, fullName?: string) {
   const key = foldName(login);
-  return AGENT_FOLDER_ALIASES[key] || [login, key];
+  const fromMap = AGENT_TAG_ALIASES[key] || [];
+  const extra = [login, key, fullName || "", foldName(fullName || "")]
+    .map(foldName)
+    .filter(Boolean);
+  return [...new Set([...fromMap.map(foldName), ...extra])];
 }
 
-let folderCache: { at: number; rows: MsFolder[] } | null = null;
-
-async function listFolders() {
-  if (folderCache && Date.now() - folderCache.at < 120_000) return folderCache.rows;
-  const page = await moysklad<{ rows?: MsFolder[] }>("/entity/counterpartyfolder?limit=100").catch(
-    () => ({ rows: [] as MsFolder[] }),
-  );
-  folderCache = { at: Date.now(), rows: page.rows || [] };
-  return folderCache.rows;
+function cpIdFromHref(href?: string) {
+  if (!href) return "";
+  return href.split("/").pop()?.split("?")[0] || "";
 }
 
-export async function findAgentFolder(login: string, fullName?: string) {
-  const folders = await listFolders();
-  const wanted = new Set(
-    [...aliasesForLogin(login), fullName || "", login]
-      .map(foldName)
-      .filter(Boolean),
-  );
-  for (const folder of folders) {
-    const name = foldName(folder.name || "");
-    if (!name || !folder.meta?.href) continue;
-    if (wanted.has(name)) return folder;
-  }
-  // qisman moslash: "shaxzod" ichida
-  for (const folder of folders) {
-    const name = foldName(folder.name || "");
-    if (!folder.meta?.href) continue;
-    for (const alias of wanted) {
-      if (alias.length >= 4 && (name.includes(alias) || alias.includes(name))) return folder;
+function docAgentId(doc: MsDoc) {
+  return String(doc.agent?.id || cpIdFromHref(doc.agent?.meta?.href) || "").trim();
+}
+
+const tagCache = new Map<string, { at: number; tag: string | null }>();
+const groupCache = new Map<string, { at: number; rows: Array<{ id: string; name: string }> }>();
+const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: number; debit: number }> }>();
+const balanceCache = new Map<string, { at: number; byCp: Map<string, number> }>();
+const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
+
+async function resolveAgentTag(login: string, fullName?: string): Promise<string | null> {
+  const cacheKey = foldName(login);
+  const hit = tagCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 300_000) return hit.tag;
+
+  for (const tag of aliasesForLogin(login, fullName)) {
+    const page = await moysklad<{ meta?: { size?: number } }>(
+      `/entity/counterparty?limit=1&filter=${encodeURIComponent(`tags=${tag}`)}`,
+    ).catch(() => null);
+    const size = Number(page?.meta?.size || 0);
+    if (size > 0) {
+      tagCache.set(cacheKey, { at: Date.now(), tag });
+      return tag;
     }
   }
+  tagCache.set(cacheKey, { at: Date.now(), tag: null });
   return null;
 }
 
-export async function listGroupCounterparties(folderHref: string) {
+async function listTagCounterparties(tag: string) {
+  const hit = groupCache.get(tag);
+  if (hit && Date.now() - hit.at < 120_000) return hit.rows;
+
   const out: Array<{ id: string; name: string }> = [];
   for (let offset = 0; offset < 2000; offset += 100) {
     const page = await moysklad<{ rows?: MsCp[] }>(
-      `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`group=${folderHref}`)}`,
+      `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
     ).catch(() => ({ rows: [] as MsCp[] }));
     const rows = page.rows || [];
     if (!rows.length) break;
@@ -98,42 +102,72 @@ export async function listGroupCounterparties(folderHref: string) {
     }
     if (rows.length < 100) break;
   }
+  groupCache.set(tag, { at: Date.now(), rows: out });
   return out;
 }
 
-function pickRowMoney(row: MsSettlementRow) {
-  const opening = row.firstDebt ?? row.firstBalance ?? 0;
-  const income = row.credit ?? row.creditSum ?? 0;
-  const expense = row.debit ?? row.debitSum ?? 0;
-  const closing = row.lastDebt ?? row.lastBalance ?? 0;
-  return {
-    opening: som(opening),
-    income: som(income),
-    expense: som(expense),
-    closing: som(closing),
+async function loadPeriodMovements(from: string, to: string) {
+  const key = `${from}:${to}`;
+  const hit = movementCache.get(key);
+  if (hit && Date.now() - hit.at < 90_000) return hit.byCp;
+
+  const byCp = new Map<string, { credit: number; debit: number }>();
+  const bump = (id: string, side: "credit" | "debit", sum: number) => {
+    if (!id || !Number.isFinite(sum) || sum === 0) return;
+    const cur = byCp.get(id) || { credit: 0, debit: 0 };
+    cur[side] += sum;
+    byCp.set(id, cur);
   };
+
+  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
+  // MS взаиморасчеты: Приход = balansni oshiradi, Расход = kamaytiradi.
+  const creditEntities = ["paymentin", "cashin", "salesreturn", "supply"] as const;
+  const debitEntities = ["demand", "paymentout", "cashout", "purchasereturn"] as const;
+
+  const scan = async (entity: string, side: "credit" | "debit") => {
+    for (let offset = 0; offset < 8000; offset += 100) {
+      const page = await moysklad<{ rows?: MsDoc[] }>(
+        `/entity/${entity}?limit=100&offset=${offset}&filter=${encodeURIComponent(moment)}`,
+      ).catch(() => ({ rows: [] as MsDoc[] }));
+      const rows = page.rows || [];
+      if (!rows.length) break;
+      for (const row of rows) bump(docAgentId(row), side, Number(row.sum || 0));
+      if (rows.length < 100) break;
+    }
+  };
+
+  await Promise.all([
+    ...creditEntities.map((e) => scan(e, "credit")),
+    ...debitEntities.map((e) => scan(e, "debit")),
+  ]);
+
+  movementCache.set(key, { at: Date.now(), byCp });
+  return byCp;
 }
 
-async function fetchSettlementRows(from: string, to: string) {
-  const rows: MsSettlementRow[] = [];
+async function loadBalances(from: string, to: string) {
+  const key = `${from}:${to}`;
+  const hit = balanceCache.get(key);
+  if (hit && Date.now() - hit.at < 90_000) return hit.byCp;
+
+  const byCp = new Map<string, number>();
   const momentFrom = `${from} 00:00:00`;
   const momentTo = `${to} 23:59:59`;
   for (let offset = 0; offset < 5000; offset += 100) {
-    const page = await moysklad<{ rows?: MsSettlementRow[] }>(
+    const page = await moysklad<{ rows?: MsReportRow[] }>(
       `/report/counterparty?limit=100&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
-    ).catch(() => ({ rows: [] as MsSettlementRow[] }));
-    const chunk = page.rows || [];
-    if (!chunk.length) break;
-    rows.push(...chunk);
-    if (chunk.length < 100) break;
+    ).catch(() => ({ rows: [] as MsReportRow[] }));
+    const rows = page.rows || [];
+    if (!rows.length) break;
+    for (const row of rows) {
+      const id = String(row.counterparty?.id || cpIdFromHref(row.counterparty?.meta?.href) || "").trim();
+      if (!id) continue;
+      byCp.set(id, Number(row.balance || 0));
+    }
+    if (rows.length < 100) break;
   }
-  return rows;
-}
-
-function cpIdOf(row: MsSettlementRow) {
-  const href = row.counterparty?.meta?.href || "";
-  const fromHref = href.split("/").pop()?.split("?")[0] || "";
-  return String(row.counterparty?.id || fromHref || "").trim();
+  balanceCache.set(key, { at: Date.now(), byCp });
+  return byCp;
 }
 
 export type AgentSettlement = {
@@ -156,15 +190,8 @@ export type AgentSettlement = {
   }>;
 };
 
-const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
-
-export async function getAgentMsSettlements(input: {
-  login: string;
-  fullName: string;
-  from: string;
-  to: string;
-}): Promise<AgentSettlement> {
-  const empty: AgentSettlement = {
+function emptySettlement(input: { login: string; fullName: string; from: string; to: string }): AgentSettlement {
+  return {
     agentLogin: input.login,
     agentName: input.fullName,
     folderName: null,
@@ -176,50 +203,43 @@ export async function getAgentMsSettlements(input: {
     closing: "0.00",
     rows: [],
   };
-  if (!moyskladConfigured()) return empty;
+}
 
-  const cacheKey = `${input.login}:${input.from}:${input.to}`;
-  const hit = settlementsCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+function buildSettlement(input: {
+  login: string;
+  fullName: string;
+  from: string;
+  to: string;
+  tag: string | null;
+  group: Array<{ id: string; name: string }>;
+  movements: Map<string, { credit: number; debit: number }>;
+  balances: Map<string, number>;
+}): AgentSettlement {
+  if (!input.tag) return emptySettlement(input);
 
-  const folder = await findAgentFolder(input.login, input.fullName);
-  if (!folder?.meta?.href) {
-    settlementsCache.set(cacheKey, { at: Date.now(), data: empty });
-    return empty;
-  }
-
-  const group = await listGroupCounterparties(folder.meta.href);
-  const idSet = new Set(group.map((g) => g.id));
-  const nameById = new Map(group.map((g) => [g.id, g.name]));
-
-  const report = await fetchSettlementRows(input.from, input.to);
-  const byId = new Map<string, ReturnType<typeof pickRowMoney>>();
-  for (const row of report) {
-    const id = cpIdOf(row);
-    if (!id || !idSet.has(id)) continue;
-    byId.set(id, pickRowMoney(row));
-  }
-
-  // Guruhdagi BARCHA mijozlar — MS kabi (0 balansli ham).
-  const rows = group
+  const rows = input.group
     .map((cp) => {
-      const m = byId.get(cp.id) || {
-        opening: "0.00",
-        income: "0.00",
-        expense: "0.00",
-        closing: "0.00",
+      const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
+      const closingKop = input.balances.get(cp.id) ?? 0;
+      const openingKop = closingKop - mv.credit + mv.debit;
+      return {
+        id: cp.id,
+        name: cp.name,
+        opening: som(openingKop),
+        income: som(mv.credit),
+        expense: som(mv.debit),
+        closing: som(closingKop),
       };
-      return { id: cp.id, name: nameById.get(cp.id) || cp.name, ...m };
     })
     .sort((a, b) => a.name.localeCompare(b.name, "uz"));
 
   const sum = (key: "opening" | "income" | "expense" | "closing") =>
     money(rows.reduce((acc, row) => acc + Number(row[key] || 0), 0));
 
-  const data: AgentSettlement = {
+  return {
     agentLogin: input.login,
     agentName: input.fullName,
-    folderName: folder.name || null,
+    folderName: input.tag,
     period: { from: input.from, to: input.to },
     customers: rows.length,
     income: sum("income"),
@@ -228,25 +248,80 @@ export async function getAgentMsSettlements(input: {
     closing: sum("closing"),
     rows,
   };
+}
+
+export async function getAgentMsSettlements(input: {
+  login: string;
+  fullName: string;
+  from: string;
+  to: string;
+}): Promise<AgentSettlement> {
+  const empty = emptySettlement(input);
+  if (!moyskladConfigured()) return empty;
+
+  const cacheKey = `${foldName(input.login)}:${input.from}:${input.to}`;
+  const hit = settlementsCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+
+  const tag = await resolveAgentTag(input.login, input.fullName);
+  if (!tag) {
+    settlementsCache.set(cacheKey, { at: Date.now(), data: empty });
+    return empty;
+  }
+
+  const [group, movements, balances] = await Promise.all([
+    listTagCounterparties(tag),
+    loadPeriodMovements(input.from, input.to),
+    loadBalances(input.from, input.to),
+  ]);
+
+  const data = buildSettlement({
+    login: input.login,
+    fullName: input.fullName,
+    from: input.from,
+    to: input.to,
+    tag,
+    group,
+    movements,
+    balances,
+  });
   settlementsCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
 
-/** Reyting uchun — har agent guruhidan MS totals (ketma-ket, cache bilan). */
+/** Reyting — bir marta davr hujjatlari, keyin har agent tegi. */
 export async function getAgentsMsSettlementSummaries(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
   to: string,
 ) {
   const out = new Map<string, AgentSettlement>();
+  if (!moyskladConfigured()) {
+    for (const agent of agents) out.set(agent.login.toLowerCase(), emptySettlement({ ...agent, from, to }));
+    return out;
+  }
+
+  const [movements, balances] = await Promise.all([
+    loadPeriodMovements(from, to),
+    loadBalances(from, to),
+  ]);
+
   for (const agent of agents) {
-    const row = await getAgentMsSettlements({
+    const tag = await resolveAgentTag(agent.login, agent.fullName);
+    const group = tag ? await listTagCounterparties(tag) : [];
+    const data = buildSettlement({
       login: agent.login,
       fullName: agent.fullName,
       from,
       to,
+      tag,
+      group,
+      movements,
+      balances,
     });
-    out.set(agent.login.toLowerCase(), row);
+    const cacheKey = `${foldName(agent.login)}:${from}:${to}`;
+    settlementsCache.set(cacheKey, { at: Date.now(), data });
+    out.set(agent.login.toLowerCase(), data);
   }
   return out;
 }

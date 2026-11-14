@@ -119,8 +119,6 @@ type MsDemand = {
   payments?: MsPayment[];
 };
 
-type MsFolder = { id?: string; name?: string; meta?: { href?: string } };
-
 function demandRangeFilter(from: string, to: string) {
   return `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 }
@@ -504,19 +502,37 @@ async function runSync(range: { from: string; to: string }) {
   };
 }
 
-/** MS guruh nomi yoki teg = agent → assignment. */
+/** MS teg = agent guruh (bu akkauntda counterpartyfolder yo‘q). */
 async function syncAgentOwnedCounterparties(
   agentCache: Map<string, string>,
   customerByMsId: Map<string, { id: string; agentId: string | null }>,
 ) {
-  const folders = await moysklad<{ rows?: MsFolder[] }>("/entity/counterpartyfolder?limit=100").catch(
-    () => ({ rows: [] as MsFolder[] }),
-  );
-  const folderByAgent = new Map<string, string>();
-  for (const folder of folders.rows || []) {
-    const agentName = canonicalAgentName(folder.name || "");
-    if (!agentName || agentName === "Ofis") continue;
-    if (folder.meta?.href) folderByAgent.set(agentName.toLowerCase(), folder.meta.href);
+  const tagByAgent = new Map<string, string>();
+  const TAG_TRIES: Array<[string, string[]]> = [
+    ["Oysha", ["oisha", "oysha"]],
+    ["Shaxzod", ["шахзод", "shaxzod"]],
+    ["Farzona", ["farzona"]],
+    ["Elyor", ["elyor"]],
+    ["Abbos", ["abbos"]],
+    ["Baxodir", ["боходир", "baxodir"]],
+    ["Muzaffar", ["музаффар", "muzaffar"]],
+    ["Avliyo", ["avliyo"]],
+    ["Gulzoda", ["gulzoda"]],
+    ["Nafisa", ["nafisa"]],
+    ["Nozim", ["nozim"]],
+    ["Abdug'ani", ["abdugani"]],
+    ["Farxod aka", ["farxodaka"]],
+  ];
+  for (const [fullName, tags] of TAG_TRIES) {
+    for (const tag of tags) {
+      const page = await moysklad<{ meta?: { size?: number } }>(
+        `/entity/counterparty?limit=1&filter=${encodeURIComponent(`tags=${tag}`)}`,
+      ).catch(() => null);
+      if (Number(page?.meta?.size || 0) > 0) {
+        tagByAgent.set(fullName.toLowerCase(), tag);
+        break;
+      }
+    }
   }
 
   for (const [fullName] of KNOWN_AGENTS) {
@@ -524,12 +540,11 @@ async function syncAgentOwnedCounterparties(
     const agentId = await ensureAgentByName(agentCache, fullName);
     if (!agentId) continue;
 
-    // Faqat MS «Группа контрагента» — teg qo‘shib sanash 13→15 chalkashtirardi.
-    const folderHref = folderByAgent.get(fullName.toLowerCase());
-    if (!folderHref) continue;
-    for (let offset = 0; offset < 1000; offset += 100) {
+    const tag = tagByAgent.get(fullName.toLowerCase());
+    if (!tag) continue;
+    for (let offset = 0; offset < 2000; offset += 100) {
       const page = await moysklad<{ rows?: MsCounterparty[] }>(
-        `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`group=${folderHref}`)}`,
+        `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
       ).catch(() => ({ rows: [] as MsCounterparty[] }));
       const rows = page.rows || [];
       if (!rows.length) break;

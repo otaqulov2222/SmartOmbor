@@ -437,8 +437,9 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     const out = [];
     for (const agent of agents) {
       const ms = msMap.get(agent.login.toLowerCase());
-      const salesTotal = ms?.expense || await agentPeriodSales(agent.id, period.from, period.to);
-      const paidTotal = ms?.income || "0.00";
+      const hasMs = Boolean(ms?.folderName);
+      const salesTotal = hasMs ? (ms?.expense || "0.00") : await agentPeriodSales(agent.id, period.from, period.to);
+      const paidTotal = hasMs ? (ms?.income || "0.00") : "0.00";
       const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
       const salesPlan = money(agent.salesPlan);
       out.push({
