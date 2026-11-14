@@ -191,18 +191,93 @@ async function downloadExcel(kind: string, label: string) {
   }
 }
 
-function defaultPeriod() {
-  const to = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return { from: `${to.slice(0, 7)}-01`, to };
+type PeriodPreset = 'today' | 'yesterday' | 'week' | 'last_week' | 'month' | 'last_month' | 'days7' | 'days30' | 'quarter' | 'year' | 'custom';
+
+const PERIOD_PRESETS: Array<{ id: PeriodPreset; label: string }> = [
+  { id: 'today', label: 'Bugun' },
+  { id: 'yesterday', label: 'Kecha' },
+  { id: 'week', label: 'Shu hafta' },
+  { id: 'last_week', label: 'O‘tgan hafta' },
+  { id: 'month', label: 'Shu oy' },
+  { id: 'last_month', label: 'O‘tgan oy' },
+  { id: 'days7', label: '7 kun' },
+  { id: 'days30', label: '30 kun' },
+  { id: 'quarter', label: 'Chorak' },
+  { id: 'year', label: 'Yil' },
+  { id: 'custom', label: 'Maxsus' },
+];
+
+function tashkentToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
-function useMsSync(from?: string, to?: string) {
+function ymdNoon(ymd: string) {
+  return new Date(`${ymd}T07:00:00.000Z`);
+}
+
+function addDays(ymd: string, days: number) {
+  const dt = ymdNoon(ymd);
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(dt);
+}
+
+function mondayOf(ymd: string) {
+  const dow = ymdNoon(ymd).getUTCDay();
+  return addDays(ymd, dow === 0 ? -6 : 1 - dow);
+}
+
+function periodFromPreset(preset: PeriodPreset): { from: string; to: string } {
+  const today = tashkentToday();
+  switch (preset) {
+    case 'today': return { from: today, to: today };
+    case 'yesterday': { const y = addDays(today, -1); return { from: y, to: y }; }
+    case 'week': return { from: mondayOf(today), to: today };
+    case 'last_week': {
+      const mon = mondayOf(today);
+      return { from: addDays(mon, -7), to: addDays(mon, -1) };
+    }
+    case 'month': return { from: `${today.slice(0, 7)}-01`, to: today };
+    case 'last_month': {
+      const thisStart = `${today.slice(0, 7)}-01`;
+      const to = addDays(thisStart, -1);
+      return { from: `${to.slice(0, 7)}-01`, to };
+    }
+    case 'days7': return { from: addDays(today, -6), to: today };
+    case 'days30': return { from: addDays(today, -29), to: today };
+    case 'quarter': {
+      const m = Number(today.slice(5, 7));
+      const q0 = Math.floor((m - 1) / 3) * 3 + 1;
+      return { from: `${today.slice(0, 4)}-${String(q0).padStart(2, '0')}-01`, to: today };
+    }
+    case 'year': return { from: `${today.slice(0, 4)}-01-01`, to: today };
+    default: return { from: `${today.slice(0, 7)}-01`, to: today };
+  }
+}
+
+function matchPreset(from: string, to: string): PeriodPreset {
+  for (const p of PERIOD_PRESETS) {
+    if (p.id === 'custom') continue;
+    const hit = periodFromPreset(p.id);
+    if (hit.from === from && hit.to === to) return p.id;
+  }
+  return 'custom';
+}
+
+function defaultPeriod() {
+  return { ...periodFromPreset('month'), preset: 'month' as PeriodPreset };
+}
+
+function useMsSync(from?: string, to?: string, preset?: PeriodPreset) {
   const cache = useQueryClient();
   const period = defaultPeriod();
   return useMutation({
     mutationFn: () => kpiFetch('/kpi/sync', {
       method: 'POST',
-      body: JSON.stringify({ from: from || period.from, to: to || period.to }),
+      body: JSON.stringify({
+        from: from || period.from,
+        to: to || period.to,
+        preset: preset || period.preset,
+      }),
     }),
     onSuccess: () => {
       for (const k of ['kpi-dash', 'kpi-agents', 'kpi-customers', 'kpi-orders', 'kpi-calcs']) {
@@ -213,25 +288,50 @@ function useMsSync(from?: string, to?: string) {
 }
 
 function PeriodBar({
-  from, to, onFrom, onTo, onSync, syncing,
+  from, to, preset, onPreset, onFrom, onTo, onSync, syncing,
 }: {
-  from: string; to: string;
+  from: string; to: string; preset: PeriodPreset;
+  onPreset: (p: PeriodPreset) => void;
   onFrom: (v: string) => void; onTo: (v: string) => void;
   onSync: () => void; syncing: boolean;
 }) {
   return (
-    <div className="kpi-period-bar">
-      <label>
-        <span>Dan</span>
-        <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} />
-      </label>
-      <label>
-        <span>Gacha</span>
-        <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
-      </label>
-      <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
-        <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
-      </button>
+    <div className="kpi-period-wrap">
+      <div className="kpi-period-presets" role="tablist" aria-label="Davr">
+        {PERIOD_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="tab"
+            aria-selected={preset === p.id}
+            className={preset === p.id ? 'is-on' : ''}
+            onClick={() => onPreset(p.id)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="kpi-period-bar">
+        <label>
+          <span>Dan</span>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => onFrom(e.target.value)}
+          />
+        </label>
+        <label>
+          <span>Gacha</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => onTo(e.target.value)}
+          />
+        </label>
+        <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
+          <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -241,30 +341,45 @@ export function KpiDashboardPage() {
   const initial = useMemo(() => defaultPeriod(), []);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
-  const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-  const q = useQuery({ queryKey: ['kpi-dash', from, to], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
-  const agents = useQuery({ queryKey: ['kpi-agents', from, to], queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`) });
-  const sync = useMsSync(from, to);
+  const [preset, setPreset] = useState<PeriodPreset>(initial.preset);
+  const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`;
+  const q = useQuery({ queryKey: ['kpi-dash', from, to, preset], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
+  const agents = useQuery({ queryKey: ['kpi-agents', from, to, preset], queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`) });
+  const sync = useMsSync(from, to, preset);
   const d = q.data;
   const sorted = useMemo(
     () => [...(agents.data || [])].sort((a, b) => Number(b.salesTotal) - Number(a.salesTotal)),
     [agents.data],
   );
+  const applyPreset = (next: PeriodPreset) => {
+    if (next === 'custom') {
+      setPreset('custom');
+      return;
+    }
+    const range = periodFromPreset(next);
+    setPreset(next);
+    setFrom(range.from);
+    setTo(range.to);
+  };
   return (
     <div className="kpi-page" data-testid="page-kpi-dashboard">
       <header className="kpi-head">
         <div>
           <h1>KPI boshqaruv</h1>
-          <p>MoySklad otgruzka + agent guruhlari — sanadan sanagacha</p>
-          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>Davr: <b>{from} — {to}</b></p>
+          <p>MoySklad otgruzka + agent guruhlari — kunlik / haftalik / oylik / maxsus</p>
+          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
+            Davr: <b>{PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus'}</b> · {from} — {to}
+          </p>
         </div>
         <div className="kpi-actions">
           <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
         </div>
       </header>
       <PeriodBar
-        from={from} to={to}
-        onFrom={setFrom} onTo={setTo}
+        from={from} to={to} preset={preset}
+        onPreset={applyPreset}
+        onFrom={(v) => { setFrom(v); setPreset(matchPreset(v, to)); }}
+        onTo={(v) => { setTo(v); setPreset(matchPreset(from, v)); }}
         syncing={sync.isPending}
         onSync={() => sync.mutate()}
       />

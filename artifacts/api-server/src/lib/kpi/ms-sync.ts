@@ -11,6 +11,9 @@ import { moysklad, moyskladConfigured } from "../moysklad";
 import { hashPassword } from "./auth";
 import { ensureDefaultPolicy, refreshOrderKpi, snapshotPolicy } from "./engine";
 import { money } from "./money";
+import { defaultKpiPeriod } from "./period";
+
+export { defaultKpiPeriod } from "./period";
 
 const SKIP_TAGS = new Set([
   "покупатель",
@@ -118,24 +121,8 @@ type MsDemand = {
 
 type MsFolder = { id?: string; name?: string; meta?: { href?: string } };
 
-function tashkentYmd(d = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tashkent",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
-
 function demandRangeFilter(from: string, to: string) {
   return `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-}
-
-/** Default: joriy kalendar oyi boshidan bugungacha (Toshkent). */
-export function defaultKpiPeriod() {
-  const to = tashkentYmd();
-  const start = `${to.slice(0, 7)}-01`;
-  return { from: start, to };
 }
 
 let syncing: Promise<{ agents: number; customers: number; orders: number; from: string; to: string }> | null = null;

@@ -46,7 +46,8 @@ import {
   parseAdminCoords,
   reverseGeocode,
 } from "../lib/kpi/geocode";
-import { defaultKpiPeriod, ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
+import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
+import { defaultKpiPeriod, resolveKpiPeriod } from "../lib/kpi/period";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 import { buildXlsx, type Cell } from "../lib/xlsx-file";
 
@@ -58,9 +59,9 @@ router.use("/kpi", (_req, _res, next) => {
 
 router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
   try {
-    const period = parsePeriod(req.body?.from, req.body?.to);
+    const period = parsePeriod(req.body?.from, req.body?.to, req.body?.preset);
     const result = await syncKpiFromMoySklad(true, period);
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, ...result, preset: period.preset, label: period.label });
   } catch (error) {
     next(error);
   }
@@ -75,22 +76,12 @@ function tashkentDate(d = new Date()) {
   }).format(d);
 }
 
-/** Inclusive from/to (YYYY-MM-DD). Default = oy boshidan bugungacha. */
-function parsePeriod(rawFrom?: unknown, rawTo?: unknown) {
-  const fallback = defaultKpiPeriod();
-  let from = String(rawFrom || "").slice(0, 10);
-  let to = String(rawTo || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) from = fallback.from;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) to = fallback.to;
-  if (from > to) {
-    const swap = from;
-    from = to;
-    to = swap;
-  }
+/** Inclusive from/to. preset: today|week|month|… yoki custom sanalar. */
+function parsePeriod(rawFrom?: unknown, rawTo?: unknown, rawPreset?: unknown) {
+  const period = resolveKpiPeriod({ from: rawFrom, to: rawTo, preset: rawPreset });
   return {
-    from,
-    to,
-    label: `${from} — ${to} (MS otgruzka / guruh)`,
+    ...period,
+    label: `${period.label} · MS otgruzka / guruh`,
   };
 }
 
@@ -315,7 +306,7 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (req, res, next) => {
         active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active' and lower(${kpiAgentsTable.login}) not in ('ofis','vanseling'))::int`,
       })
       .from(kpiAgentsTable);
-    const period = parsePeriod(req.query.from, req.query.to);
+    const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
       sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${period.from} and ${kpiOrdersTable.orderDate} <= ${period.to}), 0)`,
@@ -352,6 +343,7 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (req, res, next) => {
       periodStart: period.from,
       periodEnd: period.to,
       periodLabel: period.label,
+      periodPreset: period.preset,
     });
   } catch (error) {
     next(error);
@@ -432,7 +424,7 @@ router.post("/kpi/territories", requireKpiAdmin(), async (req, res, next) => {
 router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureKpiBootstrapped();
-    const period = parsePeriod(req.query.from, req.query.to);
+    const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
     const out = [];
@@ -461,6 +453,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         periodStart: period.from,
         periodEnd: period.to,
         periodLabel: period.label,
+        periodPreset: period.preset,
       });
     }
     res.json(out);

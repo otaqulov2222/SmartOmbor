@@ -1,7 +1,21 @@
 .kpi-page { display: grid; gap: 1rem; }
+.kpi-period-wrap {
+  display: grid; gap: .55rem;
+  background: #fff; border: 1px solid #e4e8ee; border-radius: 14px; padding: .75rem .9rem;
+}
+.kpi-period-presets {
+  display: flex; flex-wrap: wrap; gap: .35rem;
+}
+.kpi-period-presets button {
+  border: 1px solid #e2e8f0; background: #f8fafc; color: #475569;
+  border-radius: 999px; padding: .35rem .7rem; font-size: .8rem; font-weight: 650; cursor: pointer;
+}
+.kpi-period-presets button:hover { border-color: #93c5fd; color: #1d4ed8; }
+.kpi-period-presets button.is-on {
+  background: #eff6ff; border-color: #3b82f6; color: #1d4ed8;
+}
 .kpi-period-bar {
   display: flex; flex-wrap: wrap; gap: .65rem; align-items: end;
-  background: #fff; border: 1px solid #e4e8ee; border-radius: 14px; padding: .75rem .9rem;
 }
 .kpi-period-bar label { display: grid; gap: .25rem; font-size: .78rem; font-weight: 600; color: #64748b; }
 .kpi-period-bar input[type="date"] {
