@@ -136,6 +136,7 @@ type Agent = {
   paidTotal?: string; opening?: string; closing?: string; folderName?: string | null;
   planPct?: number | null; kpiTotal: string;
   periodStart?: string; periodEnd?: string; periodLabel?: string;
+  msStatus?: 'ready' | 'stale' | 'warming';
 };
 type AgentSettlement = {
   agentId: string; agentName: string; agentLogin: string; folderName: string | null;
@@ -352,10 +353,19 @@ export function KpiDashboardPage() {
   const [preset, setPreset] = useState<PeriodPreset>(initial.preset);
   const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`;
   const q = useQuery({ queryKey: ['kpi-dash', from, to, preset], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
-  const agents = useQuery({ queryKey: ['kpi-agents', from, to, preset], queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`) });
+  const agents = useQuery({
+    queryKey: ['kpi-agents', from, to, preset],
+    queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 1500;
+      return false;
+    },
+  });
   const sync = useMsSync(from, to, preset);
   const [openAgentId, setOpenAgentId] = useState<string | null>(null);
   const d = q.data;
+  const msWarming = Boolean(agents.data?.some((a) => a.msStatus === 'warming'));
   const sorted = useMemo(
     () => [...(agents.data || [])].sort((a, b) => Number(b.salesTotal) - Number(a.salesTotal)),
     [agents.data],
@@ -400,7 +410,7 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-      {agents.isFetching ? <p className="kpi-muted">MoySklad guruh hisoboti yuklanmoqda…</p> : null}
+      {msWarming ? <p className="kpi-muted">MS hisobot fonda yangilanmoqda…</p> : null}
       {d ? (
         <div className="kpi-grid">
           <Card label="Agentlar" value={d.agentsActive} tone="blue" />

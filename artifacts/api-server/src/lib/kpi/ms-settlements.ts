@@ -1,10 +1,29 @@
 /**
  * MoySklad «Взаиморасчеты» — agent TEGidagi kontragentlar.
- * Bu akkauntda counterpartyfolder yo‘q; guruh = tags (oisha, шахзод, …).
- * Приход/Расход = davrdagi hujjatlar; yakuniy = report.balance.
+ * UI millisekundda: disk/memory cache; MS skani fonda.
  */
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
+import { join } from "path";
 import { moysklad, moyskladConfigured } from "../moysklad";
 import { money } from "./money";
+
+/** Login → asosiy MS teg (probe qilmasdan). */
+const PRIMARY_TAG: Record<string, string> = {
+  shaxzod: "шахзод",
+  oysha: "oisha",
+  farzona: "farzona",
+  elyor: "elyor",
+  abbos: "abbos",
+  baxodir: "боходир",
+  muzaffar: "музаффар",
+  avliyo: "avliyo",
+  gulzoda: "gulzoda",
+  nafisa: "nafisa",
+  nozim: "nozim",
+  abdugani: "abdugani",
+  farxodaka: "farxodaka",
+  sevinch: "sevinch",
+};
 
 const AGENT_TAG_ALIASES: Record<string, string[]> = {
   shaxzod: ["шахзод", "shaxzod"],
@@ -22,6 +41,13 @@ const AGENT_TAG_ALIASES: Record<string, string[]> = {
   farxodaka: ["farxodaka", "farxod aka"],
   sevinch: ["sevinch"],
 };
+
+const PAGE = 1000;
+const FRESH_MS = 10 * 60_000;
+const STALE_MS = 6 * 60 * 60_000;
+const CACHE_DIR =
+  process.env.SMART_OMBOR_CACHE_DIR ||
+  (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
 
 type MsCp = { id?: string; name?: string; tags?: string[]; meta?: { href?: string } };
 type MsDoc = {
@@ -65,18 +91,76 @@ const groupCache = new Map<string, { at: number; rows: Array<{ id: string; name:
 const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: number; debit: number }> }>();
 const balanceCache = new Map<string, { at: number; byCp: Map<string, number> }>();
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
+const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
+const warming = new Map<string, Promise<void>>();
+
+function ensureCacheDir() {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+function summaryPath(from: string, to: string) {
+  return join(CACHE_DIR, `settlements-${from}_${to}.json`);
+}
+
+function readDiskSummary(from: string, to: string) {
+  try {
+    const raw = readFileSync(summaryPath(from, to), "utf8");
+    const parsed = JSON.parse(raw) as { at: number; byLogin: Record<string, AgentSettlement> };
+    if (!parsed?.byLogin || !parsed.at) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDiskSummary(from: string, to: string, byLogin: Record<string, AgentSettlement>) {
+  try {
+    ensureCacheDir();
+    writeFileSync(
+      summaryPath(from, to),
+      JSON.stringify({ at: Date.now(), from, to, byLogin }),
+      "utf8",
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function peekSummary(from: string, to: string) {
+  const key = `${from}:${to}`;
+  const mem = summaryMem.get(key);
+  if (mem) return mem;
+  const disk = readDiskSummary(from, to);
+  if (disk) {
+    summaryMem.set(key, disk);
+    for (const [login, data] of Object.entries(disk.byLogin)) {
+      settlementsCache.set(`${foldName(login)}:${from}:${to}`, { at: disk.at, data });
+    }
+    return disk;
+  }
+  return null;
+}
 
 async function resolveAgentTag(login: string, fullName?: string): Promise<string | null> {
   const cacheKey = foldName(login);
   const hit = tagCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < 300_000) return hit.tag;
+  if (hit && Date.now() - hit.at < 30 * 60_000) return hit.tag;
+
+  const primary = PRIMARY_TAG[cacheKey];
+  if (primary) {
+    tagCache.set(cacheKey, { at: Date.now(), tag: primary });
+    return primary;
+  }
 
   for (const tag of aliasesForLogin(login, fullName)) {
     const page = await moysklad<{ meta?: { size?: number } }>(
       `/entity/counterparty?limit=1&filter=${encodeURIComponent(`tags=${tag}`)}`,
     ).catch(() => null);
-    const size = Number(page?.meta?.size || 0);
-    if (size > 0) {
+    if (Number(page?.meta?.size || 0) > 0) {
       tagCache.set(cacheKey, { at: Date.now(), tag });
       return tag;
     }
@@ -87,12 +171,12 @@ async function resolveAgentTag(login: string, fullName?: string): Promise<string
 
 async function listTagCounterparties(tag: string) {
   const hit = groupCache.get(tag);
-  if (hit && Date.now() - hit.at < 120_000) return hit.rows;
+  if (hit && Date.now() - hit.at < 15 * 60_000) return hit.rows;
 
   const out: Array<{ id: string; name: string }> = [];
-  for (let offset = 0; offset < 2000; offset += 100) {
+  for (let offset = 0; offset < 5000; offset += PAGE) {
     const page = await moysklad<{ rows?: MsCp[] }>(
-      `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
+      `/entity/counterparty?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
     ).catch(() => ({ rows: [] as MsCp[] }));
     const rows = page.rows || [];
     if (!rows.length) break;
@@ -100,7 +184,7 @@ async function listTagCounterparties(tag: string) {
       if (!row.id || !row.name) continue;
       out.push({ id: row.id, name: row.name.trim() });
     }
-    if (rows.length < 100) break;
+    if (rows.length < PAGE) break;
   }
   groupCache.set(tag, { at: Date.now(), rows: out });
   return out;
@@ -109,7 +193,7 @@ async function listTagCounterparties(tag: string) {
 async function loadPeriodMovements(from: string, to: string) {
   const key = `${from}:${to}`;
   const hit = movementCache.get(key);
-  if (hit && Date.now() - hit.at < 90_000) return hit.byCp;
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
 
   const byCp = new Map<string, { credit: number; debit: number }>();
   const bump = (id: string, side: "credit" | "debit", sum: number) => {
@@ -120,19 +204,18 @@ async function loadPeriodMovements(from: string, to: string) {
   };
 
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-  // MS взаиморасчеты: Приход = balansni oshiradi, Расход = kamaytiradi.
   const creditEntities = ["paymentin", "cashin", "salesreturn", "supply"] as const;
   const debitEntities = ["demand", "paymentout", "cashout", "purchasereturn"] as const;
 
   const scan = async (entity: string, side: "credit" | "debit") => {
-    for (let offset = 0; offset < 8000; offset += 100) {
-      const page = await moysklad<{ rows?: MsDoc[] }>(
-        `/entity/${entity}?limit=100&offset=${offset}&filter=${encodeURIComponent(moment)}`,
+    for (let offset = 0; offset < 20_000; offset += PAGE) {
+      const page = await moysklad<{ rows?: MsDoc[]; meta?: { size?: number } }>(
+        `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(moment)}`,
       ).catch(() => ({ rows: [] as MsDoc[] }));
       const rows = page.rows || [];
       if (!rows.length) break;
       for (const row of rows) bump(docAgentId(row), side, Number(row.sum || 0));
-      if (rows.length < 100) break;
+      if (rows.length < PAGE) break;
     }
   };
 
@@ -148,14 +231,14 @@ async function loadPeriodMovements(from: string, to: string) {
 async function loadBalances(from: string, to: string) {
   const key = `${from}:${to}`;
   const hit = balanceCache.get(key);
-  if (hit && Date.now() - hit.at < 90_000) return hit.byCp;
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
 
   const byCp = new Map<string, number>();
   const momentFrom = `${from} 00:00:00`;
   const momentTo = `${to} 23:59:59`;
-  for (let offset = 0; offset < 5000; offset += 100) {
+  for (let offset = 0; offset < 20_000; offset += PAGE) {
     const page = await moysklad<{ rows?: MsReportRow[] }>(
-      `/report/counterparty?limit=100&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
+      `/report/counterparty?limit=${PAGE}&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
     ).catch(() => ({ rows: [] as MsReportRow[] }));
     const rows = page.rows || [];
     if (!rows.length) break;
@@ -164,7 +247,7 @@ async function loadBalances(from: string, to: string) {
       if (!id) continue;
       byCp.set(id, Number(row.balance || 0));
     }
-    if (rows.length < 100) break;
+    if (rows.length < PAGE) break;
   }
   balanceCache.set(key, { at: Date.now(), byCp });
   return byCp;
@@ -189,6 +272,8 @@ export type AgentSettlement = {
     closing: string;
   }>;
 };
+
+export type MsSettleStatus = "ready" | "stale" | "warming";
 
 function emptySettlement(input: { login: string; fullName: string; from: string; to: string }): AgentSettlement {
   return {
@@ -217,7 +302,6 @@ function buildSettlement(input: {
 }): AgentSettlement {
   if (!input.tag) return emptySettlement(input);
 
-  // MS «Показать с нулевыми оборотами: Нет» — faqat aylanma/qoldiq borlar.
   const rows = input.group
     .map((cp) => {
       const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
@@ -254,6 +338,145 @@ function buildSettlement(input: {
   };
 }
 
+async function computeAll(
+  agents: Array<{ login: string; fullName: string }>,
+  from: string,
+  to: string,
+) {
+  const [movements, balances] = await Promise.all([
+    loadPeriodMovements(from, to),
+    loadBalances(from, to),
+  ]);
+
+  const tags = await Promise.all(
+    agents.map(async (agent) => ({
+      agent,
+      tag: await resolveAgentTag(agent.login, agent.fullName),
+    })),
+  );
+
+  const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
+  await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
+
+  const byLogin: Record<string, AgentSettlement> = {};
+  for (const { agent, tag } of tags) {
+    const group = tag ? await listTagCounterparties(tag) : [];
+    const data = buildSettlement({
+      login: agent.login,
+      fullName: agent.fullName,
+      from,
+      to,
+      tag,
+      group,
+      movements,
+      balances,
+    });
+    byLogin[agent.login.toLowerCase()] = data;
+    settlementsCache.set(`${foldName(agent.login)}:${from}:${to}`, { at: Date.now(), data });
+  }
+
+  const at = Date.now();
+  summaryMem.set(`${from}:${to}`, { at, byLogin });
+  writeDiskSummary(from, to, byLogin);
+  return byLogin;
+}
+
+/** Fon isitish — bir davr uchun bitta parallel. */
+export function warmMsSettlements(
+  agents: Array<{ login: string; fullName: string }>,
+  from: string,
+  to: string,
+  force = false,
+) {
+  if (!moyskladConfigured()) return Promise.resolve();
+  const key = `${from}:${to}`;
+  const existing = peekSummary(from, to);
+  if (!force && existing && Date.now() - existing.at < FRESH_MS) return Promise.resolve();
+  const inflight = warming.get(key);
+  if (inflight) return inflight;
+
+  const job = computeAll(agents, from, to)
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      warming.delete(key);
+    });
+  warming.set(key, job);
+  return job;
+}
+
+export function invalidateMsSettlementsCache(from?: string, to?: string) {
+  if (from && to) {
+    const key = `${from}:${to}`;
+    summaryMem.delete(key);
+    movementCache.delete(key);
+    balanceCache.delete(key);
+    try {
+      unlinkSync(summaryPath(from, to));
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  summaryMem.clear();
+  movementCache.clear();
+  balanceCache.clear();
+  settlementsCache.clear();
+}
+
+/** Jadval uchun: cache'dan darhol, yo‘q bo‘lsa fonda hisoblaydi. */
+export async function getAgentsMsSettlementSummaries(
+  agents: Array<{ login: string; fullName: string }>,
+  from: string,
+  to: string,
+): Promise<{ map: Map<string, AgentSettlement>; status: MsSettleStatus }> {
+  const out = new Map<string, AgentSettlement>();
+  if (!moyskladConfigured()) {
+    for (const agent of agents) out.set(agent.login.toLowerCase(), emptySettlement({ ...agent, from, to }));
+    return { map: out, status: "ready" };
+  }
+
+  const cached = peekSummary(from, to);
+  const age = cached ? Date.now() - cached.at : Infinity;
+
+  if (cached && age < FRESH_MS) {
+    for (const agent of agents) {
+      out.set(
+        agent.login.toLowerCase(),
+        cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
+      );
+    }
+    return { map: out, status: "ready" };
+  }
+
+  if (cached && age < STALE_MS) {
+    for (const agent of agents) {
+      out.set(
+        agent.login.toLowerCase(),
+        cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
+      );
+    }
+    void warmMsSettlements(agents, from, to, true);
+    return { map: out, status: "stale" };
+  }
+
+  void warmMsSettlements(agents, from, to, true);
+  for (const agent of agents) {
+    const login = agent.login.toLowerCase();
+    const tag = PRIMARY_TAG[login] || null;
+    out.set(
+      login,
+      tag
+        ? {
+            ...emptySettlement({ ...agent, from, to }),
+            folderName: tag,
+          }
+        : emptySettlement({ ...agent, from, to }),
+    );
+  }
+  return { map: out, status: "warming" };
+}
+
 export async function getAgentMsSettlements(input: {
   login: string;
   fullName: string;
@@ -265,8 +488,20 @@ export async function getAgentMsSettlements(input: {
 
   const cacheKey = `${foldName(input.login)}:${input.from}:${input.to}`;
   const hit = settlementsCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.data;
 
+  const summary = peekSummary(input.from, input.to);
+  const fromSummary = summary?.byLogin[input.login.toLowerCase()];
+  if (fromSummary && summary && Date.now() - summary.at < FRESH_MS) {
+    settlementsCache.set(cacheKey, { at: summary.at, data: fromSummary });
+    return fromSummary;
+  }
+  if (fromSummary && summary && Date.now() - summary.at < STALE_MS) {
+    void warmMsSettlements([{ login: input.login, fullName: input.fullName }], input.from, input.to, true);
+    return fromSummary;
+  }
+
+  // Birinchi ochilish — shu agent uchun to‘liq hisob (davr skani cache bo‘ladi).
   const tag = await resolveAgentTag(input.login, input.fullName);
   if (!tag) {
     settlementsCache.set(cacheKey, { at: Date.now(), data: empty });
@@ -291,41 +526,4 @@ export async function getAgentMsSettlements(input: {
   });
   settlementsCache.set(cacheKey, { at: Date.now(), data });
   return data;
-}
-
-/** Reyting — bir marta davr hujjatlari, keyin har agent tegi. */
-export async function getAgentsMsSettlementSummaries(
-  agents: Array<{ login: string; fullName: string }>,
-  from: string,
-  to: string,
-) {
-  const out = new Map<string, AgentSettlement>();
-  if (!moyskladConfigured()) {
-    for (const agent of agents) out.set(agent.login.toLowerCase(), emptySettlement({ ...agent, from, to }));
-    return out;
-  }
-
-  const [movements, balances] = await Promise.all([
-    loadPeriodMovements(from, to),
-    loadBalances(from, to),
-  ]);
-
-  for (const agent of agents) {
-    const tag = await resolveAgentTag(agent.login, agent.fullName);
-    const group = tag ? await listTagCounterparties(tag) : [];
-    const data = buildSettlement({
-      login: agent.login,
-      fullName: agent.fullName,
-      from,
-      to,
-      tag,
-      group,
-      movements,
-      balances,
-    });
-    const cacheKey = `${foldName(agent.login)}:${from}:${to}`;
-    settlementsCache.set(cacheKey, { at: Date.now(), data });
-    out.set(agent.login.toLowerCase(), data);
-  }
-  return out;
 }

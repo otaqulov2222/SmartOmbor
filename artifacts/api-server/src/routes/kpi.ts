@@ -47,7 +47,12 @@ import {
   reverseGeocode,
 } from "../lib/kpi/geocode";
 import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
-import { getAgentMsSettlements, getAgentsMsSettlementSummaries } from "../lib/kpi/ms-settlements";
+import {
+  getAgentMsSettlements,
+  getAgentsMsSettlementSummaries,
+  invalidateMsSettlementsCache,
+  warmMsSettlements,
+} from "../lib/kpi/ms-settlements";
 import { defaultKpiPeriod, resolveKpiPeriod } from "../lib/kpi/period";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 import { buildXlsx, type Cell } from "../lib/xlsx-file";
@@ -61,7 +66,17 @@ router.use("/kpi", (_req, _res, next) => {
 router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
   try {
     const period = parsePeriod(req.body?.from, req.body?.to, req.body?.preset);
+    invalidateMsSettlementsCache(period.from, period.to);
     const result = await syncKpiFromMoySklad(true, period);
+    const agents = await db.select().from(kpiAgentsTable);
+    void warmMsSettlements(
+      agents
+        .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
+        .map((a) => ({ login: a.login, fullName: a.fullName })),
+      period.from,
+      period.to,
+      true,
+    );
     res.json({ ok: true, ...result, preset: period.preset, label: period.label });
   } catch (error) {
     next(error);
@@ -428,21 +443,29 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
-    // MS Взаиморасчеты — guruh bo‘yicha aniq mijoz/kirim/chiqim (UI bilan bir xil).
-    const msMap = await getAgentsMsSettlementSummaries(
+    // Cache'dan darhol; MS skani fonda (UI millisekundda).
+    const settled = await getAgentsMsSettlementSummaries(
       agents.map((a) => ({ login: a.login, fullName: a.fullName })),
       period.from,
       period.to,
-    ).catch(() => new Map());
-    const out = [];
-    for (const agent of agents) {
+    ).catch(() => ({ map: new Map(), status: "warming" as const }));
+    const msMap = settled.map;
+    const kpiRows = await Promise.all(agents.map((a) => agentPeriodKpi(a.id, period.from, period.to)));
+    const salesFallback = await Promise.all(
+      agents.map(async (agent) => {
+        const ms = msMap.get(agent.login.toLowerCase());
+        if (ms?.folderName && settled.status !== "warming") return ms.expense || "0.00";
+        if (ms?.folderName && Number(ms.expense) > 0) return ms.expense;
+        return agentPeriodSales(agent.id, period.from, period.to);
+      }),
+    );
+    const out = agents.map((agent, i) => {
       const ms = msMap.get(agent.login.toLowerCase());
-      const hasMs = Boolean(ms?.folderName);
-      const salesTotal = hasMs ? (ms?.expense || "0.00") : await agentPeriodSales(agent.id, period.from, period.to);
-      const paidTotal = hasMs ? (ms?.income || "0.00") : "0.00";
-      const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
+      const hasMs = Boolean(ms?.folderName) && settled.status !== "warming";
+      const salesTotal = hasMs ? (ms?.expense || "0.00") : salesFallback[i];
+      const paidTotal = hasMs ? (ms?.income || "0.00") : ms && Number(ms.income) > 0 ? ms.income : "0.00";
       const salesPlan = money(agent.salesPlan);
-      out.push({
+      return {
         id: agent.id,
         fullName: agent.fullName,
         phone: agent.phone,
@@ -460,15 +483,16 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         closing: ms?.closing || "0.00",
         folderName: ms?.folderName || null,
         planPct: computePlanPct(salesTotal, salesPlan),
-        kpiTotal,
+        kpiTotal: kpiRows[i],
         createdAt: agent.createdAt,
         periodStart: period.from,
         periodEnd: period.to,
         periodLabel: period.label,
         periodPreset: period.preset,
         source: "moysklad_settlements",
-      });
-    }
+        msStatus: settled.status,
+      };
+    });
     res.json(out);
   } catch (error) {
     next(error);
