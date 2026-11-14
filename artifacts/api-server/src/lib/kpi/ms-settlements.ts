@@ -217,6 +217,7 @@ function buildSettlement(input: {
 }): AgentSettlement {
   if (!input.tag) return emptySettlement(input);
 
+  // MS «Показать с нулевыми оборотами: Нет» — faqat aylanma/qoldiq borlar.
   const rows = input.group
     .map((cp) => {
       const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
@@ -229,8 +230,11 @@ function buildSettlement(input: {
         income: som(mv.credit),
         expense: som(mv.debit),
         closing: som(closingKop),
+        keep: mv.credit !== 0 || mv.debit !== 0 || openingKop !== 0 || closingKop !== 0,
       };
     })
+    .filter((row) => row.keep)
+    .map(({ keep: _keep, ...row }) => row)
     .sort((a, b) => a.name.localeCompare(b.name, "uz"));
 
   const sum = (key: "opening" | "income" | "expense" | "closing") =>

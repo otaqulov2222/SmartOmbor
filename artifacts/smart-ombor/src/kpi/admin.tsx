@@ -413,7 +413,7 @@ export function KpiDashboardPage() {
         <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
           <h3>Agentlar — MoySklad взаиморасчеты</h3>
           <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
-            {from} — {to} · Mijozlar = MS teg · Kirim = Приход · Chiqim = Расход · Agentga bosing → batafsil
+            {from} — {to} · Mijozlar = MS teg (nol aylanmasizlar yashirin) · Agentga bosing → batafsil
           </p>
         </div>
         <table className="kpi-table">
