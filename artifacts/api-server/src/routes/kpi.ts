@@ -46,7 +46,7 @@ import {
   parseAdminCoords,
   reverseGeocode,
 } from "../lib/kpi/geocode";
-import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
+import { defaultKpiPeriod, ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
 import { buildXlsx, type Cell } from "../lib/xlsx-file";
 
@@ -56,9 +56,10 @@ router.use("/kpi", (_req, _res, next) => {
   ensureKpiSchema().then(() => next()).catch(next);
 });
 
-router.post("/kpi/sync", requireKpiAdmin(), async (_req, res, next) => {
+router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
   try {
-    const result = await syncKpiFromMoySklad(true);
+    const period = parsePeriod(req.body?.from, req.body?.to);
+    const result = await syncKpiFromMoySklad(true, period);
     res.json({ ok: true, ...result });
   } catch (error) {
     next(error);
@@ -74,16 +75,23 @@ function tashkentDate(d = new Date()) {
   }).format(d);
 }
 
-/** Inclusive start / exclusive end of current Tashkent calendar month (YYYY-MM-DD). */
-function monthBoundsTashkent(d = new Date()) {
-  const today = tashkentDate(d);
-  const y = Number(today.slice(0, 4));
-  const m = Number(today.slice(5, 7));
-  const start = `${y}-${String(m).padStart(2, "0")}-01`;
-  const nextM = m === 12 ? 1 : m + 1;
-  const nextY = m === 12 ? y + 1 : y;
-  const end = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
-  return { start, end };
+/** Inclusive from/to (YYYY-MM-DD). Default = oy boshidan bugungacha. */
+function parsePeriod(rawFrom?: unknown, rawTo?: unknown) {
+  const fallback = defaultKpiPeriod();
+  let from = String(rawFrom || "").slice(0, 10);
+  let to = String(rawTo || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) from = fallback.from;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) to = fallback.to;
+  if (from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  return {
+    from,
+    to,
+    label: `${from} — ${to} (MS otgruzka / guruh)`,
+  };
 }
 
 function computePlanPct(monthSales: string | number, salesPlan: string | number): number | null {
@@ -92,8 +100,7 @@ function computePlanPct(monthSales: string | number, salesPlan: string | number)
   return Math.round((Number(monthSales) / plan) * 100);
 }
 
-async function agentMonthSales(agentId: string) {
-  const { start, end } = monthBoundsTashkent();
+async function agentPeriodSales(agentId: string, from: string, to: string) {
   const [row] = await db
     .select({
       total: sql<string>`coalesce(sum(${kpiOrdersTable.total}), 0)`,
@@ -103,8 +110,26 @@ async function agentMonthSales(agentId: string) {
       and(
         eq(kpiOrdersTable.agentId, agentId),
         sql`${kpiOrdersTable.status} not in ('draft','cancelled')`,
-        sql`${kpiOrdersTable.orderDate} >= ${start}`,
-        sql`${kpiOrdersTable.orderDate} < ${end}`,
+        sql`${kpiOrdersTable.orderDate} >= ${from}`,
+        sql`${kpiOrdersTable.orderDate} <= ${to}`,
+      ),
+    );
+  return money(row?.total);
+}
+
+async function agentPeriodKpi(agentId: string, from: string, to: string) {
+  const [row] = await db
+    .select({
+      total: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}), 0)`,
+    })
+    .from(kpiCalculationsTable)
+    .innerJoin(kpiOrdersTable, eq(kpiOrdersTable.id, kpiCalculationsTable.orderId))
+    .where(
+      and(
+        eq(kpiCalculationsTable.agentId, agentId),
+        sql`${kpiCalculationsTable.status} in ('confirmed','partial','pending')`,
+        sql`${kpiOrdersTable.orderDate} >= ${from}`,
+        sql`${kpiOrdersTable.orderDate} <= ${to}`,
       ),
     );
   return money(row?.total);
@@ -280,7 +305,7 @@ router.get("/kpi/agent/me", requireKpiAgent(), async (_req, res, next) => {
 });
 
 /* ---------- Dashboard ---------- */
-router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
+router.get("/kpi/dashboard", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureDefaultPolicy();
     await ensureKpiBootstrapped();
@@ -290,11 +315,11 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
         active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active' and lower(${kpiAgentsTable.login}) not in ('ofis','vanseling'))::int`,
       })
       .from(kpiAgentsTable);
-    const bounds = monthBoundsTashkent();
+    const period = parsePeriod(req.query.from, req.query.to);
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
-      sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${bounds.start} and ${kpiOrdersTable.orderDate} < ${bounds.end}), 0)`,
-      paid: sql<string>`coalesce(sum(${kpiOrdersTable.paidAmount}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${bounds.start} and ${kpiOrdersTable.orderDate} < ${bounds.end}), 0)`,
+      sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${period.from} and ${kpiOrdersTable.orderDate} <= ${period.to}), 0)`,
+      paid: sql<string>`coalesce(sum(${kpiOrdersTable.paidAmount}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${period.from} and ${kpiOrdersTable.orderDate} <= ${period.to}), 0)`,
       pendingConfirm: sql<number>`count(*) filter (where ${kpiOrdersTable.status} = 'pending_approval')::int`,
       overdue: sql<number>`count(*) filter (where ${kpiOrdersTable.status} = 'overdue')::int`,
     }).from(kpiOrdersTable);
@@ -303,7 +328,12 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
       confirmed: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}) filter (where ${kpiCalculationsTable.status} = 'confirmed'), 0)`,
       pending: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}) filter (where ${kpiCalculationsTable.status} = 'pending'), 0)`,
       expired: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}) filter (where ${kpiCalculationsTable.status} = 'expired'), 0)`,
-    }).from(kpiCalculationsTable);
+    }).from(kpiCalculationsTable)
+      .innerJoin(kpiOrdersTable, eq(kpiOrdersTable.id, kpiCalculationsTable.orderId))
+      .where(and(
+        sql`${kpiOrdersTable.orderDate} >= ${period.from}`,
+        sql`${kpiOrdersTable.orderDate} <= ${period.to}`,
+      ));
     const due = moneySub(orders.sales, orders.paid);
     res.json({
       agentsTotal: agentsAfter.total,
@@ -319,9 +349,9 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
       kpiConfirmed: money(kpi.confirmed),
       kpiPending: money(kpi.pending),
       kpiExpired: money(kpi.expired),
-      periodStart: bounds.start,
-      periodEnd: bounds.end,
-      periodLabel: `${bounds.start} — ${tashkentDate()} (Toshkent, kalendar oyi)`,
+      periodStart: period.from,
+      periodEnd: period.to,
+      periodLabel: period.label,
     });
   } catch (error) {
     next(error);
@@ -399,28 +429,18 @@ router.post("/kpi/territories", requireKpiAdmin(), async (req, res, next) => {
 });
 
 /* ---------- Agents ---------- */
-router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
+router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureKpiBootstrapped();
-    const bounds = monthBoundsTashkent();
+    const period = parsePeriod(req.query.from, req.query.to);
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
     const out = [];
     for (const agent of agents) {
       const [cust] = await db.select({ n: sql<number>`count(*)::int` }).from(kpiCustomerAssignmentsTable)
         .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
-      const [sales] = await db.select({
-        total: sql<string>`coalesce(sum(${kpiOrdersTable.total}), 0)`,
-      }).from(kpiOrdersTable).where(and(
-        eq(kpiOrdersTable.agentId, agent.id),
-        sql`${kpiOrdersTable.status} not in ('draft','cancelled')`,
-        sql`${kpiOrdersTable.orderDate} >= ${bounds.start}`,
-        sql`${kpiOrdersTable.orderDate} < ${bounds.end}`,
-      ));
-      const [kpi] = await db.select({
-        total: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}), 0)`,
-      }).from(kpiCalculationsTable).where(and(eq(kpiCalculationsTable.agentId, agent.id), sql`${kpiCalculationsTable.status} in ('confirmed','partial','pending')`));
-      const monthSales = await agentMonthSales(agent.id);
+      const salesTotal = await agentPeriodSales(agent.id, period.from, period.to);
+      const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
       const salesPlan = money(agent.salesPlan);
       out.push({
         id: agent.id,
@@ -433,21 +453,17 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
         salesPlan,
         notes: agent.notes,
         customers: cust?.n ?? 0,
-        // Reytingdagi “Savdo” endi joriy kalendar oyi (Oylik fakt bilan bir xil oyna).
-        salesTotal: money(sales?.total),
-        monthSales,
-        planPct: computePlanPct(monthSales, salesPlan),
-        kpiTotal: money(kpi?.total),
+        salesTotal,
+        monthSales: salesTotal,
+        planPct: computePlanPct(salesTotal, salesPlan),
+        kpiTotal,
         createdAt: agent.createdAt,
+        periodStart: period.from,
+        periodEnd: period.to,
+        periodLabel: period.label,
       });
     }
-    // Massiv saqlanadi (eski klientlar). Davr — har qatorda bir xil.
-    res.json(out.map((row) => ({
-      ...row,
-      periodStart: bounds.start,
-      periodEnd: bounds.end,
-      periodLabel: `${bounds.start} — ${tashkentDate()} (Toshkent, kalendar oyi)`,
-    })));
+    res.json(out);
   } catch (error) {
     next(error);
   }
@@ -1321,7 +1337,8 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
     }
     const visitPlanCount = dailyPlan.visitPlanCount || assigns.length || myCustomers.length;
     const salesPlan = money(agentRow?.salesPlan || 0);
-    const monthSales = await agentMonthSales(agent.id);
+    const period = defaultKpiPeriod();
+    const monthSales = await agentPeriodSales(agent.id, period.from, period.to);
     const planPct = computePlanPct(monthSales, salesPlan);
     const visitPct =
       visitPlanCount > 0 ? Math.min(100, Math.round((todayVisitMap.size / visitPlanCount) * 100)) : 0;

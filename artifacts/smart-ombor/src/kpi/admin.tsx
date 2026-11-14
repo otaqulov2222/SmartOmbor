@@ -191,10 +191,19 @@ async function downloadExcel(kind: string, label: string) {
   }
 }
 
-function useMsSync() {
+function defaultPeriod() {
+  const to = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return { from: `${to.slice(0, 7)}-01`, to };
+}
+
+function useMsSync(from?: string, to?: string) {
   const cache = useQueryClient();
+  const period = defaultPeriod();
   return useMutation({
-    mutationFn: () => kpiFetch('/kpi/sync', { method: 'POST', body: '{}' }),
+    mutationFn: () => kpiFetch('/kpi/sync', {
+      method: 'POST',
+      body: JSON.stringify({ from: from || period.from, to: to || period.to }),
+    }),
     onSuccess: () => {
       for (const k of ['kpi-dash', 'kpi-agents', 'kpi-customers', 'kpi-orders', 'kpi-calcs']) {
         void cache.invalidateQueries({ queryKey: [k] });
@@ -203,11 +212,39 @@ function useMsSync() {
   });
 }
 
+function PeriodBar({
+  from, to, onFrom, onTo, onSync, syncing,
+}: {
+  from: string; to: string;
+  onFrom: (v: string) => void; onTo: (v: string) => void;
+  onSync: () => void; syncing: boolean;
+}) {
+  return (
+    <div className="kpi-period-bar">
+      <label>
+        <span>Dan</span>
+        <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} />
+      </label>
+      <label>
+        <span>Gacha</span>
+        <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
+      </label>
+      <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
+        <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
+      </button>
+    </div>
+  );
+}
+
 /* ---------- 1. Boshqaruv (/kpi) ---------- */
 export function KpiDashboardPage() {
-  const q = useQuery({ queryKey: ['kpi-dash'], queryFn: () => kpiFetch<Dash>('/kpi/dashboard') });
-  const agents = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
-  const sync = useMsSync();
+  const initial = useMemo(() => defaultPeriod(), []);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const q = useQuery({ queryKey: ['kpi-dash', from, to], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
+  const agents = useQuery({ queryKey: ['kpi-agents', from, to], queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`) });
+  const sync = useMsSync(from, to);
   const d = q.data;
   const sorted = useMemo(
     () => [...(agents.data || [])].sort((a, b) => Number(b.salesTotal) - Number(a.salesTotal)),
@@ -218,23 +255,26 @@ export function KpiDashboardPage() {
       <header className="kpi-head">
         <div>
           <h1>KPI boshqaruv</h1>
-          <p>MoySklad savdolari, to‘lovlar va agentlar komissiyasi</p>
-          {d?.periodLabel ? <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>Davr: <b>{d.periodLabel}</b></p> : null}
+          <p>MoySklad otgruzka + agent guruhlari — sanadan sanagacha</p>
+          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>Davr: <b>{from} — {to}</b></p>
         </div>
         <div className="kpi-actions">
           <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
-          <button type="button" className="btn btn-primary" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <RefreshCw size={15} /> {sync.isPending ? 'MoySkladdan olinmoqda…' : 'MoySklad bilan yangilash'}
-          </button>
         </div>
       </header>
+      <PeriodBar
+        from={from} to={to}
+        onFrom={setFrom} onTo={setTo}
+        syncing={sync.isPending}
+        onSync={() => sync.mutate()}
+      />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
       {d ? (
         <div className="kpi-grid">
           <Card label="Agentlar (MoySklad)" value={d.agentsActive} tone="blue" />
-          <Card label="Mijozlar (MoySklad)" value={d.customersTotal} tone="slate" />
-          <Card label="Jami savdo" value={uzs(d.salesTotal)} tone="blue" />
-          <Card label="To‘langan" value={uzs(d.paidTotal)} tone="ok" />
+          <Card label="Mijozlar (MS guruh)" value={d.customersTotal} tone="slate" />
+          <Card label="Savdo (davr)" value={uzs(d.salesTotal)} tone="blue" />
+          <Card label="To‘langan (davr)" value={uzs(d.paidTotal)} tone="ok" />
           <Card label="Qarzdorlik" value={uzs(d.dueTotal)} tone="bad" />
           <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} tone="ok" />
           <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} tone="warn" />
@@ -269,19 +309,18 @@ export function KpiDashboardPage() {
         <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
           <h3>Agentlar reytingi (MoySklad)</h3>
           <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
-            {sorted[0]?.periodLabel || d?.periodLabel || 'Joriy kalendar oyi (Toshkent)'} · Mijozlar = agent guruh/tegiga birikkanlar
+            {from} — {to} · Mijozlar = MS guruh/teg · Savdo = MS otgruzka (shu davr)
           </p>
         </div>
         <table className="kpi-table">
-          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (oy)</th><th>Oylik fakt</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
+          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MS)</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
           <tbody>
             {sorted.map((a) => (
               <tr key={a.id}>
                 <td data-label="Agent"><b>{a.fullName}</b></td>
                 <td data-label="Login" className="kpi-muted">{a.login}</td>
                 <td data-label="Mijozlari">{a.customers}</td>
-                <td data-label="Savdo">{uzs(a.salesTotal)}</td>
-                <td data-label="Oylik fakt">{uzs(a.monthSales ?? 0)}</td>
+                <td data-label="Savdo (MS)">{uzs(a.salesTotal)}</td>
                 <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
                 <td data-label="KPI daromad"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
               </tr>

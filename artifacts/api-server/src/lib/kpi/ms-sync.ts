@@ -127,17 +127,20 @@ function tashkentYmd(d = new Date()) {
   }).format(d);
 }
 
-/** Oxirgi N kun (MS “bir oylik” rolling oynaga yaqin). */
-function demandWindowFilter(days = 45) {
-  const end = new Date();
-  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
-  const a = tashkentYmd(start);
-  const b = tashkentYmd(end);
-  return `moment>=${a} 00:00:00;moment<=${b} 23:59:59`;
+function demandRangeFilter(from: string, to: string) {
+  return `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 }
 
-let syncing: Promise<{ agents: number; customers: number; orders: number }> | null = null;
+/** Default: joriy kalendar oyi boshidan bugungacha (Toshkent). */
+export function defaultKpiPeriod() {
+  const to = tashkentYmd();
+  const start = `${to.slice(0, 7)}-01`;
+  return { from: start, to };
+}
+
+let syncing: Promise<{ agents: number; customers: number; orders: number; from: string; to: string }> | null = null;
 let lastSyncAt = 0;
+let lastSyncKey = "";
 let seededKnown = false;
 
 /** Instant (<100ms): ensures known MoySklad agents exist in DB so UI is never blank. */
@@ -177,16 +180,21 @@ export async function ensureSeedAgents(cache = new Map<string, string>()) {
   return cache;
 }
 
-export async function syncKpiFromMoySklad(force = false) {
+export async function syncKpiFromMoySklad(force = false, opts?: { from?: string; to?: string }) {
   await ensureSeedAgents();
-  if (!moyskladConfigured()) return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0 };
-  if (!force && Date.now() - lastSyncAt < 45_000) {
-    return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0 };
+  const fallback = defaultKpiPeriod();
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(String(opts?.from || "")) ? String(opts!.from) : fallback.from;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(String(opts?.to || "")) ? String(opts!.to) : fallback.to;
+  const key = `${from}:${to}`;
+  if (!moyskladConfigured()) return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0, from, to };
+  if (!force && lastSyncKey === key && Date.now() - lastSyncAt < 45_000) {
+    return { agents: KNOWN_AGENTS.length, customers: 0, orders: 0, from, to };
   }
   if (syncing) return syncing;
-  syncing = runSync()
+  syncing = runSync({ from, to })
     .then((res) => {
       lastSyncAt = Date.now();
+      lastSyncKey = key;
       return res;
     })
     .finally(() => {
@@ -441,7 +449,7 @@ async function ingestDemand(
   return true;
 }
 
-async function runSync() {
+async function runSync(range: { from: string; to: string }) {
   const policy = await ensureDefaultPolicy("moysklad");
   const snap = snapshotPolicy(policy) as unknown as Record<string, unknown>;
   const agentCache = await ensureSeedAgents();
@@ -482,12 +490,12 @@ async function runSync() {
     snap,
   };
 
-  // 1) Oxirgi 45 kun otgruzkalar — faqat 100 ta emas (MS oylik bilan solishtirish uchun).
+  // 1) Tanlangan sanadan–sanagacha BARCHA otgruzkalar (MS filter bilan bir xil oyna).
   let orderCount = 0;
-  const filter = demandWindowFilter(45);
-  for (let offset = 0; offset < 2000; offset += 100) {
+  const filter = demandRangeFilter(range.from, range.to);
+  for (let offset = 0; offset < 5000; offset += 100) {
     const page = await moysklad<{ rows?: MsDemand[] }>(
-      `/entity/demand?limit=100&offset=${offset}&order=moment,desc&expand=agent,salesChannel,payments&filter=${encodeURIComponent(filter)}`,
+      `/entity/demand?limit=100&offset=${offset}&order=moment,asc&expand=agent,salesChannel,payments&filter=${encodeURIComponent(filter)}`,
     ).catch(() => ({ rows: [] as MsDemand[] }));
     const rows = page.rows || [];
     if (!rows.length) break;
@@ -497,10 +505,16 @@ async function runSync() {
     if (rows.length < 100) break;
   }
 
-  // 2) Agent guruh/teglari bo‘yicha BARCHA mijozlar (MS “Группа=shaxzod” → 13 ta).
+  // 2) Agent guruh/teglari — MS “Группа контрагента” dagi barcha mijozlar.
   await syncAgentOwnedCounterparties(agentCache, customerByMsId);
 
-  return { agents: agentCache.size, customers: customerByMsId.size, orders: orderCount };
+  return {
+    agents: agentCache.size,
+    customers: customerByMsId.size,
+    orders: orderCount,
+    from: range.from,
+    to: range.to,
+  };
 }
 
 /** MS guruh nomi yoki teg = agent → assignment. */
