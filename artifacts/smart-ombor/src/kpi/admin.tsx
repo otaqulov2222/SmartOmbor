@@ -128,11 +128,13 @@ type Dash = {
   agentsTotal: number; agentsActive: number; customersTotal: number; customersPending: number;
   salesTotal: string; paidTotal: string; dueTotal: string; overdueOrders: number; pendingApproval: number;
   kpiAccrued: string; kpiConfirmed: string; kpiPending: string; kpiExpired: string;
+  periodStart?: string; periodEnd?: string; periodLabel?: string;
 };
 type Agent = {
   id: string; fullName: string; phone: string; login: string; status: string;
   salesPlan: string; customers: number; salesTotal: string; monthSales?: string;
   planPct?: number | null; kpiTotal: string;
+  periodStart?: string; periodEnd?: string; periodLabel?: string;
 };
 type Customer = {
   id: string; name: string; phone: string; type: string; status: string; address: string;
@@ -217,6 +219,7 @@ export function KpiDashboardPage() {
         <div>
           <h1>KPI boshqaruv</h1>
           <p>MoySklad savdolari, to‘lovlar va agentlar komissiyasi</p>
+          {d?.periodLabel ? <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>Davr: <b>{d.periodLabel}</b></p> : null}
         </div>
         <div className="kpi-actions">
           <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
@@ -265,9 +268,12 @@ export function KpiDashboardPage() {
       <div className="kpi-table-wrap">
         <div className="kpi-panel-head" style={{ padding: '.4rem .5rem .8rem' }}>
           <h3>Agentlar reytingi (MoySklad)</h3>
+          <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
+            {sorted[0]?.periodLabel || d?.periodLabel || 'Joriy kalendar oyi (Toshkent)'} · Mijozlar = agent guruh/tegiga birikkanlar
+          </p>
         </div>
         <table className="kpi-table">
-          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (MoySklad)</th><th>Oylik fakt</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
+          <thead><tr><th>Agent</th><th>Login</th><th>Mijozlari</th><th>Savdo (oy)</th><th>Oylik fakt</th><th>Reja %</th><th>KPI daromad</th></tr></thead>
           <tbody>
             {sorted.map((a) => (
               <tr key={a.id}>

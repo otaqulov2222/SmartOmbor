@@ -116,6 +116,26 @@ type MsDemand = {
   payments?: MsPayment[];
 };
 
+type MsFolder = { id?: string; name?: string; meta?: { href?: string } };
+
+function tashkentYmd(d = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** Oxirgi N kun (MS “bir oylik” rolling oynaga yaqin). */
+function demandWindowFilter(days = 45) {
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  const a = tashkentYmd(start);
+  const b = tashkentYmd(end);
+  return `moment>=${a} 00:00:00;moment<=${b} 23:59:59`;
+}
+
 let syncing: Promise<{ agents: number; customers: number; orders: number }> | null = null;
 let lastSyncAt = 0;
 let seededKnown = false;
@@ -228,12 +248,204 @@ function pickAgentFromTags(tags?: string[]): string | null {
   return null;
 }
 
+async function ensureMsAssignment(customerId: string, agentId: string) {
+  const [row] = await db
+    .select()
+    .from(kpiCustomerAssignmentsTable)
+    .where(and(eq(kpiCustomerAssignmentsTable.customerId, customerId), eq(kpiCustomerAssignmentsTable.active, true)))
+    .limit(1);
+  if (!row) {
+    await db.insert(kpiCustomerAssignmentsTable).values({
+      customerId,
+      agentId,
+      active: true,
+      assignedBy: "moysklad",
+    });
+    return;
+  }
+  if (row.agentId === agentId) return;
+  // Faqat MS biriktirganlarini yangilaymiz — qo‘lda berilgan assignmentni buzmaymiz.
+  if (row.assignedBy && row.assignedBy !== "moysklad") return;
+  await db
+    .update(kpiCustomerAssignmentsTable)
+    .set({ agentId, assignedBy: "moysklad" })
+    .where(eq(kpiCustomerAssignmentsTable.id, row.id));
+}
+
+async function upsertMsCustomer(
+  cp: MsCounterparty,
+  agentId: string | null,
+  customerByMsId: Map<string, { id: string; agentId: string | null }>,
+) {
+  if (!cp.id || !cp.name) return null;
+  const tags = cp.tags || [];
+  let cust = customerByMsId.get(cp.id);
+  if (!cust) {
+    const [created] = await db
+      .insert(kpiCustomersTable)
+      .values({
+        name: cp.name.trim(),
+        stir: cp.inn || "",
+        phone: cp.phone || "",
+        address: cp.actualAddress || cp.legalAddress || "",
+        type: "store",
+        status: "active",
+        contractNumber: `ms:${cp.id}`,
+        notes: tags.join(", "),
+        createdByAgentId: agentId,
+        createdBy: "moysklad",
+      })
+      .returning();
+    cust = { id: created.id, agentId };
+    customerByMsId.set(cp.id, cust);
+  } else if (agentId && cust.agentId !== agentId) {
+    cust = { id: cust.id, agentId };
+    customerByMsId.set(cp.id, cust);
+    await db
+      .update(kpiCustomersTable)
+      .set({ createdByAgentId: agentId, notes: tags.join(", ") || undefined })
+      .where(eq(kpiCustomersTable.id, cust.id));
+  }
+  if (agentId) await ensureMsAssignment(cust.id, agentId);
+  return cust;
+}
+
+type OrderCacheRow = {
+  id: string;
+  paidAmount: string;
+  total: string;
+  agentId: string;
+  orderDate: string;
+  invoiceRef: string | null;
+};
+
+async function ingestDemand(
+  d: MsDemand,
+  ctx: {
+    agentCache: Map<string, string>;
+    customerByMsId: Map<string, { id: string; agentId: string | null }>;
+    fallbackAgentId: string;
+    orderByNumber: Map<string, OrderCacheRow>;
+    policyId: string;
+    snap: Record<string, unknown>;
+  },
+) {
+  if (!d.id || !d.name || d.applicable === false) return false;
+  const cp = d.agent;
+  if (!cp?.id || !cp.name) return false;
+  const chName = d.salesChannel?.name ? canonicalAgentName(d.salesChannel.name) : null;
+  const tagName = pickAgentFromTags(cp.tags);
+  // Teg/guruh egasi ustun — sales channel faqat teg yo‘q bo‘lsa.
+  const agentName = tagName || chName || "Ofis";
+  const agentId = (await ensureAgentByName(ctx.agentCache, agentName)) || ctx.fallbackAgentId;
+  const cust = await upsertMsCustomer(cp, agentId, ctx.customerByMsId);
+  if (!cust) return false;
+
+  const total = money((d.sum || 0) / 100);
+  const paid = money((d.payedSum || 0) / 100);
+  const momentDate = d.moment ? new Date(d.moment.replace(" ", "T") + "+05:00") : new Date();
+  const orderDate = (d.moment || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const number = `MS-${d.name}`;
+  let status = "confirmed";
+  if (Number(paid) >= Number(total) && Number(total) > 0) status = "paid";
+  else if (Number(paid) > 0) status = "partially_paid";
+
+  let latestPayAt: Date | null = null;
+  for (const p of d.payments || []) {
+    if (p.moment) {
+      const dt = new Date(p.moment.replace(" ", "T") + "+05:00");
+      if (!latestPayAt || dt > latestPayAt) latestPayAt = dt;
+    }
+  }
+
+  const prev = ctx.orderByNumber.get(number);
+  let orderId: string;
+  if (prev) {
+    orderId = prev.id;
+    if (prev.paidAmount !== paid || prev.total !== total || prev.agentId !== agentId || prev.orderDate !== orderDate) {
+      await db
+        .update(kpiOrdersTable)
+        .set({
+          agentId,
+          customerId: cust.id,
+          total,
+          subtotal: total,
+          paidAmount: paid,
+          status,
+          orderDate,
+          confirmedAt: momentDate,
+          invoiceRef: latestPayAt ? latestPayAt.toISOString() : prev.invoiceRef,
+        })
+        .where(eq(kpiOrdersTable.id, orderId));
+    }
+  } else {
+    const [created] = await db
+      .insert(kpiOrdersTable)
+      .values({
+        number,
+        customerId: cust.id,
+        agentId,
+        status,
+        orderDate,
+        deliveryStatus: "delivered",
+        paymentType: "deferred",
+        subtotal: total,
+        discount: "0.00",
+        total,
+        paidAmount: paid,
+        contractRef: `ms-demand:${d.id}`,
+        invoiceRef: latestPayAt ? latestPayAt.toISOString() : "",
+        confirmedAt: momentDate,
+        confirmedBy: "moysklad",
+        policyId: ctx.policyId,
+        policySnapshot: ctx.snap,
+        createdBy: "moysklad",
+      })
+      .returning();
+    orderId = created.id;
+    ctx.orderByNumber.set(number, {
+      id: created.id,
+      paidAmount: String(created.paidAmount),
+      total: String(created.total),
+      agentId: created.agentId,
+      orderDate: created.orderDate,
+      invoiceRef: created.invoiceRef ?? null,
+    });
+  }
+
+  for (const p of d.payments || []) {
+    const pid = p.meta?.href?.split("/").pop() || p.id;
+    if (!pid) continue;
+    const idem = `ms-pay:${d.id}:${pid}`;
+    const payAmt = money(((p.linkedSum ?? p.sum) || 0) / 100);
+    if (Number(payAmt) <= 0) continue;
+    const paidAt = p.moment ? new Date(p.moment.replace(" ", "T") + "+05:00") : momentDate;
+    await db
+      .insert(kpiPaymentsTable)
+      .values({
+        orderId,
+        amount: payAmt,
+        paidAt,
+        method: p.meta?.type || "cashin",
+        reference: p.name || "MoySklad",
+        status: "confirmed",
+        idempotencyKey: idem,
+        confirmedAt: paidAt,
+        confirmedBy: "moysklad",
+        createdBy: "moysklad",
+      })
+      .onConflictDoNothing();
+  }
+
+  await refreshOrderKpi(orderId, "moysklad");
+  return true;
+}
+
 async function runSync() {
   const policy = await ensureDefaultPolicy("moysklad");
-  const snap = snapshotPolicy(policy);
+  const snap = snapshotPolicy(policy) as unknown as Record<string, unknown>;
   const agentCache = await ensureSeedAgents();
 
-  // 1. Sales channels → any new agents
   const channels = await moysklad<{ rows?: MsChannel[] }>("/entity/saleschannel?limit=100").catch(
     () => ({ rows: [] as MsChannel[] }),
   );
@@ -249,192 +461,97 @@ async function runSync() {
     }
   }
 
-  // 2. Demands FIRST (fast — 100 latest shipments with buyer + payments)
-  const demands = await moysklad<{ rows?: MsDemand[] }>(
-    "/entity/demand?limit=100&order=moment,desc&expand=agent,salesChannel,payments",
-  ).catch(() => ({ rows: [] as MsDemand[] }));
-
   const fallbackAgentId = (await ensureAgentByName(agentCache, "Ofis"))!;
   const existingOrders = await db.select().from(kpiOrdersTable);
-  const orderByNumber = new Map(existingOrders.map((o) => [o.number, o]));
+  const orderByNumber = new Map<string, OrderCacheRow>(
+    existingOrders.map((o) => [o.number, {
+      id: o.id,
+      paidAmount: String(o.paidAmount),
+      total: String(o.total),
+      agentId: o.agentId,
+      orderDate: o.orderDate,
+      invoiceRef: o.invoiceRef ?? null,
+    }]),
+  );
+  const ctx = {
+    agentCache,
+    customerByMsId,
+    fallbackAgentId,
+    orderByNumber,
+    policyId: policy.id,
+    snap,
+  };
+
+  // 1) Oxirgi 45 kun otgruzkalar — faqat 100 ta emas (MS oylik bilan solishtirish uchun).
   let orderCount = 0;
-
-  for (const d of demands.rows || []) {
-    if (!d.id || !d.name || d.applicable === false) continue;
-    const cp = d.agent;
-    if (!cp?.id || !cp.name) continue;
-    const chName = d.salesChannel?.name ? canonicalAgentName(d.salesChannel.name) : null;
-    const tagName = pickAgentFromTags(cp.tags);
-    const agentName = chName || tagName || "Ofis";
-    const agentId = (await ensureAgentByName(agentCache, agentName)) || fallbackAgentId;
-
-    let cust = customerByMsId.get(cp.id);
-    if (!cust) {
-      const [created] = await db
-        .insert(kpiCustomersTable)
-        .values({
-          name: cp.name.trim(),
-          phone: cp.phone || "",
-          address: cp.actualAddress || cp.legalAddress || "",
-          type: "store",
-          status: "active",
-          contractNumber: `ms:${cp.id}`,
-          notes: (cp.tags || []).join(", "),
-          createdByAgentId: agentId,
-          createdBy: "moysklad",
-        })
-        .returning();
-      cust = { id: created.id, agentId };
-      customerByMsId.set(cp.id, cust);
-      await db.insert(kpiCustomerAssignmentsTable).values({
-        customerId: created.id,
-        agentId,
-        active: true,
-        assignedBy: "moysklad",
-      });
+  const filter = demandWindowFilter(45);
+  for (let offset = 0; offset < 2000; offset += 100) {
+    const page = await moysklad<{ rows?: MsDemand[] }>(
+      `/entity/demand?limit=100&offset=${offset}&order=moment,desc&expand=agent,salesChannel,payments&filter=${encodeURIComponent(filter)}`,
+    ).catch(() => ({ rows: [] as MsDemand[] }));
+    const rows = page.rows || [];
+    if (!rows.length) break;
+    for (const d of rows) {
+      if (await ingestDemand(d, ctx)) orderCount += 1;
     }
-
-    const total = money((d.sum || 0) / 100);
-    const paid = money((d.payedSum || 0) / 100);
-    const momentDate = d.moment ? new Date(d.moment.replace(" ", "T") + "+05:00") : new Date();
-    const orderDate = (d.moment || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
-    const number = `MS-${d.name}`;
-    let status = "confirmed";
-    if (Number(paid) >= Number(total) && Number(total) > 0) status = "paid";
-    else if (Number(paid) > 0) status = "partially_paid";
-
-    let latestPayAt: Date | null = null;
-    for (const p of d.payments || []) {
-      if (p.moment) {
-        const dt = new Date(p.moment.replace(" ", "T") + "+05:00");
-        if (!latestPayAt || dt > latestPayAt) latestPayAt = dt;
-      }
-    }
-
-    const prev = orderByNumber.get(number);
-    let orderId: string;
-    if (prev) {
-      orderId = prev.id;
-      if (prev.paidAmount !== paid || prev.total !== total || prev.agentId !== agentId) {
-        await db
-          .update(kpiOrdersTable)
-          .set({
-            agentId,
-            customerId: cust.id,
-            total,
-            subtotal: total,
-            paidAmount: paid,
-            status,
-            orderDate,
-            confirmedAt: momentDate,
-            invoiceRef: latestPayAt ? latestPayAt.toISOString() : prev.invoiceRef,
-          })
-          .where(eq(kpiOrdersTable.id, orderId));
-      }
-    } else {
-      const [created] = await db
-        .insert(kpiOrdersTable)
-        .values({
-          number,
-          customerId: cust.id,
-          agentId,
-          status,
-          orderDate,
-          deliveryStatus: "delivered",
-          paymentType: "deferred",
-          subtotal: total,
-          discount: "0.00",
-          total,
-          paidAmount: paid,
-          contractRef: `ms-demand:${d.id}`,
-          invoiceRef: latestPayAt ? latestPayAt.toISOString() : "",
-          confirmedAt: momentDate,
-          confirmedBy: "moysklad",
-          policyId: policy.id,
-          policySnapshot: snap as unknown as Record<string, unknown>,
-          createdBy: "moysklad",
-        })
-        .returning();
-      orderId = created.id;
-      orderByNumber.set(number, created);
-    }
-
-    for (const p of d.payments || []) {
-      const pid = p.meta?.href?.split("/").pop() || p.id;
-      if (!pid) continue;
-      const idem = `ms-pay:${d.id}:${pid}`;
-      const payAmt = money(((p.linkedSum ?? p.sum) || 0) / 100);
-      if (Number(payAmt) <= 0) continue;
-      const paidAt = p.moment ? new Date(p.moment.replace(" ", "T") + "+05:00") : momentDate;
-      await db
-        .insert(kpiPaymentsTable)
-        .values({
-          orderId,
-          amount: payAmt,
-          paidAt,
-          method: p.meta?.type || "cashin",
-          reference: p.name || "MoySklad",
-          status: "confirmed",
-          idempotencyKey: idem,
-          confirmedAt: paidAt,
-          confirmedBy: "moysklad",
-          createdBy: "moysklad",
-        })
-        .onConflictDoNothing();
-    }
-
-    await refreshOrderKpi(orderId, "moysklad");
-    orderCount += 1;
+    if (rows.length < 100) break;
   }
 
-  // 3. Background counterparty enrichment (first 300 buyers in chunks)
-  void syncCounterpartiesChunk(agentCache, customerByMsId).catch(() => undefined);
+  // 2) Agent guruh/teglari bo‘yicha BARCHA mijozlar (MS “Группа=shaxzod” → 13 ta).
+  await syncAgentOwnedCounterparties(agentCache, customerByMsId);
 
   return { agents: agentCache.size, customers: customerByMsId.size, orders: orderCount };
 }
 
-async function syncCounterpartiesChunk(
+/** MS guruh nomi yoki teg = agent → assignment. */
+async function syncAgentOwnedCounterparties(
   agentCache: Map<string, string>,
   customerByMsId: Map<string, { id: string; agentId: string | null }>,
 ) {
-  for (let offset = 0; offset < 600; offset += 100) {
-    const page = await moysklad<{ rows?: MsCounterparty[] }>(
-      `/entity/counterparty?limit=100&offset=${offset}`,
-    ).catch(() => ({ rows: [] as MsCounterparty[] }));
-    const rows = page.rows || [];
-    if (!rows.length) break;
-    for (const cp of rows) {
-      if (!cp.id || !cp.name || customerByMsId.has(cp.id)) continue;
-      const tags = cp.tags || [];
-      if (tags.includes("поставщик") && !tags.includes("покупатель")) continue;
-      const tagAgent = pickAgentFromTags(tags);
-      const agentId = tagAgent ? await ensureAgentByName(agentCache, tagAgent) : null;
-      const [created] = await db
-        .insert(kpiCustomersTable)
-        .values({
-          name: cp.name.trim(),
-          stir: cp.inn || "",
-          phone: cp.phone || "",
-          address: cp.actualAddress || cp.legalAddress || "",
-          type: "store",
-          status: "active",
-          contractNumber: `ms:${cp.id}`,
-          notes: tags.join(", "),
-          createdByAgentId: agentId,
-          createdBy: "moysklad",
-        })
-        .returning();
-      customerByMsId.set(cp.id, { id: created.id, agentId });
-      if (agentId) {
-        await db.insert(kpiCustomerAssignmentsTable).values({
-          customerId: created.id,
-          agentId,
-          active: true,
-          assignedBy: "moysklad",
-        });
+  const folders = await moysklad<{ rows?: MsFolder[] }>("/entity/counterpartyfolder?limit=100").catch(
+    () => ({ rows: [] as MsFolder[] }),
+  );
+  const folderByAgent = new Map<string, string>();
+  for (const folder of folders.rows || []) {
+    const agentName = canonicalAgentName(folder.name || "");
+    if (!agentName || agentName === "Ofis") continue;
+    if (folder.meta?.href) folderByAgent.set(agentName.toLowerCase(), folder.meta.href);
+  }
+
+  for (const [fullName] of KNOWN_AGENTS) {
+    if (fullName === "Ofis" || fullName === "Van seling") continue;
+    const agentId = await ensureAgentByName(agentCache, fullName);
+    if (!agentId) continue;
+
+    const folderHref = folderByAgent.get(fullName.toLowerCase());
+    if (folderHref) {
+      for (let offset = 0; offset < 1000; offset += 100) {
+        const page = await moysklad<{ rows?: MsCounterparty[] }>(
+          `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`group=${folderHref}`)}`,
+        ).catch(() => ({ rows: [] as MsCounterparty[] }));
+        const rows = page.rows || [];
+        if (!rows.length) break;
+        for (const cp of rows) await upsertMsCustomer(cp, agentId, customerByMsId);
+        if (rows.length < 100) break;
       }
     }
-    if (rows.length < 100) break;
+
+    // Teg bo‘yicha ham (guruh bo‘lmasa yoki qo‘shimcha).
+    for (const tag of [fullName, fullName.toLowerCase(), ...Object.keys(ALIAS).filter((k) => ALIAS[k] === fullName)]) {
+      for (let offset = 0; offset < 500; offset += 100) {
+        const page = await moysklad<{ rows?: MsCounterparty[] }>(
+          `/entity/counterparty?limit=100&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
+        ).catch(() => ({ rows: [] as MsCounterparty[] }));
+        const rows = page.rows || [];
+        if (!rows.length) break;
+        for (const cp of rows) {
+          const tags = cp.tags || [];
+          if (tags.includes("поставщик") && !tags.includes("покупатель")) continue;
+          await upsertMsCustomer(cp, agentId, customerByMsId);
+        }
+        if (rows.length < 100) break;
+      }
+    }
   }
 }
 

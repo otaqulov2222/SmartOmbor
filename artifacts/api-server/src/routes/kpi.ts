@@ -290,10 +290,11 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
         active: sql<number>`count(*) filter (where ${kpiAgentsTable.status} = 'active' and lower(${kpiAgentsTable.login}) not in ('ofis','vanseling'))::int`,
       })
       .from(kpiAgentsTable);
+    const bounds = monthBoundsTashkent();
     const [customers] = await db.select({ total: sql<number>`count(*)::int`, pending: sql<number>`count(*) filter (where ${kpiCustomersTable.status} = 'pending')::int` }).from(kpiCustomersTable);
     const [orders] = await db.select({
-      sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled')), 0)`,
-      paid: sql<string>`coalesce(sum(${kpiOrdersTable.paidAmount}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled')), 0)`,
+      sales: sql<string>`coalesce(sum(${kpiOrdersTable.total}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${bounds.start} and ${kpiOrdersTable.orderDate} < ${bounds.end}), 0)`,
+      paid: sql<string>`coalesce(sum(${kpiOrdersTable.paidAmount}) filter (where ${kpiOrdersTable.status} not in ('draft','cancelled') and ${kpiOrdersTable.orderDate} >= ${bounds.start} and ${kpiOrdersTable.orderDate} < ${bounds.end}), 0)`,
       pendingConfirm: sql<number>`count(*) filter (where ${kpiOrdersTable.status} = 'pending_approval')::int`,
       overdue: sql<number>`count(*) filter (where ${kpiOrdersTable.status} = 'overdue')::int`,
     }).from(kpiOrdersTable);
@@ -318,6 +319,9 @@ router.get("/kpi/dashboard", requireKpiAdmin(), async (_req, res, next) => {
       kpiConfirmed: money(kpi.confirmed),
       kpiPending: money(kpi.pending),
       kpiExpired: money(kpi.expired),
+      periodStart: bounds.start,
+      periodEnd: bounds.end,
+      periodLabel: `${bounds.start} — ${tashkentDate()} (Toshkent, kalendar oyi)`,
     });
   } catch (error) {
     next(error);
@@ -398,6 +402,7 @@ router.post("/kpi/territories", requireKpiAdmin(), async (req, res, next) => {
 router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
   try {
     await ensureKpiBootstrapped();
+    const bounds = monthBoundsTashkent();
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
     const out = [];
@@ -406,7 +411,12 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
         .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
       const [sales] = await db.select({
         total: sql<string>`coalesce(sum(${kpiOrdersTable.total}), 0)`,
-      }).from(kpiOrdersTable).where(and(eq(kpiOrdersTable.agentId, agent.id), sql`${kpiOrdersTable.status} not in ('draft','cancelled')`));
+      }).from(kpiOrdersTable).where(and(
+        eq(kpiOrdersTable.agentId, agent.id),
+        sql`${kpiOrdersTable.status} not in ('draft','cancelled')`,
+        sql`${kpiOrdersTable.orderDate} >= ${bounds.start}`,
+        sql`${kpiOrdersTable.orderDate} < ${bounds.end}`,
+      ));
       const [kpi] = await db.select({
         total: sql<string>`coalesce(sum(${kpiCalculationsTable.kpiAmount}), 0)`,
       }).from(kpiCalculationsTable).where(and(eq(kpiCalculationsTable.agentId, agent.id), sql`${kpiCalculationsTable.status} in ('confirmed','partial','pending')`));
@@ -423,6 +433,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
         salesPlan,
         notes: agent.notes,
         customers: cust?.n ?? 0,
+        // Reytingdagi “Savdo” endi joriy kalendar oyi (Oylik fakt bilan bir xil oyna).
         salesTotal: money(sales?.total),
         monthSales,
         planPct: computePlanPct(monthSales, salesPlan),
@@ -430,7 +441,13 @@ router.get("/kpi/agents", requireKpiAdmin(), async (_req, res, next) => {
         createdAt: agent.createdAt,
       });
     }
-    res.json(out);
+    // Massiv saqlanadi (eski klientlar). Davr — har qatorda bir xil.
+    res.json(out.map((row) => ({
+      ...row,
+      periodStart: bounds.start,
+      periodEnd: bounds.end,
+      periodLabel: `${bounds.start} — ${tashkentDate()} (Toshkent, kalendar oyi)`,
+    })));
   } catch (error) {
     next(error);
   }
