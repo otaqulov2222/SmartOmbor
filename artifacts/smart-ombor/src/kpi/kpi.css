@@ -141,8 +141,17 @@
 .kpi-seg button { border: 0; background: transparent; padding: .42rem .85rem; border-radius: 8px; font-weight: 600; color: #475569; cursor: pointer; }
 .kpi-seg button.active { background: #fff; color: #1d39c4; box-shadow: 0 1px 2px rgba(15, 27, 45, .08); }
 .kpi-split { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-.kpi-stages { display: grid; gap: .5rem; }
-.kpi-stage { display: grid; grid-template-columns: 1.4fr repeat(3, .8fr); gap: .4rem; }
+.kpi-stages-table { display: grid; gap: .45rem; }
+.kpi-stages-head, .kpi-stage {
+  display: grid; grid-template-columns: 1.2fr .7fr .7fr .7fr 1.4fr; gap: .45rem; align-items: center;
+}
+.kpi-stages-head {
+  font-size: .72rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 .15rem;
+}
+.kpi-stage-hint { font-size: .8rem; color: #475569; font-weight: 600; }
+.kpi-stage-mobile { display: none; font-size: .7rem; font-weight: 700; color: #64748b; }
+.kpi-stage-field { display: grid; gap: .2rem; }
 
 /* ---------- Agent Login ---------- */
 .kpi-agent-gate { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: radial-gradient(circle at top, #e8eefc, #f5f7fb 45%, #eef2f7); }
@@ -699,7 +708,10 @@
   }
 
   .kpi-split { grid-template-columns: 1fr; }
+  .kpi-stages-head { display: none; }
   .kpi-stage { grid-template-columns: 1fr 1fr; }
+  .kpi-stage-mobile { display: block; }
+  .kpi-stage-hint { grid-column: 1 / -1; }
 
   /* Mobile card layout for all KPI / Employee / GPS tables */
   .kpi-table-wrap { padding: .4rem; background: transparent; border: 0; overflow: visible; }

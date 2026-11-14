@@ -935,13 +935,19 @@ function OrdersAndKpiSection() {
   );
 }
 
+const STAGE_HINTS = [
+  'Shu kunning o‘zida to‘lansa',
+  '1 hafta ichida (1–7 kun)',
+  '15 kun ichida (8–15 kun)',
+];
+
 function RulesSection() {
   const cache = useQueryClient();
   const policy = useQuery({ queryKey: ['kpi-policy'], queryFn: () => kpiFetch<Policy>('/kpi/policy') });
   const [stages, setStages] = useState<Policy['stages'] | null>(null);
   const current = stages || policy.data?.stages || [];
   const save = useMutation({
-    mutationFn: () => kpiFetch('/kpi/policy', {
+    mutationFn: () => kpiFetch<{ recalculated?: number }>('/kpi/policy', {
       method: 'PUT',
       body: JSON.stringify({
         name: policy.data?.name || 'Standart 3 bosqich',
@@ -954,11 +960,15 @@ function RulesSection() {
     onSuccess: () => {
       setStages(null);
       void cache.invalidateQueries({ queryKey: ['kpi-policy'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-orders'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-calcs'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-dash'] });
     },
   });
   const recalc = useMutation({
-    mutationFn: () => kpiFetch('/kpi/recalculate', { method: 'POST', body: '{}' }),
+    mutationFn: () => kpiFetch<{ updated: number }>('/kpi/recalculate', { method: 'POST', body: '{}' }),
     onSuccess: () => {
+      void cache.invalidateQueries({ queryKey: ['kpi-orders'] });
       void cache.invalidateQueries({ queryKey: ['kpi-calcs'] });
       void cache.invalidateQueries({ queryKey: ['kpi-dash'] });
     },
@@ -966,31 +976,56 @@ function RulesSection() {
   return (
     <section className="kpi-panel">
       <h2>3 bosqichli KPI foizlari</h2>
-      <p className="kpi-muted">MoySklad отгрузка sanasidan boshlab to‘lov necha kunda yopilishiga qarab foiz hisoblanadi.</p>
-      <div className="kpi-stages">
+      <p className="kpi-muted">
+        MoySklad отгрузка sanasidan to‘lov yopilgunga qadar necha kun o‘tganiga qarab foiz.
+        Saqlash → savdo KPI avtomatik qayta hisoblanadi.
+      </p>
+      <div className="kpi-stages-table">
+        <div className="kpi-stages-head">
+          <span>Bosqich</span>
+          <span>Dan (kun)</span>
+          <span>Gacha (kun)</span>
+          <span>Foiz %</span>
+          <span>Qachon</span>
+        </div>
         {current.map((stage, index) => (
           <div className="kpi-stage" key={index}>
             <input className="input" value={stage.name} onChange={(e) => {
               const next = [...current]; next[index] = { ...stage, name: e.target.value }; setStages(next);
             }} />
-            <input className="input" type="number" value={stage.dayFrom} onChange={(e) => {
-              const next = [...current]; next[index] = { ...stage, dayFrom: Number(e.target.value) }; setStages(next);
-            }} />
-            <input className="input" type="number" value={stage.dayTo} onChange={(e) => {
-              const next = [...current]; next[index] = { ...stage, dayTo: Number(e.target.value) }; setStages(next);
-            }} />
-            <input className="input" value={stage.percent} onChange={(e) => {
-              const next = [...current]; next[index] = { ...stage, percent: e.target.value }; setStages(next);
-            }} />
+            <label className="kpi-stage-field">
+              <span className="kpi-stage-mobile">Dan (kun)</span>
+              <input className="input" type="number" min={0} value={stage.dayFrom} onChange={(e) => {
+                const next = [...current]; next[index] = { ...stage, dayFrom: Number(e.target.value) }; setStages(next);
+              }} />
+            </label>
+            <label className="kpi-stage-field">
+              <span className="kpi-stage-mobile">Gacha (kun)</span>
+              <input className="input" type="number" min={0} value={stage.dayTo} onChange={(e) => {
+                const next = [...current]; next[index] = { ...stage, dayTo: Number(e.target.value) }; setStages(next);
+              }} />
+            </label>
+            <label className="kpi-stage-field">
+              <span className="kpi-stage-mobile">Foiz %</span>
+              <input className="input" value={stage.percent} onChange={(e) => {
+                const next = [...current]; next[index] = { ...stage, percent: e.target.value }; setStages(next);
+              }} />
+            </label>
+            <div className="kpi-stage-hint">{STAGE_HINTS[index] || `${stage.dayFrom}–${stage.dayTo} kun`}</div>
           </div>
         ))}
       </div>
       <div className="kpi-actions">
-        <button type="button" className="btn btn-primary" onClick={() => save.mutate()}>Saqlash</button>
-        <button type="button" className="btn" onClick={() => recalc.mutate()}>Qayta hisoblash</button>
+        <button type="button" className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending ? 'Saqlanmoqda…' : 'Saqlash + KPI yangilash'}
+        </button>
+        <button type="button" className="btn" disabled={recalc.isPending} onClick={() => recalc.mutate()}>
+          {recalc.isPending ? 'Hisoblanmoqda…' : 'Qayta hisoblash'}
+        </button>
       </div>
       {save.error ? <p className="kpi-error">{(save.error as Error).message}</p> : null}
-      {recalc.isSuccess ? <p className="kpi-ok">Hisoblar yangilandi</p> : null}
+      {save.isSuccess ? <p className="kpi-ok">Qoidalar saqlandi va savdo KPI yangilandi</p> : null}
+      {recalc.isSuccess ? <p className="kpi-ok">Hisoblar yangilandi ({recalc.data?.updated ?? 0} ta)</p> : null}
     </section>
   );
 }

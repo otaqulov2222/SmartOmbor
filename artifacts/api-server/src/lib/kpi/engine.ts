@@ -95,6 +95,13 @@ function stageEndsAt(anchor: Date, stage: StageSnap | null): Date | null {
   return end;
 }
 
+/** 1: shu kun 3% · 2: 1 hafta 2% · 3: 15 kun ichida 1%. */
+export const DEFAULT_STAGES: StageSnap[] = [
+  { name: "1-bosqich", sortOrder: 1, dayFrom: 0, dayTo: 0, percent: "3.00" },
+  { name: "2-bosqich", sortOrder: 2, dayFrom: 1, dayTo: 7, percent: "2.00" },
+  { name: "3-bosqich", sortOrder: 3, dayFrom: 8, dayTo: 15, percent: "1.00" },
+];
+
 export async function ensureDefaultPolicy(actorId?: string) {
   const existing = await getActivePolicy();
   if (existing) return existing;
@@ -109,12 +116,7 @@ export async function ensureDefaultPolicy(actorId?: string) {
       createdBy: actorId || "system",
     })
     .returning();
-  const defaults: StageSnap[] = [
-    { name: "1-bosqich", sortOrder: 1, dayFrom: 0, dayTo: 7, percent: "5.0000" },
-    { name: "2-bosqich", sortOrder: 2, dayFrom: 8, dayTo: 14, percent: "3.0000" },
-    { name: "3-bosqich", sortOrder: 3, dayFrom: 15, dayTo: 21, percent: "1.0000" },
-  ];
-  for (const stage of defaults) {
+  for (const stage of DEFAULT_STAGES) {
     await db.insert(kpiStagesTable).values({
       policyId: policy.id,
       name: stage.name,
@@ -127,7 +129,34 @@ export async function ensureDefaultPolicy(actorId?: string) {
   return (await getActivePolicy())!;
 }
 
-export async function refreshOrderKpi(orderId: string, actorId?: string) {
+/** Jack qoidasi: 3% / 2% / 1% diapazonlarini majburiy qo‘llash. */
+export async function ensureTargetStages() {
+  const policy = await ensureDefaultPolicy();
+  const sig = policy.stages
+    .map((s) => `${s.dayFrom}-${s.dayTo}:${Number(s.percent).toFixed(2)}`)
+    .join("|");
+  const targetSig = DEFAULT_STAGES.map((s) => `${s.dayFrom}-${s.dayTo}:${Number(s.percent).toFixed(2)}`).join("|");
+  if (sig === targetSig) return policy;
+
+  await db.delete(kpiStagesTable).where(eq(kpiStagesTable.policyId, policy.id));
+  for (const stage of DEFAULT_STAGES) {
+    await db.insert(kpiStagesTable).values({
+      policyId: policy.id,
+      name: stage.name,
+      sortOrder: stage.sortOrder,
+      dayFrom: stage.dayFrom,
+      dayTo: stage.dayTo,
+      percent: stage.percent,
+    });
+  }
+  return (await getActivePolicy())!;
+}
+
+export async function refreshOrderKpi(
+  orderId: string,
+  actorId?: string,
+  opts?: { useLatestPolicy?: boolean },
+) {
   const orders = await db.select().from(kpiOrdersTable).where(eq(kpiOrdersTable.id, orderId)).limit(1);
   const order = orders[0];
   if (!order) return null;
@@ -135,7 +164,17 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
     return null;
   }
 
-  const snap = (order.policySnapshot as PolicySnap | null) || (await getActivePolicy());
+  let snap = (order.policySnapshot as PolicySnap | null) || null;
+  if (opts?.useLatestPolicy || !snap?.stages?.length) {
+    const latest = await getActivePolicy();
+    if (latest) {
+      snap = latest;
+      await db
+        .update(kpiOrdersTable)
+        .set({ policySnapshot: latest as unknown as Record<string, unknown> })
+        .where(eq(kpiOrdersTable.id, orderId));
+    }
+  }
   if (!snap) return null;
 
   const [agentRow] = await db
@@ -238,14 +277,14 @@ export async function refreshOrderKpi(orderId: string, actorId?: string) {
   return db.select().from(kpiCalculationsTable).where(eq(kpiCalculationsTable.id, calcId)).limit(1).then((r) => r[0]);
 }
 
-export async function refreshAllOpenKpis(limit = 500) {
+export async function refreshAllOpenKpis(limit = 500, opts?: { useLatestPolicy?: boolean }) {
   const rows = await db
     .select({ id: kpiOrdersTable.id })
     .from(kpiOrdersTable)
     .where(sql`${kpiOrdersTable.status} NOT IN ('draft','cancelled')`)
     .limit(limit);
   for (const row of rows) {
-    await refreshOrderKpi(row.id);
+    await refreshOrderKpi(row.id, "system", opts);
   }
   return rows.length;
 }

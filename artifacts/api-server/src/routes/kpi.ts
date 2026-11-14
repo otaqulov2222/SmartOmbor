@@ -34,7 +34,9 @@ import {
 import {
   cancelOrderKpi,
   ensureDefaultPolicy,
+  ensureTargetStages,
   getActivePolicy,
+  refreshAllOpenKpis,
   refreshOrderKpi,
   snapshotPolicy,
 } from "../lib/kpi/engine";
@@ -1295,7 +1297,7 @@ router.post("/kpi/payments/:id/confirm", requireKpiAdmin(), async (req, res, nex
 /* ---------- KPI policy + calculations ---------- */
 router.get("/kpi/policy", requireKpiAdmin(), async (_req, res, next) => {
   try {
-    const policy = await ensureDefaultPolicy();
+    const policy = await ensureTargetStages();
     res.json(policy);
   } catch (error) {
     next(error);
@@ -1330,7 +1332,9 @@ router.put("/kpi/policy", requireKpiAdmin(), async (req, res, next) => {
       order += 1;
     }
     await recordAudit({ action: "kpi.policy.updated", entityType: "kpi_policy", entityId: policy.id, actorName: actor.name });
-    res.json(await getActivePolicy());
+    // Foiz o‘zgarsa savdo KPI ham shu zahoti yangilanadi (eski snapshot emas).
+    const updated = await refreshAllOpenKpis(5000, { useLatestPolicy: true });
+    res.json({ ...(await getActivePolicy()), recalculated: updated });
   } catch (error) {
     next(error);
   }
@@ -2155,10 +2159,9 @@ router.get("/kpi/ledger", requireKpiAdmin(), async (_req, res, next) => {
 
 router.post("/kpi/recalculate", requireKpiAdmin(), async (_req, res, next) => {
   try {
-    const rows = await db.select({ id: kpiOrdersTable.id }).from(kpiOrdersTable)
-      .where(sql`${kpiOrdersTable.status} not in ('draft','cancelled')`);
-    for (const row of rows) await refreshOrderKpi(row.id);
-    res.json({ updated: rows.length });
+    await ensureTargetStages();
+    const updated = await refreshAllOpenKpis(5000, { useLatestPolicy: true });
+    res.json({ updated });
   } catch (error) {
     next(error);
   }
