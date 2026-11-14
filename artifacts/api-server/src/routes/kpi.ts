@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   db,
   kpiAgentsTable,
@@ -1948,7 +1948,11 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .from(kpiCustomerAssignmentsTable)
       .where(eq(kpiCustomerAssignmentsTable.active, true));
     const assignByCustomer = new Map(assigns.map((a) => [a.customerId, a.agentId]));
-    const customers = await db.select().from(kpiCustomersTable).limit(500);
+    const assignCountByAgent = new Map<string, number>();
+    for (const a of assigns) {
+      assignCountByAgent.set(a.agentId, (assignCountByAgent.get(a.agentId) || 0) + 1);
+    }
+
     const orders = await db
       .select({
         customerId: kpiOrdersTable.customerId,
@@ -1994,10 +1998,8 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       const myVisitCustomers = new Set(
         todayVisits.filter((v) => v.agentId === a.id).map((v) => v.customerId),
       );
-      const myCustomers = customers.filter(
-        (c) => (assignByCustomer.get(c.id) || c.createdByAgentId) === a.id,
-      );
-      const myDebtors = myCustomers.filter((c) => Number(debtByCustomer.get(c.id) || 0) > 0);
+      const customersCount = assignCountByAgent.get(a.id) || 0;
+      const myDebtors = [...debtByCustomer.entries()].filter(([cid]) => assignByCustomer.get(cid) === a.id).length;
       return {
         id: a.id,
         fullName: a.fullName,
@@ -2007,8 +2009,8 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         lng: last?.lng ? Number(last.lng) : null,
         accuracyM: last?.accuracyM != null ? Number(last.accuracyM) : null,
         lastSeenAt: last?.recordedAt ? last.recordedAt.toISOString() : null,
-        customersCount: myCustomers.length,
-        debtorsCount: myDebtors.length,
+        customersCount,
+        debtorsCount: myDebtors,
         visitedToday: myVisitCustomers.size,
       };
     });
@@ -2035,13 +2037,13 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
     }
 
     const selectedAgentLoc = activeAgentId ? lastLocByAgent.get(activeAgentId) : null;
-    const rawPoints = customers
-      .filter((c) => {
-        const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
-        return owner === activeAgentId;
-      })
-      .slice(0, 200)
-      .map((c) => {
+    // Agentga biriktirilgan BARCHA mijozlar (limit(500) kesib tashlamaslik — telefon bilan bir xil).
+    const selectedIds = assigns.filter((a) => a.agentId === activeAgentId).map((a) => a.customerId);
+    const selectedCustomers =
+      selectedIds.length > 0
+        ? await db.select().from(kpiCustomersTable).where(inArray(kpiCustomersTable.id, selectedIds))
+        : [];
+    const rawPoints = selectedCustomers.map((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
         const debt = debtByCustomer.get(c.id) || "0.00";
@@ -2091,10 +2093,21 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .reverse()
       .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }));
 
+    const customerById = new Map(selectedCustomers.map((c) => [c.id, c]));
+    const missingLogIds = todayVisits
+      .filter((v) => (!activeAgentId || v.agentId === activeAgentId) && !customerById.has(v.customerId))
+      .map((v) => v.customerId);
+    if (missingLogIds.length) {
+      const extra = await db
+        .select()
+        .from(kpiCustomersTable)
+        .where(inArray(kpiCustomersTable.id, [...new Set(missingLogIds)]));
+      for (const c of extra) customerById.set(c.id, c);
+    }
     const routeLog = todayVisits
       .filter((v) => !activeAgentId || v.agentId === activeAgentId)
       .map((v) => {
-        const c = customers.find((x) => x.id === v.customerId);
+        const c = customerById.get(v.customerId);
         return {
           id: v.id,
           agentId: v.agentId,

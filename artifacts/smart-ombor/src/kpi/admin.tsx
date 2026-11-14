@@ -392,7 +392,7 @@ export function KpiDashboardPage() {
       <header className="kpi-head">
         <div>
           <h1>KPI boshqaruv</h1>
-          <p>MoySklad Взаиморасчеты — agent tegidagi mijozlar (MS bilan bir xil)</p>
+          <p>MoySklad Взаиморасчеты (davr aylanmasi) — GPS marshrutdagi barcha mijozlar emas</p>
           <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
             Davr: <b>{PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus'}</b> · {from} — {to}
           </p>

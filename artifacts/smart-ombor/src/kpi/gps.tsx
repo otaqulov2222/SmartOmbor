@@ -150,6 +150,9 @@ export function GpsPage() {
       <header className="kpi-head">
         <div>
           <h1>GPS va marshrut {selectedAgent ? `— ${selectedAgent.fullName}` : ''}</h1>
+          <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
+            Nuqtalar = agentga biriktirilgan mijozlar (telefon Marshrut bilan bir xil). KPI dagi 5 = faqat MS aylanmasi.
+          </p>
         </div>
         <div className="kpi-actions">
           <button type="button" className="btn" onClick={() => void q.refetch()}>
