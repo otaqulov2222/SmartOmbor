@@ -6,8 +6,9 @@ import { dataFile } from "./data-dir";
 
 export const OFFICE_LAT = 41.258556;
 export const OFFICE_LNG = 69.150964;
-export const OFFICE_RADIUS_M = 100;
-export const OFFICE_ACCURACY_M = 150;
+export const OFFICE_RADIUS_M = 120;
+/** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
+export const OFFICE_ACCURACY_M = 500;
 
 export type PunchMethod = "face" | "qr";
 export type PunchKind = "in" | "out";
@@ -196,9 +197,12 @@ export function insideOffice(lat: number, lng: number, accuracy?: number) {
   // Real GPS always reports accuracy > 0. Missing/0 means spoofed or stale client payload.
   if (!Number.isFinite(acc) || acc <= 0 || acc > OFFICE_ACCURACY_M) return false;
   const dist = officeDistance(lat, lng);
-  // Uncertainty circle must still sit inside the office radius (half-accuracy buffer).
-  if (dist + Math.min(acc * 0.5, 45) > OFFICE_RADIUS_M) return false;
-  return dist <= OFFICE_RADIUS_M;
+  // Nuqta radius ichida — ofisda. Accuracy doirasini radiusga “sig‘dirish” binoda 40–80 m
+  // masofani ham blok qilardi (masalan 44 m + accuracy/2).
+  if (dist <= OFFICE_RADIUS_M) return true;
+  // Chegaraga yaqin + yaxshi aniqlik — biroz soft buffer (GPS drift).
+  if (acc <= 80 && dist <= OFFICE_RADIUS_M + 20) return true;
+  return false;
 }
 
 function hamming(left: string, right: string) {

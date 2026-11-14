@@ -177,7 +177,7 @@ export function OfficePage() {
     gpsWatch.current = navigator.geolocation.watchPosition(
       pos => applyGps.current(pos),
       err => failGps.current(err, fromUser),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 25000 },
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 25000 },
     );
   };
 
@@ -271,14 +271,17 @@ export function OfficePage() {
   }, []);
 
   const meters = me && gps ? haversine(gps.lat, gps.lng, me.office.lat, me.office.lng) : null;
-  const maxAcc = me?.office.accuracyM || 150;
-  const radiusM = me?.office.radiusM || 100;
+  const maxAcc = me?.office.accuracyM || 500;
+  const radiusM = me?.office.radiusM || 120;
   const gpsAccurate = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= maxAcc);
-  const inZone = Boolean(
-    me && gps && gpsAccurate && meters != null
-    && meters <= radiusM
-    && meters + Math.min(gps.accuracy * 0.5, 45) <= radiusM,
+  const nearOffice = Boolean(
+    meters != null && (
+      meters <= radiusM
+      || (gpsAccurate && gps!.accuracy <= 80 && meters <= radiusM + 20)
+    ),
   );
+  // Server bilan bir xil: radius ichidagi nuqta — ofisda (accuracy doirasini majburlamaymiz).
+  const inZone = Boolean(me && gps && gpsAccurate && nearOffice);
   const geoStatus = !me
     ? t('common.loading')
     : gpsState === 'denied'
@@ -289,7 +292,9 @@ export function OfficePage() {
           ? t('office.gpsWait')
           : inZone
             ? t('office.distHere', { m: Math.round(meters || 0) })
-            : t('office.distFar', { m: Math.round(meters || 0) });
+            : nearOffice && !gpsAccurate
+              ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
+              : t('office.distFar', { m: Math.round(meters || 0) });
   const canPunch = Boolean(inZone && gps && !busy);
   const worked = me?.today?.inAt
     ? (me.today.outAt ? me.today.workedMs : Date.now() - Date.parse(me.today.inAt))
@@ -571,7 +576,11 @@ export function OfficePage() {
         <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
           <b>→ {!canPunch ? t('office.locked') : ctaNeedCam ? t('office.camAsk') : t('office.continue')}</b>
           <small>{!canPunch
-            ? (gpsState === 'denied' || !gps ? t('office.lockedGps') : inZone ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) }) : t('office.distFar', { m: Math.round(meters || 0) }))
+            ? (gpsState === 'denied' || !gps
+              ? t('office.lockedGps')
+              : nearOffice && !gpsAccurate
+                ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
+                : t('office.distFar', { m: Math.round(meters || 0) }))
             : ctaNeedCam ? t('office.camBody') : (method === 'face' ? t('office.faceGo') : t('office.qrHint'))}</small>
         </button>
       </div>
