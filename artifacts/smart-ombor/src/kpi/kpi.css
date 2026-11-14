@@ -1,59 +1,32 @@
 .kpi-page { display: grid; gap: 1rem; }
 .kpi-period-wrap {
-  display: grid; gap: .75rem;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #e2e8f0; border-radius: 16px; padding: .9rem 1rem 1rem;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
-}
-.kpi-period-top {
-  display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between;
-}
-.kpi-period-title {
-  font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #64748b;
-}
-.kpi-period-active {
-  margin-top: .15rem; font-size: .95rem; font-weight: 750; color: #0f172a;
-}
-.kpi-period-groups {
   display: grid; gap: .55rem;
-}
-.kpi-period-group {
-  display: grid; grid-template-columns: 56px 1fr; gap: .55rem; align-items: center;
-}
-.kpi-period-group-label {
-  font-size: .72rem; font-weight: 800; color: #94a3b8; letter-spacing: .03em; text-transform: uppercase;
+  background: #fff; border: 1px solid #e4e8ee; border-radius: 14px; padding: .7rem .85rem;
 }
 .kpi-period-presets {
-  display: flex; flex-wrap: wrap; gap: .35rem;
-  padding: .28rem; border-radius: 12px; background: #eef2f7;
+  display: flex; flex-wrap: wrap; gap: .3rem;
 }
 .kpi-period-presets button {
-  border: 0; background: transparent; color: #475569;
-  border-radius: 999px; padding: .42rem .78rem; font-size: .82rem; font-weight: 700; cursor: pointer;
-  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  border: 1px solid #e2e8f0; background: #f8fafc; color: #475569;
+  border-radius: 999px; padding: .32rem .68rem; font-size: .8rem; font-weight: 650; cursor: pointer;
 }
-.kpi-period-presets button:hover { background: rgba(255,255,255,.7); color: #0f172a; }
+.kpi-period-presets button:hover { border-color: #93c5fd; color: #1d4ed8; }
 .kpi-period-presets button.is-on {
-  background: #0f172a; color: #fff;
-  box-shadow: 0 6px 14px rgba(15, 23, 42, .18);
+  background: #0f172a; border-color: #0f172a; color: #fff;
 }
 .kpi-period-bar {
   display: flex; flex-wrap: wrap; gap: .65rem; align-items: end;
-  padding-top: .15rem; border-top: 1px dashed #e2e8f0;
 }
 .kpi-period-bar label { display: grid; gap: .25rem; font-size: .78rem; font-weight: 600; color: #64748b; }
 .kpi-period-bar input[type="date"] {
-  border: 1px solid #cbd5e1; border-radius: 10px; padding: .5rem .65rem; font-size: .92rem; color: #0f172a; background: #fff;
-  min-width: 10.5rem;
+  border: 1px solid #cbd5e1; border-radius: 8px; padding: .45rem .55rem; font-size: .92rem; color: #0f172a; background: #f8fafc;
 }
 .kpi-period-dash {
-  align-self: center; margin-bottom: .15rem; color: #94a3b8; font-weight: 700;
+  align-self: center; margin-bottom: .2rem; color: #94a3b8; font-weight: 700;
 }
+.kpi-period-bar .btn { margin-left: auto; }
 .kpi-card-hint {
   color: #64748b; font-size: .72rem; font-weight: 600; line-height: 1.25;
-}
-@media (max-width: 720px) {
-  .kpi-period-group { grid-template-columns: 1fr; gap: .3rem; }
 }
 .kpi-row-click { cursor: pointer; }
 .kpi-row-click:hover { background: #f8fafc; }

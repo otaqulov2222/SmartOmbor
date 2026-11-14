@@ -204,25 +204,18 @@ async function downloadExcel(kind: string, label: string) {
 
 type PeriodPreset = 'today' | 'yesterday' | 'week' | 'last_week' | 'month' | 'last_month' | 'days7' | 'days30' | 'quarter' | 'year' | 'custom';
 
-const PERIOD_PRESETS: Array<{ id: PeriodPreset; label: string; group: 'kun' | 'hafta' | 'oy' | 'boshqa' }> = [
-  { id: 'today', label: 'Bugun', group: 'kun' },
-  { id: 'yesterday', label: 'Kecha', group: 'kun' },
-  { id: 'days7', label: '7 kun', group: 'kun' },
-  { id: 'week', label: 'Shu hafta', group: 'hafta' },
-  { id: 'last_week', label: 'O‘tgan hafta', group: 'hafta' },
-  { id: 'month', label: 'Shu oy', group: 'oy' },
-  { id: 'last_month', label: 'O‘tgan oy', group: 'oy' },
-  { id: 'days30', label: '30 kun', group: 'oy' },
-  { id: 'quarter', label: 'Chorak', group: 'boshqa' },
-  { id: 'year', label: 'Yil', group: 'boshqa' },
-  { id: 'custom', label: 'Maxsus', group: 'boshqa' },
-];
-
-const PERIOD_GROUPS: Array<{ id: 'kun' | 'hafta' | 'oy' | 'boshqa'; title: string }> = [
-  { id: 'kun', title: 'Kun' },
-  { id: 'hafta', title: 'Hafta' },
-  { id: 'oy', title: 'Oy' },
-  { id: 'boshqa', title: 'Boshqa' },
+const PERIOD_PRESETS: Array<{ id: PeriodPreset; label: string }> = [
+  { id: 'today', label: 'Bugun' },
+  { id: 'yesterday', label: 'Kecha' },
+  { id: 'week', label: 'Shu hafta' },
+  { id: 'last_week', label: 'O‘tgan hafta' },
+  { id: 'month', label: 'Shu oy' },
+  { id: 'last_month', label: 'O‘tgan oy' },
+  { id: 'days7', label: '7 kun' },
+  { id: 'days30', label: '30 kun' },
+  { id: 'quarter', label: 'Chorak' },
+  { id: 'year', label: 'Yil' },
+  { id: 'custom', label: 'Maxsus' },
 ];
 
 function tashkentToday() {
@@ -313,37 +306,20 @@ function PeriodBar({
   onFrom: (v: string) => void; onTo: (v: string) => void;
   onSync: () => void; syncing: boolean;
 }) {
-  const activeLabel = PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus';
   return (
     <div className="kpi-period-wrap">
-      <div className="kpi-period-top">
-        <div>
-          <div className="kpi-period-title">Hisobot davri</div>
-          <div className="kpi-period-active">{activeLabel} · {from} — {to}</div>
-        </div>
-        <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
-          <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
-        </button>
-      </div>
-      <div className="kpi-period-groups" role="tablist" aria-label="Davr">
-        {PERIOD_GROUPS.map((g) => (
-          <div key={g.id} className="kpi-period-group">
-            <span className="kpi-period-group-label">{g.title}</span>
-            <div className="kpi-period-presets">
-              {PERIOD_PRESETS.filter((p) => p.group === g.id).map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={preset === p.id}
-                  className={preset === p.id ? 'is-on' : ''}
-                  onClick={() => onPreset(p.id)}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
+      <div className="kpi-period-presets" role="tablist" aria-label="Davr">
+        {PERIOD_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="tab"
+            aria-selected={preset === p.id}
+            className={preset === p.id ? 'is-on' : ''}
+            onClick={() => onPreset(p.id)}
+          >
+            {p.label}
+          </button>
         ))}
       </div>
       <div className="kpi-period-bar">
@@ -356,6 +332,9 @@ function PeriodBar({
           <span>Gacha</span>
           <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
         </label>
+        <button type="button" className="btn btn-primary" disabled={syncing} onClick={onSync}>
+          <RefreshCw size={15} /> {syncing ? 'MoySkladdan olinmoqda…' : 'MS dan yangilash'}
+        </button>
       </div>
     </div>
   );
