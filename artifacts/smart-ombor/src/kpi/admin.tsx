@@ -143,6 +143,7 @@ type AgentSettlement = {
   period: { from: string; to: string }; periodLabel?: string;
   customers: number; income: string; expense: string; opening: string; closing: string;
   kpiTotal?: string;
+  msStatus?: 'ready' | 'stale' | 'warming';
   rows: Array<{ id: string; name: string; opening: string; income: string; expense: string; closing: string }>;
 };
 type Customer = {
@@ -376,7 +377,14 @@ export function KpiDashboardPage() {
     queryFn: () => kpiFetch<AgentSettlement>(
       `/kpi/agents/${openAgentId}/settlements?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`,
     ),
+    refetchInterval: (query) => {
+      const st = query.state.data?.msStatus;
+      if (st === 'warming' || st === 'stale') return 1200;
+      return false;
+    },
   });
+  const openAgent = sorted.find((a) => a.id === openAgentId);
+  const detailWarming = detail.data?.msStatus === 'warming' || (detail.isFetching && !(detail.data?.rows?.length));
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -454,9 +462,9 @@ export function KpiDashboardPage() {
           <div className="kpi-drawer" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="kpi-drawer-head">
               <div>
-                <h3>{detail.data?.agentName || sorted.find((a) => a.id === openAgentId)?.fullName || 'Agent'}</h3>
+                <h3>{detail.data?.agentName || openAgent?.fullName || 'Agent'}</h3>
                 <p className="kpi-muted">
-                  MS teg: <b>{detail.data?.folderName || (detail.isLoading ? '…' : 'topilmadi')}</b>
+                  MS teg: <b>{detail.data?.folderName || openAgent?.folderName || (detail.isLoading ? '…' : 'topilmadi')}</b>
                   {' · '}Взаиморасчеты · {from} — {to}
                 </p>
               </div>
@@ -472,17 +480,16 @@ export function KpiDashboardPage() {
                 onSync={() => sync.mutate()}
               />
             </div>
-            {detail.isLoading ? <p className="kpi-muted">MoySklad hujjatlari yuklanmoqda…</p> : null}
+            {detailWarming ? <p className="kpi-muted">MS fonda yangilanmoqda — jadval ochiq qoladi…</p> : null}
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
-            {detail.data && !detail.isLoading ? (
-              <>
+            <>
                 <div className="kpi-grid" style={{ marginBottom: '.75rem' }}>
-                  <Card label="Mijozlar" value={detail.data.customers} tone="slate" />
-                  <Card label="Kirim (Приход)" value={uzs(detail.data.income)} tone="ok" />
-                  <Card label="Chiqim (Расход)" value={uzs(detail.data.expense)} tone="blue" />
-                  <Card label="KPI (komissiya)" value={uzs(detail.data.kpiTotal || 0)} tone="purple" />
+                  <Card label="Mijozlar" value={detail.data?.customers ?? openAgent?.customers ?? '…'} tone="slate" />
+                  <Card label="Kirim (Приход)" value={uzs(detail.data?.income ?? openAgent?.paidTotal ?? 0)} tone="ok" />
+                  <Card label="Chiqim (Расход)" value={uzs(detail.data?.expense ?? openAgent?.salesTotal ?? 0)} tone="blue" />
+                  <Card label="KPI (komissiya)" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />
                 </div>
-                {!detail.data.folderName ? (
+                {detail.data && !detail.data.folderName && detail.data.msStatus === 'ready' ? (
                   <p className="kpi-error">MS da bu agent uchun teg topilmadi — mijozlar ochilmaydi.</p>
                 ) : null}
                 <div className="kpi-table-wrap" style={{ maxHeight: '52vh' }}>
@@ -497,12 +504,14 @@ export function KpiDashboardPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {detail.data.rows.length === 0 ? (
+                      {(detail.data?.rows?.length || 0) === 0 ? (
                         <tr>
-                          <td colSpan={5} className="kpi-muted">Bu davrda mijoz yo‘q yoki teg bo‘sh.</td>
+                          <td colSpan={5} className="kpi-muted">
+                            {detailWarming ? 'Hujjatlar fonda hisoblanmoqda…' : 'Bu davrda mijoz yo‘q yoki teg bo‘sh.'}
+                          </td>
                         </tr>
                       ) : null}
-                      {detail.data.rows.map((row) => (
+                      {(detail.data?.rows || []).map((row) => (
                         <tr key={row.id}>
                           <td data-label="Kontragent"><b>{row.name}</b></td>
                           <td data-label="Boshlang‘ich">{uzs(row.opening)}</td>
@@ -512,21 +521,20 @@ export function KpiDashboardPage() {
                         </tr>
                       ))}
                     </tbody>
-                    {detail.data.rows.length > 0 ? (
+                    {(detail.data?.rows?.length || 0) > 0 ? (
                       <tfoot>
                         <tr>
-                          <td><b>Jami ({detail.data.customers})</b></td>
-                          <td><b>{uzs(detail.data.opening)}</b></td>
-                          <td><b>{uzs(detail.data.income)}</b></td>
-                          <td><b>{uzs(detail.data.expense)}</b></td>
-                          <td><b>{uzs(detail.data.closing)}</b></td>
+                          <td><b>Jami ({detail.data?.customers})</b></td>
+                          <td><b>{uzs(detail.data?.opening)}</b></td>
+                          <td><b>{uzs(detail.data?.income)}</b></td>
+                          <td><b>{uzs(detail.data?.expense)}</b></td>
+                          <td><b>{uzs(detail.data?.closing)}</b></td>
                         </tr>
                       </tfoot>
                     ) : null}
                   </table>
                 </div>
               </>
-            ) : null}
           </div>
         </div>
       ) : null}

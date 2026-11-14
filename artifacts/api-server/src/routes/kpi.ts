@@ -508,13 +508,22 @@ router.get("/kpi/agents/:id/settlements", requireKpiAdmin(), async (req, res, ne
       res.status(404).json({ error: "Agent topilmadi." });
       return;
     }
-    const data = await getAgentMsSettlements({
-      login: agent.login,
-      fullName: agent.fullName,
-      from: period.from,
-      to: period.to,
-    });
-    const kpiTotal = await agentPeriodKpi(agent.id, period.from, period.to);
+    const allAgents = await db.select().from(kpiAgentsTable);
+    const warmAgents = allAgents
+      .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
+      .map((a) => ({ login: a.login, fullName: a.fullName }));
+    const [data, kpiTotal] = await Promise.all([
+      getAgentMsSettlements(
+        {
+          login: agent.login,
+          fullName: agent.fullName,
+          from: period.from,
+          to: period.to,
+        },
+        warmAgents,
+      ),
+      agentPeriodKpi(agent.id, period.from, period.to),
+    ]);
     res.json({
       ...data,
       agentId: agent.id,

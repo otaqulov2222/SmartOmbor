@@ -190,10 +190,48 @@ async function listTagCounterparties(tag: string) {
   return out;
 }
 
+function movementsPath(from: string, to: string) {
+  return join(CACHE_DIR, `mov-${from}_${to}.json`);
+}
+
+function balancesPath(from: string, to: string) {
+  return join(CACHE_DIR, `bal-${from}_${to}.json`);
+}
+
+function readDiskMap(path: string): { at: number; entries: Record<string, unknown> } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { at: number; entries: Record<string, unknown> };
+    if (!parsed?.at || !parsed.entries) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDiskMap(path: string, entries: Record<string, unknown>) {
+  try {
+    ensureCacheDir();
+    writeFileSync(path, JSON.stringify({ at: Date.now(), entries }), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 async function loadPeriodMovements(from: string, to: string) {
   const key = `${from}:${to}`;
   const hit = movementCache.get(key);
   if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
+
+  const disk = readDiskMap(movementsPath(from, to));
+  if (disk && Date.now() - disk.at < FRESH_MS) {
+    const byCp = new Map<string, { credit: number; debit: number }>();
+    for (const [id, v] of Object.entries(disk.entries)) {
+      const row = v as { credit?: number; debit?: number };
+      byCp.set(id, { credit: Number(row.credit || 0), debit: Number(row.debit || 0) });
+    }
+    movementCache.set(key, { at: disk.at, byCp });
+    return byCp;
+  }
 
   const byCp = new Map<string, { credit: number; debit: number }>();
   const bump = (id: string, side: "credit" | "debit", sum: number) => {
@@ -204,8 +242,9 @@ async function loadPeriodMovements(from: string, to: string) {
   };
 
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-  const creditEntities = ["paymentin", "cashin", "salesreturn", "supply"] as const;
-  const debitEntities = ["demand", "paymentout", "cashout", "purchasereturn"] as const;
+  // Asosiy hujjatlar (MS взаиморасчеты og‘irligi shu yerda) — tezroq skan.
+  const creditEntities = ["paymentin", "cashin", "salesreturn"] as const;
+  const debitEntities = ["demand", "paymentout", "cashout"] as const;
 
   const scan = async (entity: string, side: "credit" | "debit") => {
     for (let offset = 0; offset < 20_000; offset += PAGE) {
@@ -224,7 +263,11 @@ async function loadPeriodMovements(from: string, to: string) {
     ...debitEntities.map((e) => scan(e, "debit")),
   ]);
 
-  movementCache.set(key, { at: Date.now(), byCp });
+  const at = Date.now();
+  movementCache.set(key, { at, byCp });
+  const entries: Record<string, { credit: number; debit: number }> = {};
+  for (const [id, v] of byCp) entries[id] = v;
+  writeDiskMap(movementsPath(from, to), entries);
   return byCp;
 }
 
@@ -232,6 +275,14 @@ async function loadBalances(from: string, to: string) {
   const key = `${from}:${to}`;
   const hit = balanceCache.get(key);
   if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
+
+  const disk = readDiskMap(balancesPath(from, to));
+  if (disk && Date.now() - disk.at < FRESH_MS) {
+    const byCp = new Map<string, number>();
+    for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
+    balanceCache.set(key, { at: disk.at, byCp });
+    return byCp;
+  }
 
   const byCp = new Map<string, number>();
   const momentFrom = `${from} 00:00:00`;
@@ -249,7 +300,11 @@ async function loadBalances(from: string, to: string) {
     }
     if (rows.length < PAGE) break;
   }
-  balanceCache.set(key, { at: Date.now(), byCp });
+  const at = Date.now();
+  balanceCache.set(key, { at, byCp });
+  const entries: Record<string, number> = {};
+  for (const [id, v] of byCp) entries[id] = v;
+  writeDiskMap(balancesPath(from, to), entries);
   return byCp;
 }
 
@@ -411,10 +466,12 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
     summaryMem.delete(key);
     movementCache.delete(key);
     balanceCache.delete(key);
-    try {
-      unlinkSync(summaryPath(from, to));
-    } catch {
-      /* ignore */
+    for (const p of [summaryPath(from, to), movementsPath(from, to), balancesPath(from, to)]) {
+      try {
+        unlinkSync(p);
+      } catch {
+        /* ignore */
+      }
     }
     return;
   }
@@ -477,53 +534,84 @@ export async function getAgentsMsSettlementSummaries(
   return { map: out, status: "warming" };
 }
 
-export async function getAgentMsSettlements(input: {
-  login: string;
-  fullName: string;
-  from: string;
-  to: string;
-}): Promise<AgentSettlement> {
+/** Detail: hech qachon MS skanini kutmaydi — cache yoki warming. */
+export async function getAgentMsSettlements(
+  input: {
+    login: string;
+    fullName: string;
+    from: string;
+    to: string;
+  },
+  warmAgents?: Array<{ login: string; fullName: string }>,
+): Promise<AgentSettlement & { msStatus: MsSettleStatus }> {
   const empty = emptySettlement(input);
-  if (!moyskladConfigured()) return empty;
+  const agentsForWarm = warmAgents?.length ? warmAgents : [{ login: input.login, fullName: input.fullName }];
+  if (!moyskladConfigured()) return { ...empty, msStatus: "ready" };
 
   const cacheKey = `${foldName(input.login)}:${input.from}:${input.to}`;
   const hit = settlementsCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < FRESH_MS) return hit.data;
+  if (hit && Date.now() - hit.at < FRESH_MS) return { ...hit.data, msStatus: "ready" };
 
   const summary = peekSummary(input.from, input.to);
   const fromSummary = summary?.byLogin[input.login.toLowerCase()];
-  if (fromSummary && summary && Date.now() - summary.at < FRESH_MS) {
-    settlementsCache.set(cacheKey, { at: summary.at, data: fromSummary });
-    return fromSummary;
-  }
-  if (fromSummary && summary && Date.now() - summary.at < STALE_MS) {
-    void warmMsSettlements([{ login: input.login, fullName: input.fullName }], input.from, input.to, true);
-    return fromSummary;
-  }
+  const age = summary ? Date.now() - summary.at : Infinity;
 
-  // Birinchi ochilish — shu agent uchun to‘liq hisob (davr skani cache bo‘ladi).
-  const tag = await resolveAgentTag(input.login, input.fullName);
-  if (!tag) {
-    settlementsCache.set(cacheKey, { at: Date.now(), data: empty });
-    return empty;
+  if (fromSummary && age < FRESH_MS) {
+    settlementsCache.set(cacheKey, { at: summary!.at, data: fromSummary });
+    return { ...fromSummary, msStatus: "ready" };
+  }
+  if (fromSummary && age < STALE_MS) {
+    void warmMsSettlements(agentsForWarm, input.from, input.to, true);
+    return { ...fromSummary, msStatus: "stale" };
   }
 
-  const [group, movements, balances] = await Promise.all([
-    listTagCounterparties(tag),
-    loadPeriodMovements(input.from, input.to),
-    loadBalances(input.from, input.to),
-  ]);
+  // RAM/disk movement+balance bo‘lsa — MS kutmasdan hisobla.
+  const periodKey = `${input.from}:${input.to}`;
+  let movHit = movementCache.get(periodKey);
+  let balHit = balanceCache.get(periodKey);
+  if (!movHit || Date.now() - movHit.at >= FRESH_MS) {
+    const disk = readDiskMap(movementsPath(input.from, input.to));
+    if (disk && Date.now() - disk.at < FRESH_MS) {
+      const byCp = new Map<string, { credit: number; debit: number }>();
+      for (const [id, v] of Object.entries(disk.entries)) {
+        const row = v as { credit?: number; debit?: number };
+        byCp.set(id, { credit: Number(row.credit || 0), debit: Number(row.debit || 0) });
+      }
+      movHit = { at: disk.at, byCp };
+      movementCache.set(periodKey, movHit);
+    }
+  }
+  if (!balHit || Date.now() - balHit.at >= FRESH_MS) {
+    const disk = readDiskMap(balancesPath(input.from, input.to));
+    if (disk && Date.now() - disk.at < FRESH_MS) {
+      const byCp = new Map<string, number>();
+      for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
+      balHit = { at: disk.at, byCp };
+      balanceCache.set(periodKey, balHit);
+    }
+  }
+  if (movHit && balHit && Date.now() - movHit.at < FRESH_MS && Date.now() - balHit.at < FRESH_MS) {
+    const tag = await resolveAgentTag(input.login, input.fullName);
+    const group = tag ? await listTagCounterparties(tag) : [];
+    const data = buildSettlement({
+      login: input.login,
+      fullName: input.fullName,
+      from: input.from,
+      to: input.to,
+      tag,
+      group,
+      movements: movHit.byCp,
+      balances: balHit.byCp,
+    });
+    settlementsCache.set(cacheKey, { at: Date.now(), data });
+    return { ...data, msStatus: "ready" };
+  }
 
-  const data = buildSettlement({
-    login: input.login,
-    fullName: input.fullName,
-    from: input.from,
-    to: input.to,
-    tag,
-    group,
-    movements,
-    balances,
-  });
-  settlementsCache.set(cacheKey, { at: Date.now(), data });
-  return data;
+  void warmMsSettlements(agentsForWarm, input.from, input.to, true);
+  const tag = PRIMARY_TAG[foldName(input.login)] || null;
+  return {
+    ...empty,
+    folderName: tag,
+    msStatus: "warming",
+  };
 }
