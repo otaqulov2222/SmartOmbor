@@ -67,16 +67,33 @@
 .kpi-period-bar {
   display: flex; flex-wrap: wrap; gap: .55rem; align-items: end; flex: 0 1 auto;
 }
-.kpi-period-bar label { display: grid; gap: .22rem; font-size: .74rem; font-weight: 700; color: #64748b; }
+.kpi-period-bar label,
+.kpi-date-field { display: grid; gap: .22rem; font-size: .74rem; font-weight: 700; color: #64748b; }
+.kpi-date-combo {
+  position: relative;
+  display: flex; align-items: center; gap: 0;
+  min-width: 11.5rem;
+}
 .kpi-period-bar input[type="date"],
 .kpi-period-bar input.kpi-date-dmy {
-  border: 1px solid #cbd5e1; border-radius: 10px; padding: .48rem .6rem;
-  font-size: .9rem; color: #0f172a; background: #fff; min-width: 9.5rem;
+  border: 1px solid #cbd5e1; border-radius: 10px; padding: .48rem 2.2rem .48rem .6rem;
+  font-size: .9rem; color: #0f172a; background: #fff; width: 100%; min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 .kpi-period-bar input[type="date"]:focus,
 .kpi-period-bar input.kpi-date-dmy:focus {
   outline: none; border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59, 130, 246, .15);
+}
+.kpi-date-cal {
+  position: absolute; right: .2rem; top: 50%; transform: translateY(-50%);
+  width: 2rem; height: 2rem; border: 0; border-radius: 8px;
+  background: transparent; color: #64748b; cursor: pointer;
+  display: grid; place-items: center;
+}
+.kpi-date-cal:hover { color: #1d4ed8; background: #eff6ff; }
+.kpi-date-native {
+  position: absolute; inset: 0; opacity: 0; pointer-events: none;
+  width: 100%; height: 100%; border: 0; padding: 0; margin: 0;
 }
 .kpi-period-dash {
   align-self: center; margin-bottom: .15rem; color: #94a3b8; font-weight: 700;

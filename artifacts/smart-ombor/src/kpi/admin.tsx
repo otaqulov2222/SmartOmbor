@@ -344,36 +344,67 @@ function DateDmyInput({
   value: string; onChange: (iso: string) => void; label: string;
 }) {
   const [text, setText] = useState(() => isoToDmy(value));
+  const pickerRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     setText(isoToDmy(value));
   }, [value]);
+  const openPicker = () => {
+    const el = pickerRef.current;
+    if (!el) return;
+    try {
+      if (typeof el.showPicker === 'function') el.showPicker();
+      else el.click();
+    } catch {
+      el.click();
+    }
+  };
   return (
-    <label>
+    <label className="kpi-date-field">
       <span>{label}</span>
-      <input
-        type="text"
-        inputMode="numeric"
-        className="kpi-date-dmy"
-        placeholder="DD/MM/YYYY"
-        lang="uz"
-        autoComplete="off"
-        value={text}
-        onChange={(e) => {
-          const next = e.target.value;
-          setText(next);
-          const iso = dmyToIso(next);
-          if (iso) onChange(iso);
-        }}
-        onBlur={() => {
-          const iso = dmyToIso(text);
-          if (iso) {
+      <div className="kpi-date-combo">
+        <input
+          type="text"
+          inputMode="numeric"
+          className="kpi-date-dmy"
+          placeholder="DD/MM/YYYY"
+          lang="uz"
+          autoComplete="off"
+          value={text}
+          onChange={(e) => {
+            const next = e.target.value;
+            setText(next);
+            const iso = dmyToIso(next);
+            if (iso) onChange(iso);
+          }}
+          onBlur={() => {
+            const iso = dmyToIso(text);
+            if (iso) {
+              onChange(iso);
+              setText(isoToDmy(iso));
+            } else {
+              setText(isoToDmy(value));
+            }
+          }}
+        />
+        <button type="button" className="kpi-date-cal" aria-label="Kalendardan tanlash" onClick={openPicker}>
+          <CalendarRange size={15} />
+        </button>
+        <input
+          ref={pickerRef}
+          type="date"
+          className="kpi-date-native"
+          lang="en-GB"
+          value={value}
+          onChange={(e) => {
+            const iso = e.target.value;
+            if (!iso) return;
             onChange(iso);
             setText(isoToDmy(iso));
-          } else {
-            setText(isoToDmy(value));
-          }
-        }}
-      />
+          }}
+          tabIndex={-1}
+          aria-hidden
+        />
+      </div>
     </label>
   );
 }
