@@ -61,8 +61,9 @@ const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** v4: ochilishni report snapshot bilan buzmaslik (v3 Kirim=Chiqim qilardi). */
-const CACHE_VERSION = "v4";
+/** v5: to‘liq hujjat skani (xato=bo‘sh deb to‘xtatmaslik) + agent filter. */
+const CACHE_VERSION = "v5";
+const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -278,42 +279,107 @@ async function loadClosingBalances(from: string, to: string) {
   return byCp;
 }
 
-/** MS rasmiy hujjatlar bo‘yicha davr aylanmasi (Приход / Расход). */
-async function scanMovementsFromDocuments(from: string, to: string) {
-  const byCp = new Map<string, { credit: number; debit: number }>();
-  const bump = (id: string, side: "credit" | "debit", sum: number) => {
-    if (!id || !Number.isFinite(sum) || sum === 0) return;
-    const cur = byCp.get(id) || { credit: 0, debit: 0 };
-    cur[side] += sum;
-    byCp.set(id, cur);
-  };
-
-  // applicable filterini queryda majburiy qilmaymiz — ba'zi entitylarda 403/bo‘sh qaytaradi.
-  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-
-  const scan = async (entity: string, side: "credit" | "debit") => {
-    for (let offset = 0; offset < 50_000; offset += PAGE) {
-      const page = await moysklad<{ rows?: MsDoc[] }>(
-        `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(moment)}`,
-      ).catch(() => ({ rows: [] as MsDoc[] }));
-      const rows = page.rows || [];
-      if (!rows.length) break;
-      for (const row of rows) {
-        if (row.applicable === false) continue;
-        bump(docAgentId(row), side, Number(row.sum || 0));
+/** Bitta entity — meta.size bo‘yicha to‘liq; xato bo‘lsa qayta urinadi, bo‘sh deb to‘xtamaydi. */
+async function fetchEntityDocs(entity: string, filter: string): Promise<MsDoc[]> {
+  const out: MsDoc[] = [];
+  let total = Number.POSITIVE_INFINITY;
+  for (let offset = 0; offset < total && offset < 100_000; offset += PAGE) {
+    let lastErr: unknown;
+    let page: { rows?: MsDoc[]; meta?: { size?: number } } | null = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        page = await moysklad<{ rows?: MsDoc[]; meta?: { size?: number } }>(
+          `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(filter)}`,
+        );
+        lastErr = undefined;
+        break;
+      } catch (error) {
+        lastErr = error;
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
       }
-      if (rows.length < PAGE) break;
     }
-  };
+    if (!page) {
+      if (lastErr) throw lastErr;
+      break;
+    }
+    if (Number.isFinite(Number(page.meta?.size))) total = Number(page.meta?.size);
+    const rows = page.rows || [];
+    out.push(...rows);
+    if (!rows.length) break;
+    if (offset + rows.length >= total) break;
+  }
+  return out;
+}
 
-  await Promise.all([
-    ...CREDIT_ENTITIES.map((e) => scan(e, "credit")),
-    ...DEBIT_ENTITIES.map((e) => scan(e, "debit")),
-  ]);
+function bumpMovement(
+  byCp: Map<string, { credit: number; debit: number }>,
+  id: string,
+  side: "credit" | "debit",
+  sum: number,
+) {
+  if (!id || !Number.isFinite(sum) || sum === 0) return;
+  const cur = byCp.get(id) || { credit: 0, debit: 0 };
+  cur[side] += sum;
+  byCp.set(id, cur);
+}
+
+/** Global davr skani — ketma-ket (429 dan saqlanish). */
+async function scanMovementsGlobal(from: string, to: string) {
+  const byCp = new Map<string, { credit: number; debit: number }>();
+  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
+  for (const entity of CREDIT_ENTITIES) {
+    const rows = await fetchEntityDocs(entity, moment);
+    for (const row of rows) {
+      if (row.applicable === false) continue;
+      bumpMovement(byCp, docAgentId(row), "credit", Number(row.sum || 0));
+    }
+  }
+  for (const entity of DEBIT_ENTITIES) {
+    const rows = await fetchEntityDocs(entity, moment);
+    for (const row of rows) {
+      if (row.applicable === false) continue;
+      bumpMovement(byCp, docAgentId(row), "debit", Number(row.sum || 0));
+    }
+  }
   return byCp;
 }
 
-async function loadPeriodMovements(from: string, to: string) {
+/**
+ * Agent TEGidagi kontragentlar uchun to‘lovlarni agent= filter bilan qayta o‘qiydi.
+ * Global skan o‘tkazib yuborgan paymentin/cashin larni to‘ldiradi (MS Приход parity).
+ */
+async function enrichCreditsForCounterparties(
+  byCp: Map<string, { credit: number; debit: number }>,
+  cpIds: string[],
+  from: string,
+  to: string,
+) {
+  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
+  // Faqat kirim tomoni — chiqim allaqachon mos kelgan.
+  const creditOnly = ["paymentin", "cashin", "supply", "commissionreportin"] as const;
+  for (const cpId of cpIds) {
+    const agentFilter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
+    let credit = 0;
+    for (const entity of creditOnly) {
+      const rows = await fetchEntityDocs(entity, agentFilter);
+      for (const row of rows) {
+        if (row.applicable === false) continue;
+        credit += Number(row.sum || 0);
+      }
+    }
+    if (!credit) continue;
+    const cur = byCp.get(cpId) || { credit: 0, debit: 0 };
+    // Agent-filter aniqroq — shu kontragent uchun credit ni almashtiramiz (kamaytirib yubormaymiz).
+    if (credit > cur.credit) cur.credit = credit;
+    byCp.set(cpId, cur);
+  }
+}
+
+async function loadPeriodMovements(
+  from: string,
+  to: string,
+  focusCpIds?: string[],
+) {
   const key = `${from}:${to}`;
   const hit = movementCache.get(key);
   if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
@@ -329,7 +395,8 @@ async function loadPeriodMovements(from: string, to: string) {
     return byCp;
   }
 
-  const byCp = await scanMovementsFromDocuments(from, to);
+  const byCp = await scanMovementsGlobal(from, to);
+  if (focusCpIds?.length) await enrichCreditsForCounterparties(byCp, focusCpIds, from, to);
   const at = Date.now();
   movementCache.set(key, { at, byCp });
   const entries: Record<string, { credit: number; debit: number }> = {};
@@ -436,11 +503,6 @@ async function computeAll(
   from: string,
   to: string,
 ) {
-  const [movements, closings] = await Promise.all([
-    loadPeriodMovements(from, to),
-    loadClosingBalances(from, to),
-  ]);
-
   const tags = await Promise.all(
     agents.map(async (agent) => ({
       agent,
@@ -450,6 +512,22 @@ async function computeAll(
 
   const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
   await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
+
+  const focusCpIds: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of uniqueTags) {
+    for (const cp of await listTagCounterparties(tag)) {
+      if (seen.has(cp.id)) continue;
+      seen.add(cp.id);
+      focusCpIds.push(cp.id);
+    }
+  }
+
+  // Avval guruhlar, keyin aylanma — agent filter bilan Kirim to‘liq bo‘lsin.
+  const [movements, closings] = await Promise.all([
+    loadPeriodMovements(from, to, focusCpIds),
+    loadClosingBalances(from, to),
+  ]);
 
   const byLogin: Record<string, AgentSettlement> = {};
   const at = Date.now();
