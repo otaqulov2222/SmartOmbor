@@ -540,7 +540,7 @@ export function KpiDashboardPage() {
             {detailWarming ? <p className="kpi-muted">MS fonda yangilanmoqda — jadval ochiq qoladi…</p> : null}
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
-                <div className="kpi-grid" style={{ marginBottom: '.75rem' }}>
+                <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>
                   <Card label="Mijozlar" value={detail.data?.customers ?? openAgent?.customers ?? '…'} tone="slate" />
                   <Card label="Kirim (Приход)" value={uzs(detail.data?.income ?? openAgent?.paidTotal ?? 0)} tone="ok" />
                   <Card label="Chiqim (Расход)" value={uzs(detail.data?.expense ?? openAgent?.salesTotal ?? 0)} tone="blue" />
