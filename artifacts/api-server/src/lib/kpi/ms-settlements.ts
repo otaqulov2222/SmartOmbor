@@ -67,10 +67,10 @@ const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v12: teg bo‘yicha CP — filter yiqilsa to‘liq indeks; bo‘sh natija cache’lanmaydi.
- * Agent-by-agent; UI fallback yolg‘on Chiqim ko‘rsatmasin.
+ * v13: Kirim = davr bo‘yicha TO‘LIQ credit skan (cashin/paymentin yo‘qolmasin);
+ * Chiqim = agent= (allaqachon 1:1). Cache versiyasi yangi — eski noto‘g‘ri Kirim o‘chadi.
  */
-const CACHE_VERSION = "v12";
+const CACHE_VERSION = "v13";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CREDIT_ENRICH_CONCURRENCY = 4;
 const MS_FAST = { maxAttempts: 3 } as const;
@@ -160,23 +160,8 @@ function readDiskSummaryFile(path: string) {
 }
 
 function readDiskSummary(from: string, to: string) {
-  const exact = readDiskSummaryFile(summaryPath(from, to));
-  if (exact) return exact;
-  // Oldingi versiya cache — darhol ko‘rsatish (nol kutmaslik).
-  try {
-    ensureCacheDir();
-    const needle = `_${from}_${to}.json`;
-    let best: { at: number; byLogin: Record<string, AgentSettlement> } | null = null;
-    for (const name of readdirSync(CACHE_DIR)) {
-      if (!name.startsWith("settlements-") || !name.endsWith(needle)) continue;
-      const parsed = readDiskSummaryFile(join(CACHE_DIR, name));
-      if (!parsed) continue;
-      if (!best || parsed.at > best.at) best = parsed;
-    }
-    return best;
-  } catch {
-    return null;
-  }
+  // Faqat JORIY CACHE_VERSION — eski noto‘g‘ri Kirim qaytib kelmasin.
+  return readDiskSummaryFile(summaryPath(from, to));
 }
 
 function writeDiskSummary(from: string, to: string, byLogin: Record<string, AgentSettlement>) {
@@ -539,21 +524,54 @@ function persistMovements(from: string, to: string, byCp: Map<string, { credit: 
   writeDiskMap(movementsPath(from, to), entries);
 }
 
-/** Faqat berilgan CP’lar — agent= bilan Kirim+Chiqim (modal uchun tez, 1:1). */
+/**
+ * Chiqim: agent= (MS Расход bilan 1:1).
+ * Kirim: avval agent=, keyin davr bo‘yicha to‘liq credit skan → max (cashin yo‘qolmasin).
+ */
 async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   if (!cpIds.length) return byCp;
+  const want = new Set(cpIds);
+  for (const id of cpIds) byCp.set(id, { credit: 0, debit: 0 });
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-  const tasks: Array<{ cpId: string; entity: string; side: "credit" | "debit" }> = [];
+
+  // 1) agent= — debit aniq; credit boshlang‘ich
+  const perCpTasks: Array<{ cpId: string; entity: string; side: "credit" | "debit" }> = [];
   for (const cpId of cpIds) {
-    for (const entity of CREDIT_ENTITIES) tasks.push({ cpId, entity, side: "credit" });
-    for (const entity of DEBIT_ENTITIES) tasks.push({ cpId, entity, side: "debit" });
+    for (const entity of CREDIT_ENTITIES) perCpTasks.push({ cpId, entity, side: "credit" });
+    for (const entity of DEBIT_ENTITIES) perCpTasks.push({ cpId, entity, side: "debit" });
   }
-  await mapPool(tasks, AGENT_DOC_CONCURRENCY, async ({ cpId, entity, side }) => {
+  await mapPool(perCpTasks, AGENT_DOC_CONCURRENCY, async ({ cpId, entity, side }) => {
     const filter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
     const sum = sumApplicable(await fetchEntityDocs(entity, filter));
     bumpMovement(byCp, cpId, side, sum);
   });
+
+  // 2) To‘liq Приход skan (cashin/paymentin agent= filter ba’zan kam qaytaradi)
+  const globalCredit = new Map<string, number>();
+  await mapPool([...CREDIT_ENTITIES], 4, async (entity) => {
+    const rows = await fetchEntityDocs(entity, moment);
+    for (const row of rows) {
+      if (row.applicable === false) continue;
+      const id = docAgentId(row);
+      if (!want.has(id)) continue;
+      const n = Number(row.sum || 0);
+      if (!Number.isFinite(n) || n === 0) continue;
+      globalCredit.set(id, (globalCredit.get(id) || 0) + n);
+    }
+  });
+  for (const [id, credit] of globalCredit) {
+    const cur = byCp.get(id) || { credit: 0, debit: 0 };
+    if (credit > cur.credit) {
+      logger.info(
+        { cpId: id, agentCredit: cur.credit, globalCredit: credit },
+        "ms-settlements credit topped up from global scan",
+      );
+      cur.credit = credit;
+      byCp.set(id, cur);
+    }
+  }
+
   return byCp;
 }
 
@@ -1015,9 +1033,19 @@ export async function refreshMsSettlements(
   priorityLogin?: string,
 ) {
   if (!moyskladConfigured()) return;
-  // Agent cache’ni yangilash — summary disk saqlanadi (UI nollanmasin).
+  // Eski noto‘g‘ri Kirim qolmasin — RAM + disk movements/summary periodini tozalash.
+  summaryMem.delete(`${from}:${to}`);
   for (const k of [...settlementsCache.keys()]) {
     if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
+  }
+  for (const k of [...movementCache.keys()]) {
+    if (k.startsWith(`${from}:${to}`)) movementCache.delete(k);
+  }
+  try {
+    unlinkQuiet(movementsPath(from, to));
+    unlinkQuiet(summaryPath(from, to));
+  } catch {
+    /* ignore */
   }
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   await warmMsSettlements(agents, from, to, true, priorityLogin);
