@@ -509,8 +509,8 @@ export function KpiDashboardPage() {
     },
   });
   const openAgent = sorted.find((a) => a.id === openAgentId);
-  const detailWarming =
-    detail.isFetching && !(detail.data?.rows?.length) && detail.data?.msStatus !== 'ready';
+  const detailHasRows = (detail.data?.rows?.length || 0) > 0;
+  const detailWarming = Boolean(openAgentId) && (detail.isFetching || detail.isLoading) && !detailHasRows;
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -621,16 +621,28 @@ export function KpiDashboardPage() {
                 onSync={() => sync.mutate()}
               />
             </div>
-            {detailWarming && !(detail.data?.rows?.length) ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
+            {detailWarming ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
                 <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>
-                  <Card label="Mijozlar" value={detail.data?.customers ?? openAgent?.customers ?? '…'} tone="slate" />
-                  <Card label="Kirim" value={uzs(detail.data?.income ?? openAgent?.paidTotal ?? 0)} tone="ok" />
-                  <Card label="Chiqim" value={uzs(detail.data?.expense ?? openAgent?.salesTotal ?? 0)} tone="blue" />
+                  <Card
+                    label="Mijozlar"
+                    value={detailWarming ? '…' : (detail.data?.customers ?? 0)}
+                    tone="slate"
+                  />
+                  <Card
+                    label="Kirim"
+                    value={detailWarming ? '…' : uzs(detail.data?.income ?? 0)}
+                    tone="ok"
+                  />
+                  <Card
+                    label="Chiqim"
+                    value={detailWarming ? '…' : uzs(detail.data?.expense ?? 0)}
+                    tone="blue"
+                  />
                   <Card label="KPI" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />
                 </div>
-                {detail.data && !detail.data.folderName && detail.data.msStatus === 'ready' ? (
+                {detail.data && !detail.data.folderName && !detailWarming ? (
                   <p className="kpi-error">Bu agent uchun MS guruh topilmadi.</p>
                 ) : null}
                 <div className="kpi-table-wrap" style={{ maxHeight: '52vh' }}>
@@ -645,10 +657,14 @@ export function KpiDashboardPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(detail.data?.rows?.length || 0) === 0 ? (
+                      {!detailHasRows ? (
                         <tr>
                           <td colSpan={5} className="kpi-muted">
-                            {detail.isFetching ? 'Yuklanmoqda…' : 'Bu davrda mijoz yo‘q yoki teg bo‘sh.'}
+                            {detailWarming
+                              ? 'Yuklanmoqda…'
+                              : detail.data?.folderName
+                                ? 'Bu davrda aylanma yo‘q.'
+                                : 'MS guruh (teg) topilmadi.'}
                           </td>
                         </tr>
                       ) : null}

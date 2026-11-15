@@ -67,14 +67,15 @@ const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v11: FAQAT agent-by-agent (global ombor skani YO‘Q).
- * Bitta agent = bitta ish; parallel to‘ldirish serverni 500 qilardi.
+ * v12: teg bo‘yicha CP — filter yiqilsa to‘liq indeks; bo‘sh natija cache’lanmaydi.
+ * Agent-by-agent; UI fallback yolg‘on Chiqim ko‘rsatmasin.
  */
-const CACHE_VERSION = "v11";
+const CACHE_VERSION = "v12";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CREDIT_ENRICH_CONCURRENCY = 4;
 const MS_FAST = { maxAttempts: 3 } as const;
 const AGENT_DOC_CONCURRENCY = 8;
+const CP_INDEX_TTL_MS = 60 * 60_000;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -249,24 +250,116 @@ async function resolveAgentTag(login: string, fullName?: string): Promise<string
   return null;
 }
 
-async function listTagCounterparties(tag: string) {
-  const hit = groupCache.get(tag);
-  if (hit && Date.now() - hit.at < 15 * 60_000) return hit.rows;
+function cpIndexPath() {
+  return join(CACHE_DIR, `cp-tags-${CACHE_VERSION}.json`);
+}
 
+type CpTagRow = { id: string; name: string; tags: string[] };
+
+function readCpTagIndex(): { at: number; rows: CpTagRow[] } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(cpIndexPath(), "utf8")) as { at: number; rows: CpTagRow[] };
+    if (!parsed?.at || !Array.isArray(parsed.rows)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCpTagIndex(rows: CpTagRow[]) {
+  try {
+    ensureCacheDir();
+    writeFileSync(cpIndexPath(), JSON.stringify({ at: Date.now(), rows }), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Barcha kontragentlar + tags — 1 marta (keyin disk). tags= filter ishonchsiz. */
+async function loadCounterpartyTagIndex(): Promise<CpTagRow[]> {
+  const disk = readCpTagIndex();
+  if (disk && Date.now() - disk.at < CP_INDEX_TTL_MS && disk.rows.length > 0) return disk.rows;
+
+  const out: CpTagRow[] = [];
+  let total = Number.POSITIVE_INFINITY;
+  for (let offset = 0; offset < total && offset < 100_000; offset += PAGE) {
+    const page = await moysklad<{ rows?: MsCp[]; meta?: { size?: number } }>(
+      `/entity/counterparty?limit=${PAGE}&offset=${offset}`,
+      MS_FAST,
+    );
+    if (Number.isFinite(Number(page.meta?.size))) total = Number(page.meta?.size);
+    const rows = page.rows || [];
+    if (!rows.length) break;
+    for (const row of rows) {
+      if (!row.id || !row.name) continue;
+      out.push({
+        id: row.id,
+        name: row.name.trim(),
+        tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
+      });
+    }
+    if (offset + rows.length >= total) break;
+  }
+  writeCpTagIndex(out);
+  logger.info({ count: out.length }, "ms-settlements counterparty tag index loaded");
+  return out;
+}
+
+async function listByTagFilter(tag: string): Promise<Array<{ id: string; name: string }>> {
   const out: Array<{ id: string; name: string }> = [];
-  for (let offset = 0; offset < 5000; offset += PAGE) {
-    const page = await moysklad<{ rows?: MsCp[] }>(
+  let total = Number.POSITIVE_INFINITY;
+  for (let offset = 0; offset < total && offset < 20_000; offset += PAGE) {
+    const page = await moysklad<{ rows?: MsCp[]; meta?: { size?: number } }>(
       `/entity/counterparty?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(`tags=${tag}`)}`,
-    ).catch(() => ({ rows: [] as MsCp[] }));
+      MS_FAST,
+    );
+    if (Number.isFinite(Number(page.meta?.size))) total = Number(page.meta?.size);
     const rows = page.rows || [];
     if (!rows.length) break;
     for (const row of rows) {
       if (!row.id || !row.name) continue;
       out.push({ id: row.id, name: row.name.trim() });
     }
-    if (rows.length < PAGE) break;
+    if (offset + rows.length >= total) break;
   }
-  groupCache.set(tag, { at: Date.now(), rows: out });
+  return out;
+}
+
+async function listTagCounterparties(tag: string) {
+  const key = foldName(tag);
+  const hit = groupCache.get(key) || groupCache.get(tag);
+  // Bo‘sh natijani uzoq cache’lama — teg xatosi qotib qolmasin.
+  if (hit && Date.now() - hit.at < 15 * 60_000 && hit.rows.length > 0) return hit.rows;
+  if (hit && hit.rows.length === 0 && Date.now() - hit.at < 20_000) return hit.rows;
+
+  let out: Array<{ id: string; name: string }> = [];
+  try {
+    out = await listByTagFilter(tag);
+  } catch (error) {
+    logger.warn({ err: error, tag }, "ms-settlements tags= filter failed — using full index");
+  }
+
+  if (!out.length) {
+    const index = await loadCounterpartyTagIndex();
+    const wanted = new Set(
+      [tag, key, ...aliasesForLogin(tag)]
+        .map(foldName)
+        .filter(Boolean),
+    );
+    out = index
+      .filter((row) => row.tags.some((t) => wanted.has(foldName(t))))
+      .map((row) => ({ id: row.id, name: row.name }));
+  }
+
+  if (!out.length) {
+    logger.warn({ tag }, "ms-settlements no counterparties for tag");
+  } else {
+    logger.info({ tag, count: out.length }, "ms-settlements tag group ready");
+  }
+
+  const packed = { at: Date.now(), rows: out };
+  groupCache.set(key, packed);
+  groupCache.set(tag, packed);
   return out;
 }
 
@@ -533,8 +626,22 @@ async function computeOneAgentFast(input: {
   const started = Date.now();
   setMoySkladMaxInFlight(20);
   try {
-    const tag = await resolveAgentTag(input.login, input.fullName);
-    const group = tag ? await listTagCounterparties(tag) : [];
+    let tag = await resolveAgentTag(input.login, input.fullName);
+    let group = tag ? await listTagCounterparties(tag) : [];
+    if (!group.length) {
+      for (const alt of aliasesForLogin(input.login, input.fullName)) {
+        if (tag && foldName(alt) === foldName(tag)) continue;
+        const rows = await listTagCounterparties(alt);
+        if (rows.length) {
+          tag = alt;
+          group = rows;
+          break;
+        }
+      }
+    }
+    if (!group.length) {
+      logger.error({ login: input.login, tag }, "ms-settlements agent has zero counterparties");
+    }
     const cpIds = group.map((g) => g.id);
     const [movements, closings] = await Promise.all([
       loadMovementsForCpIdsExact(cpIds, input.from, input.to),
