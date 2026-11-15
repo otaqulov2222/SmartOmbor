@@ -734,7 +734,7 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
                 <article key={deal.id} className="ag-deal">
                   <div className="ag-deal-top">
                     <div>
-                      <span className="ag-deal-no">Отгрузка №{deal.number}</span>
+                      <span className="ag-deal-no">Jo‘natma №{deal.number}</span>
                       <h3>{deal.customerName}</h3>
                       <p>
                         Sana: <b>{deal.orderDate}</b> · Joriy: <b>{deal.currentStage} ({deal.currentPercent}%)</b>

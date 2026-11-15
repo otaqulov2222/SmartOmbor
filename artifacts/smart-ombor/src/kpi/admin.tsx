@@ -529,10 +529,9 @@ export function KpiDashboardPage() {
             <h1>KPI boshqaruv</h1>
             <span className="kpi-period-badge">
               <CalendarRange size={13} />
-              {presetLabel} · {from} — {to}
+              {presetLabel} · {isoToDmy(from)} — {isoToDmy(to)}
             </span>
           </div>
-          <p>MoySklad взаиморасчеты — tanlangan davr aylanmasi (GPS marshrutdagi barcha mijozlar emas)</p>
         </div>
         <div className="kpi-actions">
           <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
@@ -547,7 +546,7 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-      {msWarming ? <p className="kpi-status-banner">MS hisobot fonda yangilanmoqda…</p> : null}
+      {msWarming ? <p className="kpi-status-banner">Ma’lumot yangilanmoqda…</p> : null}
       {d ? (
         <div className="kpi-grid kpi-grid-4">
           <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" icon={<Users size={16} />} />
@@ -559,8 +558,7 @@ export function KpiDashboardPage() {
       <section className="kpi-panel kpi-agents-panel">
         <div className="kpi-panel-head">
           <div>
-            <h2><Handshake size={17} /> Agentlar — взаиморасчеты</h2>
-            <p className="kpi-muted">Mijozlar = MS teg · nol aylanma yashirin · qatorga bosing → batafsil</p>
+            <h2><Handshake size={17} /> Agentlar</h2>
           </div>
           <span className="kpi-count-pill">{sorted.length} agent</span>
         </div>
@@ -606,8 +604,8 @@ export function KpiDashboardPage() {
               <div>
                 <h3>{detail.data?.agentName || openAgent?.fullName || 'Agent'}</h3>
                 <p className="kpi-muted">
-                  MS teg: <b>{detail.data?.folderName || openAgent?.folderName || (detail.isLoading ? '…' : 'topilmadi')}</b>
-                  {' · '}Взаиморасчеты · {from} — {to}
+                  Guruh: <b>{detail.data?.folderName || openAgent?.folderName || (detail.isLoading ? '…' : 'topilmadi')}</b>
+                  {' · '}{isoToDmy(from)} — {isoToDmy(to)}
                 </p>
               </div>
               <button type="button" className="btn" onClick={() => setOpenAgentId(null)}><X size={16} /> Yopish</button>
@@ -622,17 +620,17 @@ export function KpiDashboardPage() {
                 onSync={() => sync.mutate()}
               />
             </div>
-            {detailWarming ? <p className="kpi-muted">MS fonda yangilanmoqda — jadval ochiq qoladi…</p> : null}
+            {detailWarming ? <p className="kpi-muted">Yangilanmoqda…</p> : null}
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
                 <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>
                   <Card label="Mijozlar" value={detail.data?.customers ?? openAgent?.customers ?? '…'} tone="slate" />
-                  <Card label="Kirim (Приход)" value={uzs(detail.data?.income ?? openAgent?.paidTotal ?? 0)} tone="ok" />
-                  <Card label="Chiqim (Расход)" value={uzs(detail.data?.expense ?? openAgent?.salesTotal ?? 0)} tone="blue" />
-                  <Card label="KPI (komissiya)" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />
+                  <Card label="Kirim" value={uzs(detail.data?.income ?? openAgent?.paidTotal ?? 0)} tone="ok" />
+                  <Card label="Chiqim" value={uzs(detail.data?.expense ?? openAgent?.salesTotal ?? 0)} tone="blue" />
+                  <Card label="KPI" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />
                 </div>
                 {detail.data && !detail.data.folderName && detail.data.msStatus === 'ready' ? (
-                  <p className="kpi-error">MS da bu agent uchun teg topilmadi — mijozlar ochilmaydi.</p>
+                  <p className="kpi-error">Bu agent uchun MS guruh topilmadi.</p>
                 ) : null}
                 <div className="kpi-table-wrap" style={{ maxHeight: '52vh' }}>
                   <table className="kpi-table">
@@ -693,7 +691,6 @@ export function KpiAgentsPage() {
       <header className="kpi-head">
         <div>
           <h1>Agentlar va mijozlar</h1>
-          <p>MoySklad savdo kanallari, teglar va xaridorlar ro‘yxati</p>
         </div>
         <div className="kpi-actions">
           <div className="kpi-seg">
@@ -733,7 +730,7 @@ function AgentsSection() {
   return (
     <div className="kpi-table-wrap">
       <table className="kpi-table">
-        <thead><tr><th>Agent (MoySklad)</th><th>Portal login</th><th>Mijozlar</th><th>Savdo</th><th>Oylik fakt</th><th>Reja %</th><th>KPI</th><th>Reja / Parol</th></tr></thead>
+        <thead><tr><th>Agent</th><th>Portal login</th><th>Mijozlar</th><th>Savdo</th><th>Oylik fakt</th><th>Reja %</th><th>KPI</th><th>Reja / Parol</th></tr></thead>
         <tbody>
           {(list.data || []).map((a) => (
             <tr key={a.id}>
@@ -1005,7 +1002,6 @@ export function KpiOrdersPage() {
       <header className="kpi-head">
         <div>
           <h1>Savdo, to‘lov va KPI</h1>
-          <p>MoySklad отгрузка hujjatlari bo‘yicha avtomatik 3 bosqichli hisob</p>
         </div>
         <div className="kpi-actions">
           <div className="kpi-seg">
@@ -1050,7 +1046,7 @@ function OrdersAndKpiSection() {
         <table className="kpi-table">
           <thead>
             <tr>
-              <th>Отгрузка</th>
+              <th>Jo‘natma</th>
               <th>Mijoz</th>
               <th>Agent</th>
               <th>Savdo</th>
@@ -1065,7 +1061,7 @@ function OrdersAndKpiSection() {
               const k = maps.k.get(o.id);
               return (
                 <tr key={o.id}>
-                  <td data-label="Отгрузка"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
+                  <td data-label="Jo‘natma"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
                   <td data-label="Mijoz">{o.customerName || maps.c.get(o.customerId) || '—'}</td>
                   <td data-label="Agent"><b>{o.agentName || maps.a.get(o.agentId) || '—'}</b></td>
                   <td data-label="Savdo">{uzs(o.total)}</td>
@@ -1125,8 +1121,7 @@ function RulesSection() {
     <section className="kpi-panel">
       <h2>3 bosqichli KPI foizlari</h2>
       <p className="kpi-muted">
-        MoySklad отгрузка sanasidan to‘lov yopilgunga qadar necha kun o‘tganiga qarab foiz.
-        Saqlash → savdo KPI avtomatik qayta hisoblanadi.
+        Jo‘natma sanasidan to‘lov yopilgungacha o‘tgan kunlarga qarab foiz hisoblanadi.
       </p>
       <div className="kpi-stages-table">
         <div className="kpi-stages-head">
