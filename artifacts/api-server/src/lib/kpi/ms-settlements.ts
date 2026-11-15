@@ -361,22 +361,25 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
   await Promise.all(workers);
 }
 
-/** Tez: 8 entity bo‘yicha bitta global skan (to‘liq pagination). */
+/** Tez: 8 entity parallel global skan (to‘liq pagination). */
 async function scanMovementsGlobal(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-  for (const entity of CREDIT_ENTITIES) {
-    const rows = await fetchEntityDocs(entity, moment);
+  const jobs = [
+    ...CREDIT_ENTITIES.map(async (entity) => {
+      const rows = await fetchEntityDocs(entity, moment);
+      return { side: "credit" as const, rows };
+    }),
+    ...DEBIT_ENTITIES.map(async (entity) => {
+      const rows = await fetchEntityDocs(entity, moment);
+      return { side: "debit" as const, rows };
+    }),
+  ];
+  const batches = await Promise.all(jobs);
+  for (const { side, rows } of batches) {
     for (const row of rows) {
       if (row.applicable === false) continue;
-      bumpMovement(byCp, docAgentId(row), "credit", Number(row.sum || 0));
-    }
-  }
-  for (const entity of DEBIT_ENTITIES) {
-    const rows = await fetchEntityDocs(entity, moment);
-    for (const row of rows) {
-      if (row.applicable === false) continue;
-      bumpMovement(byCp, docAgentId(row), "debit", Number(row.sum || 0));
+      bumpMovement(byCp, docAgentId(row), side, Number(row.sum || 0));
     }
   }
   return byCp;
@@ -699,23 +702,15 @@ export async function getAgentsMsSettlementSummaries(
   const cached = peekSummary(from, to);
   const age = cached ? Date.now() - cached.at : Infinity;
 
-  if (cached && age < FRESH_MS) {
+  // Diskda bor bo‘lsa — darhol ko‘rsatamiz (nol emas). Yangilash fonda.
+  if (cached) {
     for (const agent of agents) {
       out.set(
         agent.login.toLowerCase(),
         cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
       );
     }
-    return { map: out, status: "ready" };
-  }
-
-  if (cached && age < STALE_MS) {
-    for (const agent of agents) {
-      out.set(
-        agent.login.toLowerCase(),
-        cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
-      );
-    }
+    if (age < FRESH_MS) return { map: out, status: "ready" };
     void warmMsSettlements(agents, from, to, true);
     return { map: out, status: "stale" };
   }
@@ -758,11 +753,9 @@ export async function getAgentMsSettlements(
   const fromSummary = summary?.byLogin[input.login.toLowerCase()];
   const age = summary ? Date.now() - summary.at : Infinity;
 
-  if (fromSummary && age < FRESH_MS) {
+  if (fromSummary) {
     settlementsCache.set(cacheKey, { at: summary!.at, data: fromSummary });
-    return { ...fromSummary, msStatus: "ready" };
-  }
-  if (fromSummary && age < STALE_MS) {
+    if (age < FRESH_MS) return { ...fromSummary, msStatus: "ready" };
     void warmMsSettlements(agentsForWarm, input.from, input.to, true);
     return { ...fromSummary, msStatus: "stale" };
   }
