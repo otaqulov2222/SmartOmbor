@@ -316,7 +316,6 @@ export function RouteMap({
     [stops],
   );
   const progressPct = stops.length ? Math.round((doneCount / stops.length) * 100) : 0;
-  const approxNext = Boolean(nextStop && nextStop.exactGps === false);
 
   const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
   const livePos: LatLng | null = useMemo(() => {
