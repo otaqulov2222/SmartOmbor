@@ -9,7 +9,7 @@ import {
 } from "@workspace/db";
 import { moysklad, moyskladConfigured } from "../moysklad";
 import { hashPassword } from "./auth";
-import { ensureDefaultPolicy, refreshOrderKpi, snapshotPolicy } from "./engine";
+import { ensureDefaultPolicy, ensureTargetStages, refreshOrderKpi, snapshotPolicy } from "./engine";
 import { money } from "./money";
 import { defaultKpiPeriod } from "./period";
 
@@ -435,6 +435,8 @@ async function ingestDemand(
 }
 
 async function runSync(range: { from: string; to: string }) {
+  // Standart KPI: 3% / 2% / 1% (paid_amount) — syncda majburiy.
+  await ensureTargetStages();
   const policy = await ensureDefaultPolicy("moysklad");
   const snap = snapshotPolicy(policy) as unknown as Record<string, unknown>;
   const agentCache = await ensureSeedAgents();

@@ -1,13 +1,15 @@
 /**
  * MoySklad «Взаиморасчеты» — agent TEGidagi kontragentlar.
  *
- * Manba (MS yordam — Деньги → Взаиморасчеты):
- *   Приход:  Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
- *   Расход:  Отгрузки, Исходящие платежи, Расходные ордера, Выданные отчёты комиссионера
- *   Конечный: /report/counterparty (davr oxiri)
- *   Начальный: closing − credit + debit  (MS identity; report tarixiy ochilish bermaydi)
+ * Qoida: hech qachon raqamlarni «tenglashtirib» yubormaymiz.
+ * Faqat MS dagi bor ma’lumot:
+ *   Приход / Расход — hujjatlar yig‘indisi (o‘zgartirilmaydi)
+ *   Конечный       — /report/counterparty
+ *   Начальный      — closing − Приход + Расход (buxgalteriya identitesi, aylanma invent qilinmaydi)
  *
- * UI: disk/memory cache; MS skani fonda (force sync — kutadi).
+ * MS yordam hujjatlari:
+ *   Приход: Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
+ *   Расход: Отгрузки, Исходящие платежи, Расходные ордера, Выданные отчёты комиссионера
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
@@ -374,9 +376,9 @@ function emptySettlement(input: { login: string; fullName: string; from: string;
 }
 
 /**
- * closing — MS report (yakuniy).
- * income/expense — hujjat skani (o‘zgartirilmaydi).
- * opening = closing − income + expense  (MS: Конечный = Начальный + Приход − Расход).
+ * income/expense — faqat hujjat skani (HECH QACHON boshqa ustunga tenglashtirilmaydi).
+ * closing — faqat MS report.
+ * opening — identitetdan (aylanma invent qilinmaydi).
  */
 function buildSettlement(input: {
   login: string;
@@ -393,9 +395,10 @@ function buildSettlement(input: {
   const rows = input.group
     .map((cp) => {
       const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
-      const closingKop = input.closings.get(cp.id) ?? 0;
-      const creditKop = mv.credit;
-      const debitKop = mv.debit;
+      // Raw MS docs — no overwrite / no force-equalize.
+      const creditKop = Number(mv.credit) || 0;
+      const debitKop = Number(mv.debit) || 0;
+      const closingKop = input.closings.has(cp.id) ? Number(input.closings.get(cp.id)) || 0 : 0;
       const openingKop = closingKop - creditKop + debitKop;
       return {
         id: cp.id,

@@ -67,6 +67,7 @@ router.use("/kpi", (_req, _res, next) => {
 router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
   try {
     const period = parsePeriod(req.body?.from, req.body?.to, req.body?.preset);
+    await ensureTargetStages();
     const result = await syncKpiFromMoySklad(true, period);
     const agents = await db.select().from(kpiAgentsTable);
     const settleAgents = agents
