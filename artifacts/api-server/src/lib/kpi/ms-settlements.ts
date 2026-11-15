@@ -66,12 +66,15 @@ const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** v10: modal = bitta agent exact (await); fields= olib tashlandi (MS buzilardi). */
-const CACHE_VERSION = "v10";
+/**
+ * v11: FAQAT agent-by-agent (global ombor skani YO‘Q).
+ * Bitta agent = bitta ish; parallel to‘ldirish serverni 500 qilardi.
+ */
+const CACHE_VERSION = "v11";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CREDIT_ENRICH_CONCURRENCY = 4;
 const MS_FAST = { maxAttempts: 3 } as const;
-const AGENT_DOC_CONCURRENCY = 16;
+const AGENT_DOC_CONCURRENCY = 8;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -796,50 +799,9 @@ function startEnrichBackground(
 }
 
 /**
- * Phase1 (10–15s maqsad): global skan + balans → UI to‘liq.
- * Enrich — alohida fonda (warming bloklamaydi).
+ * Fon isitish: agentlarni KETMA-KET hisoblaydi (parallel emas).
+ * Global ombor skani yo‘q — Render 460MB / MS limit uchun.
  */
-async function computePhase1(
-  agents: Array<{ login: string; fullName: string }>,
-  from: string,
-  to: string,
-  priorityLogin?: string,
-) {
-  const started = Date.now();
-  if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
-
-  setMoySkladMaxInFlight(20);
-  try {
-    const tags = await Promise.all(
-      agents.map(async (agent) => ({
-        agent,
-        tag: await resolveAgentTag(agent.login, agent.fullName),
-      })),
-    );
-
-    const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
-    await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
-
-    const [movements, closings] = await Promise.all([
-      loadPeriodMovementsFast(from, to),
-      loadClosingBalances(from, to),
-    ]);
-
-    publishSettlements(tags, movements, closings, from, to);
-    logger.info(
-      { from, to, agents: agents.length, ms: Date.now() - started },
-      "ms-settlements phase1 published",
-    );
-
-    // Aniqlik — UI kutmasin.
-    void startEnrichBackground(tags, movements, closings, from, to);
-    return summaryMem.get(`${from}:${to}`)?.byLogin || {};
-  } finally {
-    resetMoySkladMaxInFlight();
-  }
-}
-
-/** Fon isitish — phase1 tugashi = UI tayyor. */
 export function warmMsSettlements(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
@@ -851,19 +813,28 @@ export function warmMsSettlements(
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   const key = `${from}:${to}`;
   const existing = peekSummary(from, to);
-  if (!force && existing && Date.now() - existing.at < FRESH_MS) {
-    if (!enriching.has(key)) {
-      // Fresh phase1 bor, enrich yo‘q bo‘lsa fonda ishga tushirish shart emas.
-    }
-    return Promise.resolve();
-  }
+  if (!force && existing && Date.now() - existing.at < FRESH_MS) return Promise.resolve();
   const inflight = warming.get(key);
   if (inflight) return inflight;
 
-  const job = computePhase1(agents, from, to, priorityLogin)
+  const job = (async () => {
+    const remaining = [...agents];
+    while (remaining.length) {
+      const prefer = enrichPriorityLogin;
+      let idx = prefer ? remaining.findIndex((a) => foldName(a.login) === prefer) : 0;
+      if (idx < 0) idx = 0;
+      const agent = remaining.splice(idx, 1)[0];
+      await ensureAgentSettlement({
+        login: agent.login,
+        fullName: agent.fullName,
+        from,
+        to,
+      });
+    }
+  })()
     .then(() => undefined)
     .catch((error) => {
-      logger.error({ err: error, from, to }, "ms-settlements phase1 failed");
+      logger.error({ err: error, from, to }, "ms-settlements warm failed");
     })
     .finally(() => {
       warming.delete(key);
@@ -937,36 +908,12 @@ export async function refreshMsSettlements(
   priorityLogin?: string,
 ) {
   if (!moyskladConfigured()) return;
-  // Faqat RAM/movement+balance — disk summary saqlanadi (nol bo‘lmasin).
-  for (const k of [...movementCache.keys()]) {
-    if (k.startsWith(`${from}:${to}`)) movementCache.delete(k);
-  }
-  balanceCache.delete(`${from}:${to}`);
+  // Agent cache’ni yangilash — summary disk saqlanadi (UI nollanmasin).
   for (const k of [...settlementsCache.keys()]) {
     if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
   }
-  try {
-    unlinkQuiet(movementsPath(from, to));
-    unlinkQuiet(balancesPath(from, to));
-  } catch {
-    /* ignore */
-  }
-  const key = `${from}:${to}`;
-  const inflight = warming.get(key);
-  if (inflight) {
-    await inflight;
-    return;
-  }
-  const job = computePhase1(agents, from, to, priorityLogin)
-    .then(() => undefined)
-    .catch((error) => {
-      logger.error({ err: error, from, to }, "ms-settlements refresh failed");
-    })
-    .finally(() => {
-      warming.delete(key);
-    });
-  warming.set(key, job);
-  await job;
+  if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
+  await warmMsSettlements(agents, from, to, true, priorityLogin);
 }
 
 export async function getAgentsMsSettlementSummaries(
@@ -994,23 +941,14 @@ export async function getAgentsMsSettlementSummaries(
       );
     }
     if (busy || age >= FRESH_MS) {
-      if (age >= FRESH_MS) void warmMsSettlements(agents, from, to, true);
+      if (age >= FRESH_MS && !warming.has(key)) void warmMsSettlements(agents, from, to, true);
       return { map: out, status: "stale" };
     }
     return { map: out, status: "ready" };
   }
 
+  // Bitta navbat — parallel to‘ldirish YO‘Q (server 500 bo‘lmasin).
   void warmMsSettlements(agents, from, to, true);
-  // Ro‘yxat ham to‘lsin — birinchi agentlarni fonda hisobla.
-  void (async () => {
-    for (const agent of agents) {
-      try {
-        await ensureAgentSettlement({ login: agent.login, fullName: agent.fullName, from, to });
-      } catch {
-        /* ignore */
-      }
-    }
-  })();
   for (const agent of agents) {
     const login = agent.login.toLowerCase();
     const tag = PRIMARY_TAG[login] || null;
@@ -1037,13 +975,12 @@ export async function getAgentMsSettlements(
   warmAgents?: Array<{ login: string; fullName: string }>,
 ): Promise<AgentSettlement & { msStatus: MsSettleStatus }> {
   const empty = emptySettlement(input);
-  const agentsForWarm = warmAgents?.length ? warmAgents : [{ login: input.login, fullName: input.fullName }];
+  void warmAgents;
   if (!moyskladConfigured()) return { ...empty, msStatus: "ready" };
 
   const cacheKey = `${foldName(input.login)}:${input.from}:${input.to}`;
   const hit = settlementsCache.get(cacheKey);
   if (hit && Date.now() - hit.at < FRESH_MS && hasSettlementData(hit.data)) {
-    void warmMsSettlements(agentsForWarm, input.from, input.to, false, input.login);
     return { ...hit.data, msStatus: "ready" };
   }
 
@@ -1051,13 +988,11 @@ export async function getAgentMsSettlements(
   const fromSummary = summary?.byLogin[input.login.toLowerCase()];
   if (fromSummary && hasSettlementData(fromSummary) && summary && Date.now() - summary.at < FRESH_MS) {
     settlementsCache.set(cacheKey, { at: summary.at, data: fromSummary });
-    void warmMsSettlements(agentsForWarm, input.from, input.to, false, input.login);
     return { ...fromSummary, msStatus: "ready" };
   }
 
-  // Modal bo‘sh qolmasin — shu agentni HOZIR hisobla (global skanni kutma).
+  // Faqat OCHILGAN agent — boshqalarni shu yerda ishga tushirma.
   enrichPriorityLogin = foldName(input.login);
   const data = await ensureAgentSettlement(input);
-  void warmMsSettlements(agentsForWarm, input.from, input.to, false, input.login);
-  return { ...data, msStatus: "ready" };
+  return { ...data, msStatus: hasSettlementData(data) ? "ready" : "warming" };
 }
