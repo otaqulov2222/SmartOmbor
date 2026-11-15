@@ -13,7 +13,12 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
 import { logger } from "../logger";
-import { moysklad, moyskladConfigured } from "../moysklad";
+import {
+  moysklad,
+  moyskladConfigured,
+  resetMoySkladMaxInFlight,
+  setMoySkladMaxInFlight,
+} from "../moysklad";
 import { money } from "./money";
 
 /** Login → asosiy MS teg (probe qilmasdan). */
@@ -61,11 +66,13 @@ const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** v8: avval global (tez UI), keyin agent= enrich fonda; soft-refresh. */
-const CACHE_VERSION = "v8";
+/** v9: 10–15s phase1 (burst + fields); enrich alohida fonda; multi-version stale. */
+const CACHE_VERSION = "v9";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 /** CP × 4 entity parallel — MS rate-limit uchun past. */
-const CREDIT_ENRICH_CONCURRENCY = 3;
+const CREDIT_ENRICH_CONCURRENCY = 4;
+const DOC_FIELDS = "sum,applicable,agent";
+const MS_FAST = { maxAttempts: 3 } as const;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -115,6 +122,7 @@ const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: 
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
 const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
 const warming = new Map<string, Promise<void>>();
+const enriching = new Map<string, Promise<void>>();
 /** Ochilgan agent modal — enrich navbatida birinchi. */
 let enrichPriorityLogin = "";
 
@@ -138,12 +146,31 @@ function balancesPath(from: string, to: string) {
   return join(CACHE_DIR, `bal-${CACHE_VERSION}-${from}_${to}.json`);
 }
 
-function readDiskSummary(from: string, to: string) {
+function readDiskSummaryFile(path: string) {
   try {
-    const raw = readFileSync(summaryPath(from, to), "utf8");
-    const parsed = JSON.parse(raw) as { at: number; byLogin: Record<string, AgentSettlement> };
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { at: number; byLogin: Record<string, AgentSettlement> };
     if (!parsed?.byLogin || !parsed.at) return null;
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readDiskSummary(from: string, to: string) {
+  const exact = readDiskSummaryFile(summaryPath(from, to));
+  if (exact) return exact;
+  // Oldingi versiya cache — darhol ko‘rsatish (nol kutmaslik).
+  try {
+    ensureCacheDir();
+    const needle = `_${from}_${to}.json`;
+    let best: { at: number; byLogin: Record<string, AgentSettlement> } | null = null;
+    for (const name of readdirSync(CACHE_DIR)) {
+      if (!name.startsWith("settlements-") || !name.endsWith(needle)) continue;
+      const parsed = readDiskSummaryFile(join(CACHE_DIR, name));
+      if (!parsed) continue;
+      if (!best || parsed.at > best.at) best = parsed;
+    }
+    return best;
   } catch {
     return null;
   }
@@ -265,16 +292,17 @@ async function loadClosingBalances(from: string, to: string) {
   for (let offset = 0; offset < total && offset < 100_000; offset += PAGE) {
     let page: { rows?: MsReportRow[]; meta?: { size?: number } } | null = null;
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         page = await moysklad<{ rows?: MsReportRow[]; meta?: { size?: number } }>(
           `/report/counterparty?limit=${PAGE}&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
+          MS_FAST,
         );
         lastErr = undefined;
         break;
       } catch (error) {
         lastErr = error;
-        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
       }
     }
     if (!page) {
@@ -299,23 +327,24 @@ async function loadClosingBalances(from: string, to: string) {
   return byCp;
 }
 
-/** Bitta entity — meta.size bo‘yicha to‘liq; xato≠bo‘sh. */
+/** Bitta entity — engil fields, tez retry (10–15s phase1). */
 async function fetchEntityDocs(entity: string, filter: string): Promise<MsDoc[]> {
   const out: MsDoc[] = [];
   let total = Number.POSITIVE_INFINITY;
   for (let offset = 0; offset < total && offset < 100_000; offset += PAGE) {
     let lastErr: unknown;
     let page: { rows?: MsDoc[]; meta?: { size?: number } } | null = null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         page = await moysklad<{ rows?: MsDoc[]; meta?: { size?: number } }>(
-          `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(filter)}`,
+          `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(filter)}&fields=${DOC_FIELDS}`,
+          MS_FAST,
         );
         lastErr = undefined;
         break;
       } catch (error) {
         lastErr = error;
-        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
       }
     }
     if (!page) {
@@ -365,7 +394,7 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
   await Promise.all(workers);
 }
 
-/** Tez: entity’larni 4 tadan parallel (429 kamayadi). */
+/** Tez: 8 entity parallel (burst slotlar bilan). */
 async function scanMovementsGlobal(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
@@ -373,7 +402,7 @@ async function scanMovementsGlobal(from: string, to: string) {
     ...CREDIT_ENTITIES.map((entity) => ({ entity, side: "credit" as const })),
     ...DEBIT_ENTITIES.map((entity) => ({ entity, side: "debit" as const })),
   ];
-  await mapPool(all, 4, async ({ entity, side }) => {
+  await mapPool(all, 8, async ({ entity, side }) => {
     const rows = await fetchEntityDocs(entity, moment);
     for (const row of rows) {
       if (row.applicable === false) continue;
@@ -559,66 +588,97 @@ function publishSettlements(
   return byLogin;
 }
 
+function startEnrichBackground(
+  tags: Array<{ agent: { login: string; fullName: string }; tag: string | null }>,
+  movements: Map<string, { credit: number; debit: number }>,
+  closings: Map<string, number>,
+  from: string,
+  to: string,
+) {
+  const key = `${from}:${to}`;
+  if (enriching.has(key)) return enriching.get(key)!;
+
+  const job = (async () => {
+    const remaining = tags.filter((t) => t.tag);
+    while (remaining.length) {
+      const prefer = enrichPriorityLogin;
+      let idx = prefer ? remaining.findIndex((t) => foldName(t.agent.login) === prefer) : 0;
+      if (idx < 0) idx = 0;
+      const { agent, tag } = remaining.splice(idx, 1)[0];
+      if (!tag) continue;
+      const group = await listTagCounterparties(tag);
+      if (!group.length) continue;
+      try {
+        await enrichCreditsExact(
+          movements,
+          group.map((cp) => cp.id),
+          from,
+          to,
+        );
+        persistMovements(from, to, movements);
+        publishSettlements(tags, movements, closings, from, to);
+        logger.info({ login: agent.login, cps: group.length }, "ms-settlements agent enriched");
+      } catch (error) {
+        logger.warn({ err: error, login: agent.login }, "ms-settlements enrich failed — keeping phase1");
+      }
+    }
+  })()
+    .catch((error) => {
+      logger.error({ err: error, from, to }, "ms-settlements enrich background failed");
+    })
+    .finally(() => {
+      enriching.delete(key);
+    });
+
+  enriching.set(key, job);
+  return job;
+}
+
 /**
- * 1) Global skan + balans → darhol disk/UI (nol emas).
- * 2) Har agent uchun Приход enrich → qayta yozish (1:1 aniqlik).
+ * Phase1 (10–15s maqsad): global skan + balans → UI to‘liq.
+ * Enrich — alohida fonda (warming bloklamaydi).
  */
-async function computeAll(
+async function computePhase1(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
   to: string,
   priorityLogin?: string,
 ) {
-  const tags = await Promise.all(
-    agents.map(async (agent) => ({
-      agent,
-      tag: await resolveAgentTag(agent.login, agent.fullName),
-    })),
-  );
-
-  const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
-  await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
-
-  const [movements, closings] = await Promise.all([
-    loadPeriodMovementsFast(from, to),
-    loadClosingBalances(from, to),
-  ]);
-
-  // Bosqich 1 — UI darhol to‘liq (global) raqamlarni ko‘radi.
-  publishSettlements(tags, movements, closings, from, to);
-  logger.info({ from, to, agents: agents.length }, "ms-settlements phase1 published");
-
+  const started = Date.now();
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
 
-  // Bosqich 2 — agent= bilan Kirim; ochilgan agent navbatda birinchi.
-  const remaining = tags.filter((t) => t.tag);
-  while (remaining.length) {
-    const prefer = enrichPriorityLogin;
-    let idx = prefer ? remaining.findIndex((t) => foldName(t.agent.login) === prefer) : 0;
-    if (idx < 0) idx = 0;
-    const { agent, tag } = remaining.splice(idx, 1)[0];
-    if (!tag) continue;
-    const group = await listTagCounterparties(tag);
-    if (!group.length) continue;
-    try {
-      await enrichCreditsExact(
-        movements,
-        group.map((cp) => cp.id),
-        from,
-        to,
-      );
-      persistMovements(from, to, movements);
-      publishSettlements(tags, movements, closings, from, to);
-      logger.info({ login: agent.login, cps: group.length }, "ms-settlements agent enriched");
-    } catch (error) {
-      logger.warn({ err: error, login: agent.login }, "ms-settlements enrich failed — keeping phase1");
-    }
-  }
+  setMoySkladMaxInFlight(20);
+  try {
+    const tags = await Promise.all(
+      agents.map(async (agent) => ({
+        agent,
+        tag: await resolveAgentTag(agent.login, agent.fullName),
+      })),
+    );
 
-  return summaryMem.get(`${from}:${to}`)?.byLogin || {};
+    const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
+    await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
+
+    const [movements, closings] = await Promise.all([
+      loadPeriodMovementsFast(from, to),
+      loadClosingBalances(from, to),
+    ]);
+
+    publishSettlements(tags, movements, closings, from, to);
+    logger.info(
+      { from, to, agents: agents.length, ms: Date.now() - started },
+      "ms-settlements phase1 published",
+    );
+
+    // Aniqlik — UI kutmasin.
+    void startEnrichBackground(tags, movements, closings, from, to);
+    return summaryMem.get(`${from}:${to}`)?.byLogin || {};
+  } finally {
+    resetMoySkladMaxInFlight();
+  }
 }
 
-/** Fon isitish — bir davr uchun bitta parallel. */
+/** Fon isitish — phase1 tugashi = UI tayyor. */
 export function warmMsSettlements(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
@@ -630,14 +690,19 @@ export function warmMsSettlements(
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   const key = `${from}:${to}`;
   const existing = peekSummary(from, to);
-  if (!force && existing && Date.now() - existing.at < FRESH_MS) return Promise.resolve();
+  if (!force && existing && Date.now() - existing.at < FRESH_MS) {
+    if (!enriching.has(key)) {
+      // Fresh phase1 bor, enrich yo‘q bo‘lsa fonda ishga tushirish shart emas.
+    }
+    return Promise.resolve();
+  }
   const inflight = warming.get(key);
   if (inflight) return inflight;
 
-  const job = computeAll(agents, from, to, priorityLogin)
+  const job = computePhase1(agents, from, to, priorityLogin)
     .then(() => undefined)
     .catch((error) => {
-      logger.error({ err: error, from, to }, "ms-settlements computeAll failed");
+      logger.error({ err: error, from, to }, "ms-settlements phase1 failed");
     })
     .finally(() => {
       warming.delete(key);
@@ -731,7 +796,7 @@ export async function refreshMsSettlements(
     await inflight;
     return;
   }
-  const job = computeAll(agents, from, to, priorityLogin)
+  const job = computePhase1(agents, from, to, priorityLogin)
     .then(() => undefined)
     .catch((error) => {
       logger.error({ err: error, from, to }, "ms-settlements refresh failed");
@@ -754,8 +819,10 @@ export async function getAgentsMsSettlementSummaries(
     return { map: out, status: "ready" };
   }
 
+  const key = `${from}:${to}`;
   const cached = peekSummary(from, to);
   const age = cached ? Date.now() - cached.at : Infinity;
+  const busy = warming.has(key) || enriching.has(key);
 
   // Diskda bor bo‘lsa — darhol ko‘rsatamiz (nol emas). Yangilash fonda.
   if (cached) {
@@ -765,9 +832,11 @@ export async function getAgentsMsSettlementSummaries(
         cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
       );
     }
-    if (age < FRESH_MS) return { map: out, status: "ready" };
-    void warmMsSettlements(agents, from, to, true);
-    return { map: out, status: "stale" };
+    if (busy || age >= FRESH_MS) {
+      if (age >= FRESH_MS) void warmMsSettlements(agents, from, to, true);
+      return { map: out, status: "stale" };
+    }
+    return { map: out, status: "ready" };
   }
 
   void warmMsSettlements(agents, from, to, true);
@@ -808,11 +877,17 @@ export async function getAgentMsSettlements(
   const fromSummary = summary?.byLogin[input.login.toLowerCase()];
   const age = summary ? Date.now() - summary.at : Infinity;
 
+  const periodKey = `${input.from}:${input.to}`;
+  const busy = warming.has(periodKey) || enriching.has(periodKey);
+
   if (fromSummary) {
     settlementsCache.set(cacheKey, { at: summary!.at, data: fromSummary });
-    if (age < FRESH_MS) return { ...fromSummary, msStatus: "ready" };
-    void warmMsSettlements(agentsForWarm, input.from, input.to, true, input.login);
-    return { ...fromSummary, msStatus: "stale" };
+    if (busy || age >= FRESH_MS) {
+      if (age >= FRESH_MS) void warmMsSettlements(agentsForWarm, input.from, input.to, true, input.login);
+      else if (enrichPriorityLogin !== foldName(input.login)) enrichPriorityLogin = foldName(input.login);
+      return { ...fromSummary, msStatus: "stale" };
+    }
+    return { ...fromSummary, msStatus: "ready" };
   }
 
   void warmMsSettlements(agentsForWarm, input.from, input.to, true, input.login);

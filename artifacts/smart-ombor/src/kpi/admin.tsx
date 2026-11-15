@@ -546,7 +546,7 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-      {msWarming ? <p className="kpi-status-banner">Yangilanmoqda — joriy raqamlar ko‘rinib turadi</p> : null}
+      {msWarming ? <p className="kpi-status-banner">Tez yuklanmoqda…</p> : null}
       {d ? (
         <div className="kpi-grid kpi-grid-4">
           <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" icon={<Users size={16} />} />

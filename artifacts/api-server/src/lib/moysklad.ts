@@ -108,16 +108,27 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
   throw last;
 }
 
-const MAX_IN_FLIGHT = 12;
+let maxInFlight = 12;
 const MIN_GAP_MS = 5;
 let inFlight = 0;
 let lastStart = 0;
 let reservedSlots = 0;
 const waiters: Array<() => void> = [];
 
+/** KPI settlements kabi qisqa burst — 10–15s ichida tugash uchun. */
+export function setMoySkladMaxInFlight(n: number) {
+  maxInFlight = Math.max(4, Math.min(24, Math.floor(n)));
+  flushWaiters();
+}
+
+export function resetMoySkladMaxInFlight() {
+  maxInFlight = 12;
+  flushWaiters();
+}
+
 /** Kirim paytida katalog sync slotlarni yeb qo‘ymasligi uchun. */
 export function reserveMoySkladSlots(count: number) {
-  reservedSlots = Math.max(0, Math.min(MAX_IN_FLIGHT - 2, count));
+  reservedSlots = Math.max(0, Math.min(maxInFlight - 2, count));
   flushWaiters();
 }
 
@@ -127,7 +138,7 @@ export function releaseMoySkladSlots() {
 }
 
 function slotLimit() {
-  return Math.max(2, MAX_IN_FLIGHT - reservedSlots);
+  return Math.max(2, maxInFlight - reservedSlots);
 }
 
 function flushWaiters() {
@@ -213,14 +224,15 @@ function parseMoySkladFailure(status: number, body: string, path?: string, log =
   }
 }
 
-export async function moysklad<T>(path: string): Promise<T> {
+export async function moysklad<T>(path: string, opts?: { maxAttempts?: number }): Promise<T> {
   const token = moyskladToken();
   if (!token) {
     throw new MoySkladError("MOYSKLAD_TOKEN is not set", 503);
   }
 
+  const maxAttempts = Math.max(1, Math.min(8, opts?.maxAttempts ?? 8));
   let last: unknown;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await takeSlot();
     try {
       const response = await fetch(`${BASE}${path}`, {
@@ -243,7 +255,7 @@ export async function moysklad<T>(path: string): Promise<T> {
     } catch (error) {
       last = error;
       const retry = networkFailure(error) || temporaryMoySklad(error) || (error instanceof MoySkladError && error.status === 429);
-      if (!retry || attempt === 7) throw error;
+      if (!retry || attempt === maxAttempts - 1) throw error;
     } finally {
       freeSlot();
     }
