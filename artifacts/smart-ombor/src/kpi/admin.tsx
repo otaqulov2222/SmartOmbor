@@ -546,7 +546,7 @@ export function KpiDashboardPage() {
         onSync={() => sync.mutate()}
       />
       {q.error ? <p className="kpi-error">{(q.error as Error).message}</p> : null}
-      {msWarming ? <p className="kpi-status-banner">Ma’lumot yangilanmoqda…</p> : null}
+      {msWarming ? <p className="kpi-status-banner">Yangilanmoqda — joriy raqamlar ko‘rinib turadi</p> : null}
       {d ? (
         <div className="kpi-grid kpi-grid-4">
           <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" icon={<Users size={16} />} />
@@ -620,7 +620,7 @@ export function KpiDashboardPage() {
                 onSync={() => sync.mutate()}
               />
             </div>
-            {detailWarming ? <p className="kpi-muted">Yangilanmoqda…</p> : null}
+            {detailWarming && !(detail.data?.rows?.length) ? <p className="kpi-muted">Yuklanmoqda…</p> : null}
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
                 <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>

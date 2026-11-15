@@ -60,10 +60,10 @@ const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** v6: har bir kontragent uchun agent= filter — MS UI bilan 1:1. */
-const CACHE_VERSION = "v6";
+/** v7: tez global skan + cashin/paymentin aniqlik; cache soft-refresh. */
+const CACHE_VERSION = "v7";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
-const SCAN_CONCURRENCY = 3;
+const CREDIT_ENRICH_CONCURRENCY = 8;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -337,76 +337,99 @@ function sumApplicable(rows: MsDoc[]) {
   return total;
 }
 
-async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
+function bumpMovement(
+  byCp: Map<string, { credit: number; debit: number }>,
+  id: string,
+  side: "credit" | "debit",
+  sum: number,
+) {
+  if (!id || !Number.isFinite(sum) || sum === 0) return;
+  const cur = byCp.get(id) || { credit: 0, debit: 0 };
+  cur[side] += sum;
+  byCp.set(id, cur);
+}
+
+async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) {
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) || 1 }, async () => {
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, async () => {
     while (cursor < items.length) {
       const i = cursor;
       cursor += 1;
-      out[i] = await fn(items[i]);
+      await fn(items[i]);
     }
   });
   await Promise.all(workers);
-  return out;
 }
 
-/**
- * MS UI «Взаиморасчеты» bilan 1:1:
- * har bir kontragent uchun agent= filter orqali BARCHA Приход/Расход hujjatlari.
- * Global skan yo‘q — hech narsa tushib qolmasin.
- */
-async function scanMovementsExact(cpIds: string[], from: string, to: string) {
+/** Tez: 8 entity bo‘yicha bitta global skan (to‘liq pagination). */
+async function scanMovementsGlobal(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-
-  await mapPool(cpIds, SCAN_CONCURRENCY, async (cpId) => {
-    const agentFilter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
-    let credit = 0;
-    let debit = 0;
-    for (const entity of CREDIT_ENTITIES) {
-      credit += sumApplicable(await fetchEntityDocs(entity, agentFilter));
+  for (const entity of CREDIT_ENTITIES) {
+    const rows = await fetchEntityDocs(entity, moment);
+    for (const row of rows) {
+      if (row.applicable === false) continue;
+      bumpMovement(byCp, docAgentId(row), "credit", Number(row.sum || 0));
     }
-    for (const entity of DEBIT_ENTITIES) {
-      debit += sumApplicable(await fetchEntityDocs(entity, agentFilter));
+  }
+  for (const entity of DEBIT_ENTITIES) {
+    const rows = await fetchEntityDocs(entity, moment);
+    for (const row of rows) {
+      if (row.applicable === false) continue;
+      bumpMovement(byCp, docAgentId(row), "debit", Number(row.sum || 0));
     }
-    byCp.set(cpId, { credit, debit });
-  });
-
+  }
   return byCp;
 }
 
-function focusMovementsPath(from: string, to: string, count: number) {
-  return join(CACHE_DIR, `mov-${CACHE_VERSION}-${from}_${to}_n${count}.json`);
+/**
+ * Aniqlik: tegdagi kontragentlar uchun Приход ni agent= bilan qayta o‘qiydi.
+ * Расход globaldan (allaqachon 1:1). Parallel.
+ */
+async function enrichCreditsExact(
+  byCp: Map<string, { credit: number; debit: number }>,
+  cpIds: string[],
+  from: string,
+  to: string,
+) {
+  if (!cpIds.length) return;
+  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
+  await mapPool(cpIds, CREDIT_ENRICH_CONCURRENCY, async (cpId) => {
+    const agentFilter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
+    // Asosiy Приход = cashin + paymentin (MS da katta summalar shu yerda).
+    let credit = 0;
+    for (const entity of ["cashin", "paymentin", "supply", "commissionreportin"] as const) {
+      credit += sumApplicable(await fetchEntityDocs(entity, agentFilter));
+    }
+    const cur = byCp.get(cpId) || { credit: 0, debit: 0 };
+    cur.credit = credit;
+    byCp.set(cpId, cur);
+  });
 }
 
 async function loadPeriodMovements(from: string, to: string, focusCpIds: string[]) {
-  const key = `${from}:${to}:n${focusCpIds.length}`;
+  const key = `${from}:${to}`;
   const hit = movementCache.get(key);
-  if (hit && Date.now() - hit.at < FRESH_MS) {
-    if (focusCpIds.every((id) => hit.byCp.has(id))) return hit.byCp;
-  }
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
 
-  const focusPath = focusMovementsPath(from, to, focusCpIds.length);
-  const diskFocus = readDiskMap(focusPath);
-  if (diskFocus && Date.now() - diskFocus.at < FRESH_MS) {
+  const disk = readDiskMap(movementsPath(from, to));
+  if (disk && Date.now() - disk.at < FRESH_MS) {
     const byCp = new Map<string, { credit: number; debit: number }>();
-    for (const [id, v] of Object.entries(diskFocus.entries)) {
+    for (const [id, v] of Object.entries(disk.entries)) {
       const row = v as { credit?: number; debit?: number };
       byCp.set(id, { credit: Number(row.credit || 0), debit: Number(row.debit || 0) });
     }
-    if (focusCpIds.every((id) => byCp.has(id))) {
-      movementCache.set(key, { at: diskFocus.at, byCp });
-      return byCp;
-    }
+    movementCache.set(key, { at: disk.at, byCp });
+    return byCp;
   }
 
-  const byCp = await scanMovementsExact(focusCpIds, from, to);
+  const byCp = await scanMovementsGlobal(from, to);
+  await enrichCreditsExact(byCp, focusCpIds, from, to);
   const at = Date.now();
   movementCache.set(key, { at, byCp });
   const entries: Record<string, { credit: number; debit: number }> = {};
   for (const [id, v] of byCp) entries[id] = v;
-  writeDiskMap(focusPath, entries);
+  writeDiskMap(movementsPath(from, to), entries);
   return byCp;
 }
 
@@ -635,14 +658,30 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
   clearVersionedDiskCache();
 }
 
-/** Sync — xatoni yutmaydi; to‘liq qayta hisoblaydi. */
+/**
+ * Soft refresh: eski raqamlar ekranda qoladi, yangisi tayyor bo‘lgach almashtiriladi.
+ * Disk o‘chirilmaydi — UI nollanmaydi.
+ */
 export async function refreshMsSettlements(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
   to: string,
 ) {
   if (!moyskladConfigured()) return;
-  invalidateMsSettlementsCache(from, to);
+  // Faqat RAM/movement cache — disk summary saqlanadi (stale ko‘rinsin).
+  for (const k of [...movementCache.keys()]) {
+    if (k.startsWith(`${from}:${to}`)) movementCache.delete(k);
+  }
+  balanceCache.delete(`${from}:${to}`);
+  for (const k of [...settlementsCache.keys()]) {
+    if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
+  }
+  try {
+    unlinkQuiet(movementsPath(from, to));
+    unlinkQuiet(balancesPath(from, to));
+  } catch {
+    /* ignore */
+  }
   await computeAll(agents, from, to);
 }
 

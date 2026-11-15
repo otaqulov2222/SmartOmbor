@@ -73,9 +73,9 @@ router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
     const settleAgents = agents
       .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
       .map((a) => ({ login: a.login, fullName: a.fullName }));
-    // Kutamiz — UI eski (stale) Приход/остаток ko‘rmasin.
-    await refreshMsSettlements(settleAgents, period.from, period.to);
-    res.json({ ok: true, ...result, preset: period.preset, label: period.label, msSettlements: "ready" });
+    // Fondа yangilanadi — UI eski to‘liq raqamlarni ko‘rsatishda davom etadi, keyin almashtiriladi.
+    void refreshMsSettlements(settleAgents, period.from, period.to).catch(() => undefined);
+    res.json({ ok: true, ...result, preset: period.preset, label: period.label, msSettlements: "warming" });
   } catch (error) {
     next(error);
   }
