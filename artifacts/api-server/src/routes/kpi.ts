@@ -480,16 +480,22 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     const salesFallback = await Promise.all(
       agents.map(async (agent) => {
         const ms = msMap.get(agent.login.toLowerCase());
+        if (ms && (Number(ms.expense) !== 0 || (ms.rows?.length || 0) > 0)) return ms.expense || "0.00";
         if (ms?.folderName && settled.status !== "warming") return ms.expense || "0.00";
-        if (ms?.folderName && Number(ms.expense) > 0) return ms.expense;
         return agentPeriodSales(agent.id, period.from, period.to);
       }),
     );
     const out = agents.map((agent, i) => {
       const ms = msMap.get(agent.login.toLowerCase());
-      const hasMs = Boolean(ms?.folderName) && settled.status !== "warming";
-      const salesTotal = hasMs ? (ms?.expense || "0.00") : salesFallback[i];
-      const paidTotal = hasMs ? (ms?.income || "0.00") : ms && Number(ms.income) > 0 ? ms.income : "0.00";
+      const hasMsData =
+        Boolean(ms) &&
+        ((ms!.rows?.length || 0) > 0 ||
+          Number(ms!.expense) !== 0 ||
+          Number(ms!.income) !== 0 ||
+          Number(ms!.closing) !== 0);
+      const hasMs = hasMsData || (Boolean(ms?.folderName) && settled.status !== "warming");
+      const salesTotal = hasMsData ? (ms?.expense || "0.00") : hasMs ? (ms?.expense || "0.00") : salesFallback[i];
+      const paidTotal = hasMsData || hasMs ? (ms?.income || "0.00") : "0.00";
       const salesPlan = money(agent.salesPlan);
       return {
         id: agent.id,

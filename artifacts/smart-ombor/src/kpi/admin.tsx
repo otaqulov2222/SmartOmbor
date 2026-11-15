@@ -509,7 +509,8 @@ export function KpiDashboardPage() {
     },
   });
   const openAgent = sorted.find((a) => a.id === openAgentId);
-  const detailWarming = detail.data?.msStatus === 'warming' || (detail.isFetching && !(detail.data?.rows?.length));
+  const detailWarming =
+    detail.isFetching && !(detail.data?.rows?.length) && detail.data?.msStatus !== 'ready';
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -647,7 +648,7 @@ export function KpiDashboardPage() {
                       {(detail.data?.rows?.length || 0) === 0 ? (
                         <tr>
                           <td colSpan={5} className="kpi-muted">
-                            {detailWarming ? 'Hujjatlar fonda hisoblanmoqda…' : 'Bu davrda mijoz yo‘q yoki teg bo‘sh.'}
+                            {detail.isFetching ? 'Yuklanmoqda…' : 'Bu davrda mijoz yo‘q yoki teg bo‘sh.'}
                           </td>
                         </tr>
                       ) : null}
