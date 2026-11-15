@@ -259,6 +259,34 @@ async function nextOrderNumber() {
   return `KPI-${day}-${seq}`;
 }
 
+function foldCustName(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** MoySklad взаиморасчеты qatorlarini lokal kpi_customers bilan bog‘lash (ms:id yoki ism). */
+function matchCustomersToMsRows<T extends { id: string; name: string; contractNumber?: string | null }>(
+  locals: T[],
+  msRows: Array<{ id: string; name: string }>,
+): T[] {
+  const byMsId = new Map<string, T>();
+  const byName = new Map<string, T>();
+  for (const c of locals) {
+    const cn = String(c.contractNumber || "");
+    if (cn.startsWith("ms:")) byMsId.set(cn.slice(3), c);
+    const key = foldCustName(c.name);
+    if (key && !byName.has(key)) byName.set(key, c);
+  }
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const row of msRows) {
+    const hit = byMsId.get(row.id) || byName.get(foldCustName(row.name));
+    if (!hit || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    out.push(hit);
+  }
+  return out;
+}
+
 async function activeAssignment(customerId: string) {
   const rows = await db
     .select()
@@ -1372,8 +1400,18 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
       .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
     const custIds = new Set(assigns.map((a) => a.customerId));
     const allCustomers = await db.select().from(kpiCustomersTable);
-    const myCustomers = allCustomers.filter((c) => custIds.has(c.id) || c.createdByAgentId === agent.id);
+    const assignedOrOwned = allCustomers.filter((c) => custIds.has(c.id) || c.createdByAgentId === agent.id);
     const cMap = new Map(allCustomers.map((c) => [c.id, c]));
+    const period = defaultKpiPeriod();
+    const msSettle = await getAgentMsSettlements(
+      { login: agent.login, fullName: agent.fullName || agent.login, from: period.from, to: period.to },
+      [{ login: agent.login, fullName: agent.fullName || agent.login }],
+    );
+    // Marshrut = MoySklad взаиморасчеты (KPI bilan bir xil)
+    const myCustomers =
+      msSettle.rows.length > 0
+        ? matchCustomersToMsRows(assignedOrOwned.length ? assignedOrOwned : allCustomers, msSettle.rows)
+        : assignedOrOwned;
 
     const orders = await db
       .select()
@@ -1405,9 +1443,8 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
         });
       }
     }
-    const visitPlanCount = dailyPlan.visitPlanCount || assigns.length || myCustomers.length;
+    const visitPlanCount = myCustomers.length || msSettle.customers || dailyPlan.visitPlanCount || 0;
     const salesPlan = money(agentRow?.salesPlan || 0);
-    const period = defaultKpiPeriod();
     const monthSales = await agentPeriodSales(agent.id, period.from, period.to);
     const planPct = computePlanPct(monthSales, salesPlan);
     const visitPct =
@@ -1961,10 +1998,6 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .from(kpiCustomerAssignmentsTable)
       .where(eq(kpiCustomerAssignmentsTable.active, true));
     const assignByCustomer = new Map(assigns.map((a) => [a.customerId, a.agentId]));
-    const assignCountByAgent = new Map<string, number>();
-    for (const a of assigns) {
-      assignCountByAgent.set(a.agentId, (assignCountByAgent.get(a.agentId) || 0) + 1);
-    }
 
     const orders = await db
       .select({
@@ -2005,13 +2038,25 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
     }
 
     const agentMap = new Map(allAgents.map((a) => [a.id, a.fullName]));
+    const msPeriod = defaultKpiPeriod();
+    const msSummaries = await getAgentsMsSettlementSummaries(
+      agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+      msPeriod.from,
+      msPeriod.to,
+    );
+    const msCountByAgentId = new Map<string, number>();
+    for (const a of agents) {
+      const settle = msSummaries.map.get(a.login.toLowerCase());
+      msCountByAgentId.set(a.id, settle?.customers ?? 0);
+    }
 
     const agentPins = agents.map((a) => {
       const last = lastLocByAgent.get(a.id);
       const myVisitCustomers = new Set(
         todayVisits.filter((v) => v.agentId === a.id).map((v) => v.customerId),
       );
-      const customersCount = assignCountByAgent.get(a.id) || 0;
+      // KPI / MoySklad взаиморасчеты bilan bir xil (nol aylanmasizlar yo‘q)
+      const customersCount = msCountByAgentId.get(a.id) || 0;
       const myDebtors = [...debtByCustomer.entries()].filter(([cid]) => assignByCustomer.get(cid) === a.id).length;
       return {
         id: a.id,
@@ -2050,12 +2095,35 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
     }
 
     const selectedAgentLoc = activeAgentId ? lastLocByAgent.get(activeAgentId) : null;
-    // Agentga biriktirilgan BARCHA mijozlar (limit(500) kesib tashlamaslik — telefon bilan bir xil).
-    const selectedIds = assigns.filter((a) => a.agentId === activeAgentId).map((a) => a.customerId);
-    const selectedCustomers =
-      selectedIds.length > 0
-        ? await db.select().from(kpiCustomersTable).where(inArray(kpiCustomersTable.id, selectedIds))
+    const selectedAgentRow = agents.find((a) => a.id === activeAgentId);
+    // Marshrut nuqtalari = MoySklad взаиморасчеты (KPI bilan 1:1), lokal assignment emas.
+    const msDetail = selectedAgentRow
+      ? await getAgentMsSettlements(
+          {
+            login: selectedAgentRow.login,
+            fullName: selectedAgentRow.fullName,
+            from: msPeriod.from,
+            to: msPeriod.to,
+          },
+          agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+        )
+      : null;
+    const assignedIds = assigns.filter((a) => a.agentId === activeAgentId).map((a) => a.customerId);
+    const localPool =
+      assignedIds.length > 0
+        ? await db.select().from(kpiCustomersTable).where(inArray(kpiCustomersTable.id, assignedIds))
         : [];
+    // Fallback: barcha MS bog‘langanlar + ism orqali topish uchun butun jadval emas — assigned + ms: kontraktlar
+    const extraMsLocals = await db
+      .select()
+      .from(kpiCustomersTable)
+      .where(sql`${kpiCustomersTable.contractNumber} like 'ms:%'`);
+    const poolById = new Map<string, (typeof localPool)[number]>();
+    for (const c of [...localPool, ...extraMsLocals]) poolById.set(c.id, c);
+    const selectedCustomers = matchCustomersToMsRows(
+      [...poolById.values()],
+      msDetail?.rows || [],
+    );
     const rawPoints = selectedCustomers.map((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
@@ -2138,6 +2206,8 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
     res.json({
       date: dateFilter,
       selectedAgentId: activeAgentId,
+      msPeriod,
+      msFolder: msDetail?.folderName || null,
       agents: agentPins,
       points,
       routeLog,

@@ -68,11 +68,14 @@
   display: flex; flex-wrap: wrap; gap: .55rem; align-items: end; flex: 0 1 auto;
 }
 .kpi-period-bar label { display: grid; gap: .22rem; font-size: .74rem; font-weight: 700; color: #64748b; }
-.kpi-period-bar input[type="date"] {
+.kpi-period-bar input[type="date"],
+.kpi-period-bar input.kpi-date-dmy {
   border: 1px solid #cbd5e1; border-radius: 10px; padding: .48rem .6rem;
   font-size: .9rem; color: #0f172a; background: #fff; min-width: 9.5rem;
+  font-variant-numeric: tabular-nums;
 }
-.kpi-period-bar input[type="date"]:focus {
+.kpi-period-bar input[type="date"]:focus,
+.kpi-period-bar input.kpi-date-dmy:focus {
   outline: none; border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59, 130, 246, .15);
 }
 .kpi-period-dash {
@@ -848,7 +851,8 @@
   .kpi-period-toolbar { flex-direction: column; align-items: stretch; }
   .kpi-period-bar { width: 100%; }
   .kpi-period-bar label { flex: 1 1 auto; min-width: 0; }
-  .kpi-period-bar input[type="date"] { width: 100%; min-width: 0; }
+  .kpi-period-bar input[type="date"],
+  .kpi-period-bar input.kpi-date-dmy { width: 100%; min-width: 0; }
   .kpi-sync-btn { width: 100%; justify-content: center; }
   .kpi-dash-title-row { align-items: flex-start; }
   .kpi-period-badge { white-space: normal; line-height: 1.3; }

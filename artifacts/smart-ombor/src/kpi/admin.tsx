@@ -318,6 +318,66 @@ function useMsSync(from?: string, to?: string, preset?: PeriodPreset) {
 const PERIOD_PRIMARY: PeriodPreset[] = ['today', 'week', 'month', 'days30', 'quarter'];
 const PERIOD_SECONDARY: PeriodPreset[] = ['yesterday', 'last_week', 'last_month', 'days7', 'year', 'custom'];
 
+/** ISO yyyy-mm-dd ↔ ko‘rinish: dd/mm/yyyy (UZ standart). */
+function isoToDmy(iso: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return '';
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+function dmyToIso(raw: string) {
+  const m = /^(\d{1,2})[/./-](\d{1,2})[/./-](\d{4})$/.exec(raw.trim());
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (yyyy < 2000 || yyyy > 2100 || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+  const iso = `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  const check = new Date(`${iso}T12:00:00Z`);
+  if (Number.isNaN(check.getTime())) return null;
+  if (check.getUTCDate() !== dd || check.getUTCMonth() + 1 !== mm) return null;
+  return iso;
+}
+
+function DateDmyInput({
+  value, onChange, label,
+}: {
+  value: string; onChange: (iso: string) => void; label: string;
+}) {
+  const [text, setText] = useState(() => isoToDmy(value));
+  useEffect(() => {
+    setText(isoToDmy(value));
+  }, [value]);
+  return (
+    <label>
+      <span>{label}</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        className="kpi-date-dmy"
+        placeholder="DD/MM/YYYY"
+        lang="uz"
+        autoComplete="off"
+        value={text}
+        onChange={(e) => {
+          const next = e.target.value;
+          setText(next);
+          const iso = dmyToIso(next);
+          if (iso) onChange(iso);
+        }}
+        onBlur={() => {
+          const iso = dmyToIso(text);
+          if (iso) {
+            onChange(iso);
+            setText(isoToDmy(iso));
+          } else {
+            setText(isoToDmy(value));
+          }
+        }}
+      />
+    </label>
+  );
+}
+
 function PeriodBar({
   from, to, preset, onPreset, onFrom, onTo, onSync, syncing, compact,
 }: {
@@ -367,15 +427,9 @@ function PeriodBar({
           </div>
         </div>
         <div className="kpi-period-bar">
-          <label>
-            <span>Dan</span>
-            <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} />
-          </label>
+          <DateDmyInput label="Dan" value={from} onChange={onFrom} />
           <span className="kpi-period-dash" aria-hidden>—</span>
-          <label>
-            <span>Gacha</span>
-            <input type="date" value={to} onChange={(e) => onTo(e.target.value)} />
-          </label>
+          <DateDmyInput label="Gacha" value={to} onChange={onTo} />
           <button type="button" className="btn btn-primary kpi-sync-btn" disabled={syncing} onClick={onSync}>
             <RefreshCw size={15} className={syncing ? 'kpi-spin' : undefined} />
             {syncing ? 'Yangilanmoqda…' : 'MS yangilash'}
