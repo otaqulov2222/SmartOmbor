@@ -308,7 +308,7 @@ function useMsSync(from?: string, to?: string, preset?: PeriodPreset) {
       }),
     }),
     onSuccess: () => {
-      for (const k of ['kpi-dash', 'kpi-agents', 'kpi-customers', 'kpi-orders', 'kpi-calcs']) {
+      for (const k of ['kpi-dash', 'kpi-agents', 'kpi-customers', 'kpi-orders', 'kpi-calcs', 'kpi-agent-settle', 'kpi-gps']) {
         void cache.invalidateQueries({ queryKey: [k] });
       }
     },

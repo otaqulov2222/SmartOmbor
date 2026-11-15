@@ -1,8 +1,14 @@
 /**
  * MoySklad «Взаиморасчеты» — agent TEGidagi kontragentlar.
- * UI millisekundda: disk/memory cache; MS skani fonda.
+ *
+ * Manba (MS yordam — Деньги → Взаиморасчеты):
+ *   Приход:  Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
+ *   Расход:  Отгрузки, Исходящие платежи, Расходные ордера, Выданные отчёты комиссионера
+ *   Остатки: /report/counterparty (momentTo) — ochilish va yakuniy alohida.
+ *
+ * UI millisekundda: disk/memory cache; MS skani fonda (force sync — kutadi).
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
 import { moysklad, moyskladConfigured } from "../moysklad";
 import { money } from "./money";
@@ -42,9 +48,16 @@ const AGENT_TAG_ALIASES: Record<string, string[]> = {
   sevinch: ["sevinch"],
 };
 
+/** MS UI «Взаиморасчеты» — faqat shu hujjatlar (rasmiy yordam). */
+const CREDIT_ENTITIES = ["supply", "paymentin", "cashin", "commissionreportin"] as const;
+const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"] as const;
+
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
+/** 1 so‘m (100 tiyin) — yuvarlash / float farqi. */
+const RECONCILE_EPS = 100;
+const CACHE_VERSION = "v3";
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -55,12 +68,10 @@ type MsDoc = {
   applicable?: boolean;
   agent?: { id?: string; meta?: { href?: string }; name?: string };
 };
-/** MS /report/counterparty — UI «Взаиморасчеты» bilan bir xil manba. */
+/** MS /report/counterparty — balance = yakuniy qoldiq (momentTo). */
 type MsReportRow = {
   balance?: number;
-  /** Приход (tiyin) */
   credit?: number;
-  /** Расход (tiyin) */
   debit?: number;
   counterparty?: { id?: string; name?: string; meta?: { href?: string } };
 };
@@ -92,14 +103,18 @@ function docAgentId(doc: MsDoc) {
   return String(doc.agent?.id || cpIdFromHref(doc.agent?.meta?.href) || "").trim();
 }
 
+/** YYYY-MM-DD → oldingi kun (Toshkent kalendari uchun noon UTC). */
+function prevYmd(ymd: string) {
+  const d = new Date(`${ymd}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 const tagCache = new Map<string, { at: number; tag: string | null }>();
 const groupCache = new Map<string, { at: number; rows: Array<{ id: string; name: string }> }>();
-const reportCache = new Map<
-  string,
-  { at: number; byCp: Map<string, { credit: number; debit: number; balance: number }> }
->();
+/** asOf (momentTo ymd+time key) → balances */
+const balanceAsOfCache = new Map<string, { at: number; byCp: Map<string, number> }>();
 const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: number; debit: number }> }>();
-const balanceCache = new Map<string, { at: number; byCp: Map<string, number> }>();
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
 const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
 const warming = new Map<string, Promise<void>>();
@@ -113,8 +128,16 @@ function ensureCacheDir() {
 }
 
 function summaryPath(from: string, to: string) {
-  // v2: report/counterparty credit+debit (eski cache noto‘g‘ri Приход berardi)
-  return join(CACHE_DIR, `settlements-v2-${from}_${to}.json`);
+  return join(CACHE_DIR, `settlements-${CACHE_VERSION}-${from}_${to}.json`);
+}
+
+function movementsPath(from: string, to: string) {
+  return join(CACHE_DIR, `mov-${CACHE_VERSION}-${from}_${to}.json`);
+}
+
+function balancesAsOfPath(asOfKey: string) {
+  const safe = asOfKey.replace(/[^\d\-]/g, "_");
+  return join(CACHE_DIR, `bal-${CACHE_VERSION}-${safe}.json`);
 }
 
 function readDiskSummary(from: string, to: string) {
@@ -133,7 +156,7 @@ function writeDiskSummary(from: string, to: string, byLogin: Record<string, Agen
     ensureCacheDir();
     writeFileSync(
       summaryPath(from, to),
-      JSON.stringify({ at: Date.now(), from, to, byLogin }),
+      JSON.stringify({ at: Date.now(), from, to, version: CACHE_VERSION, byLogin }),
       "utf8",
     );
   } catch {
@@ -154,6 +177,25 @@ function peekSummary(from: string, to: string) {
     return disk;
   }
   return null;
+}
+
+function readDiskMap(path: string): { at: number; entries: Record<string, unknown> } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { at: number; entries: Record<string, unknown> };
+    if (!parsed?.at || !parsed.entries) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDiskMap(path: string, entries: Record<string, unknown>) {
+  try {
+    ensureCacheDir();
+    writeFileSync(path, JSON.stringify({ at: Date.now(), version: CACHE_VERSION, entries }), "utf8");
+  } catch {
+    /* ignore */
+  }
 }
 
 async function resolveAgentTag(login: string, fullName?: string): Promise<string | null> {
@@ -201,46 +243,25 @@ async function listTagCounterparties(tag: string) {
   return out;
 }
 
-function movementsPath(from: string, to: string) {
-  return join(CACHE_DIR, `mov-v2-${from}_${to}.json`);
-}
-
-function balancesPath(from: string, to: string) {
-  return join(CACHE_DIR, `bal-v2-${from}_${to}.json`);
-}
-
-function readDiskMap(path: string): { at: number; entries: Record<string, unknown> } | null {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as { at: number; entries: Record<string, unknown> };
-    if (!parsed?.at || !parsed.entries) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeDiskMap(path: string, entries: Record<string, unknown>) {
-  try {
-    ensureCacheDir();
-    writeFileSync(path, JSON.stringify({ at: Date.now(), entries }), "utf8");
-  } catch {
-    /* ignore */
-  }
-}
-
 /**
- * MS UI «Взаиморасчеты» bilan bir xil: /report/counterparty
- * (credit=Приход, debit=Расход, balance=Конечный).
- * Agar credit/debit bo‘sh kelasa — hujjat skaniga fallback.
+ * Kontragent qoldig‘i momentTo holatida (MS «Конечный остаток» shu nuqtada).
+ * credit/debit bu yerda aylanma emas — debitor/kreditor zaxirasi; ishlatilmaydi.
  */
-async function loadCounterpartyReport(from: string, to: string) {
-  const key = `${from}:${to}`;
-  const cached = reportCache.get(key);
+async function loadBalancesAsOf(momentTo: string) {
+  const key = momentTo;
+  const cached = balanceAsOfCache.get(key);
   if (cached && Date.now() - cached.at < FRESH_MS) return cached.byCp;
 
-  const byCp = new Map<string, { credit: number; debit: number; balance: number }>();
-  const momentFrom = `${from} 00:00:00`;
-  const momentTo = `${to} 23:59:59`;
+  const disk = readDiskMap(balancesAsOfPath(key));
+  if (disk && Date.now() - disk.at < FRESH_MS) {
+    const byCp = new Map<string, number>();
+    for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
+    balanceAsOfCache.set(key, { at: disk.at, byCp });
+    return byCp;
+  }
+
+  const byCp = new Map<string, number>();
+  const momentFrom = "2000-01-01 00:00:00";
   for (let offset = 0; offset < 20_000; offset += PAGE) {
     const page = await moysklad<{ rows?: MsReportRow[] }>(
       `/report/counterparty?limit=${PAGE}&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
@@ -250,18 +271,20 @@ async function loadCounterpartyReport(from: string, to: string) {
     for (const row of rows) {
       const id = String(row.counterparty?.id || cpIdFromHref(row.counterparty?.meta?.href) || "").trim();
       if (!id) continue;
-      byCp.set(id, {
-        credit: Number(row.credit || 0),
-        debit: Number(row.debit || 0),
-        balance: Number(row.balance || 0),
-      });
+      byCp.set(id, Number(row.balance || 0));
     }
     if (rows.length < PAGE) break;
   }
-  reportCache.set(key, { at: Date.now(), byCp });
+
+  const at = Date.now();
+  balanceAsOfCache.set(key, { at, byCp });
+  const entries: Record<string, number> = {};
+  for (const [id, v] of byCp) entries[id] = v;
+  writeDiskMap(balancesAsOfPath(key), entries);
   return byCp;
 }
 
+/** MS rasmiy hujjatlar bo‘yicha davr aylanmasi. */
 async function scanMovementsFromDocuments(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const bump = (id: string, side: "credit" | "debit", sum: number) => {
@@ -271,27 +294,11 @@ async function scanMovementsFromDocuments(from: string, to: string) {
     byCp.set(id, cur);
   };
 
-  // Faqat o‘tkazilgan hujjatlar — MS UI bilan bir xil.
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59;applicable=true`;
-  // MS yordam: Приемки/Отгрузки, Платежи, Ордера, Отчеты комиссионера, розница.
-  const creditEntities = [
-    "paymentin",
-    "cashin",
-    "salesreturn",
-    "commissionreportin",
-    "supply",
-  ] as const;
-  const debitEntities = [
-    "demand",
-    "paymentout",
-    "cashout",
-    "commissionreportout",
-    "retaildemand",
-  ] as const;
 
   const scan = async (entity: string, side: "credit" | "debit") => {
-    for (let offset = 0; offset < 20_000; offset += PAGE) {
-      const page = await moysklad<{ rows?: MsDoc[]; meta?: { size?: number } }>(
+    for (let offset = 0; offset < 50_000; offset += PAGE) {
+      const page = await moysklad<{ rows?: MsDoc[] }>(
         `/entity/${entity}?limit=${PAGE}&offset=${offset}&filter=${encodeURIComponent(moment)}`,
       ).catch(() => ({ rows: [] as MsDoc[] }));
       const rows = page.rows || [];
@@ -305,8 +312,8 @@ async function scanMovementsFromDocuments(from: string, to: string) {
   };
 
   await Promise.all([
-    ...creditEntities.map((e) => scan(e, "credit")),
-    ...debitEntities.map((e) => scan(e, "debit")),
+    ...CREDIT_ENTITIES.map((e) => scan(e, "credit")),
+    ...DEBIT_ENTITIES.map((e) => scan(e, "debit")),
   ]);
   return byCp;
 }
@@ -327,51 +334,12 @@ async function loadPeriodMovements(from: string, to: string) {
     return byCp;
   }
 
-  const report = await loadCounterpartyReport(from, to);
-  let hasTurnover = false;
-  for (const v of report.values()) {
-    if (v.credit !== 0 || v.debit !== 0) {
-      hasTurnover = true;
-      break;
-    }
-  }
-
-  const byCp = hasTurnover
-    ? new Map(
-        [...report.entries()].map(([id, v]) => [id, { credit: v.credit, debit: v.debit }] as const),
-      )
-    : await scanMovementsFromDocuments(from, to);
-
+  const byCp = await scanMovementsFromDocuments(from, to);
   const at = Date.now();
   movementCache.set(key, { at, byCp });
   const entries: Record<string, { credit: number; debit: number }> = {};
   for (const [id, v] of byCp) entries[id] = v;
   writeDiskMap(movementsPath(from, to), entries);
-  return byCp;
-}
-
-async function loadBalances(from: string, to: string) {
-  const key = `${from}:${to}`;
-  const hit = balanceCache.get(key);
-  if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
-
-  const disk = readDiskMap(balancesPath(from, to));
-  if (disk && Date.now() - disk.at < FRESH_MS) {
-    const byCp = new Map<string, number>();
-    for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
-    balanceCache.set(key, { at: disk.at, byCp });
-    return byCp;
-  }
-
-  const report = await loadCounterpartyReport(from, to);
-  const byCp = new Map<string, number>();
-  for (const [id, v] of report) byCp.set(id, v.balance);
-
-  const at = Date.now();
-  balanceCache.set(key, { at, byCp });
-  const entries: Record<string, number> = {};
-  for (const [id, v] of byCp) entries[id] = v;
-  writeDiskMap(balancesPath(from, to), entries);
   return byCp;
 }
 
@@ -412,6 +380,12 @@ function emptySettlement(input: { login: string; fullName: string; from: string;
   };
 }
 
+/**
+ * opening/closing — MS report (mustaqil).
+ * income/expense — hujjat skani; agar ochilish+kirim−chiqim≠yakuniy bo‘lsa,
+ * Приход ni MS formulasi bilan tuzatamiz (tarixan undercount shu tomonda).
+ *   closing = opening + credit − debit  ⇒  credit = closing − opening + debit
+ */
 function buildSettlement(input: {
   login: string;
   fullName: string;
@@ -420,23 +394,34 @@ function buildSettlement(input: {
   tag: string | null;
   group: Array<{ id: string; name: string }>;
   movements: Map<string, { credit: number; debit: number }>;
-  balances: Map<string, number>;
+  openings: Map<string, number>;
+  closings: Map<string, number>;
 }): AgentSettlement {
   if (!input.tag) return emptySettlement(input);
 
   const rows = input.group
     .map((cp) => {
       const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
-      const closingKop = input.balances.get(cp.id) ?? 0;
-      const openingKop = closingKop - mv.credit + mv.debit;
+      const openingKop = input.openings.get(cp.id) ?? 0;
+      const closingKop = input.closings.get(cp.id) ?? 0;
+      let creditKop = mv.credit;
+      const debitKop = mv.debit;
+      const impliedClosing = openingKop + creditKop - debitKop;
+      if (Math.abs(impliedClosing - closingKop) > RECONCILE_EPS) {
+        creditKop = closingKop - openingKop + debitKop;
+      }
       return {
         id: cp.id,
         name: cp.name,
         opening: som(openingKop),
-        income: som(mv.credit),
-        expense: som(mv.debit),
+        income: som(creditKop),
+        expense: som(debitKop),
         closing: som(closingKop),
-        keep: mv.credit !== 0 || mv.debit !== 0 || openingKop !== 0 || closingKop !== 0,
+        keep:
+          creditKop !== 0 ||
+          debitKop !== 0 ||
+          openingKop !== 0 ||
+          closingKop !== 0,
       };
     })
     .filter((row) => row.keep)
@@ -465,9 +450,13 @@ async function computeAll(
   from: string,
   to: string,
 ) {
-  const [movements, balances] = await Promise.all([
+  const openingMoment = `${prevYmd(from)} 23:59:59`;
+  const closingMoment = `${to} 23:59:59`;
+
+  const [movements, openings, closings] = await Promise.all([
     loadPeriodMovements(from, to),
-    loadBalances(from, to),
+    loadBalancesAsOf(openingMoment),
+    loadBalancesAsOf(closingMoment),
   ]);
 
   const tags = await Promise.all(
@@ -481,6 +470,7 @@ async function computeAll(
   await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
 
   const byLogin: Record<string, AgentSettlement> = {};
+  const at = Date.now();
   for (const { agent, tag } of tags) {
     const group = tag ? await listTagCounterparties(tag) : [];
     const data = buildSettlement({
@@ -491,13 +481,13 @@ async function computeAll(
       tag,
       group,
       movements,
-      balances,
+      openings,
+      closings,
     });
     byLogin[agent.login.toLowerCase()] = data;
-    settlementsCache.set(`${foldName(agent.login)}:${from}:${to}`, { at: Date.now(), data });
+    settlementsCache.set(`${foldName(agent.login)}:${from}:${to}`, { at, data });
   }
 
-  const at = Date.now();
   summaryMem.set(`${from}:${to}`, { at, byLogin });
   writeDiskSummary(from, to, byLogin);
   return byLogin;
@@ -527,27 +517,73 @@ export function warmMsSettlements(
   return job;
 }
 
+function unlinkQuiet(path: string) {
+  try {
+    unlinkSync(path);
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearVersionedDiskCache(from?: string, to?: string) {
+  if (from && to) {
+    unlinkQuiet(summaryPath(from, to));
+    unlinkQuiet(movementsPath(from, to));
+    unlinkQuiet(balancesAsOfPath(`${prevYmd(from)} 23:59:59`));
+    unlinkQuiet(balancesAsOfPath(`${to} 23:59:59`));
+    return;
+  }
+  try {
+    for (const name of readdirSync(CACHE_DIR)) {
+      if (
+        name.startsWith(`settlements-${CACHE_VERSION}-`) ||
+        name.startsWith(`mov-${CACHE_VERSION}-`) ||
+        name.startsWith(`bal-${CACHE_VERSION}-`) ||
+        name.startsWith("settlements-v2-") ||
+        name.startsWith("mov-v2-") ||
+        name.startsWith("bal-v2-")
+      ) {
+        unlinkQuiet(join(CACHE_DIR, name));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function invalidateMsSettlementsCache(from?: string, to?: string) {
   if (from && to) {
     const key = `${from}:${to}`;
     summaryMem.delete(key);
-    reportCache.delete(key);
     movementCache.delete(key);
-    balanceCache.delete(key);
-    for (const p of [summaryPath(from, to), movementsPath(from, to), balancesPath(from, to)]) {
-      try {
-        unlinkSync(p);
-      } catch {
-        /* ignore */
-      }
+    balanceAsOfCache.delete(`${prevYmd(from)} 23:59:59`);
+    balanceAsOfCache.delete(`${to} 23:59:59`);
+    for (const k of [...settlementsCache.keys()]) {
+      if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
     }
+    clearVersionedDiskCache(from, to);
     return;
   }
   summaryMem.clear();
-  reportCache.clear();
+  balanceAsOfCache.clear();
   movementCache.clear();
-  balanceCache.clear();
   settlementsCache.clear();
+  groupCache.clear();
+  tagCache.clear();
+  clearVersionedDiskCache();
+}
+
+/**
+ * Sync tugaguncha yangi MS raqamlarini hisoblaydi (stale qaytarmaydi).
+ */
+export async function refreshMsSettlements(
+  agents: Array<{ login: string; fullName: string }>,
+  from: string,
+  to: string,
+) {
+  if (!moyskladConfigured()) return;
+  invalidateMsSettlementsCache(from, to);
+  await warmMsSettlements(agents, from, to, true);
 }
 
 /** Jadval uchun: cache'dan darhol, yo‘q bo‘lsa fonda hisoblaydi. */
@@ -632,48 +668,6 @@ export async function getAgentMsSettlements(
   if (fromSummary && age < STALE_MS) {
     void warmMsSettlements(agentsForWarm, input.from, input.to, true);
     return { ...fromSummary, msStatus: "stale" };
-  }
-
-  // RAM/disk movement+balance bo‘lsa — MS kutmasdan hisobla.
-  const periodKey = `${input.from}:${input.to}`;
-  let movHit = movementCache.get(periodKey);
-  let balHit = balanceCache.get(periodKey);
-  if (!movHit || Date.now() - movHit.at >= FRESH_MS) {
-    const disk = readDiskMap(movementsPath(input.from, input.to));
-    if (disk && Date.now() - disk.at < FRESH_MS) {
-      const byCp = new Map<string, { credit: number; debit: number }>();
-      for (const [id, v] of Object.entries(disk.entries)) {
-        const row = v as { credit?: number; debit?: number };
-        byCp.set(id, { credit: Number(row.credit || 0), debit: Number(row.debit || 0) });
-      }
-      movHit = { at: disk.at, byCp };
-      movementCache.set(periodKey, movHit);
-    }
-  }
-  if (!balHit || Date.now() - balHit.at >= FRESH_MS) {
-    const disk = readDiskMap(balancesPath(input.from, input.to));
-    if (disk && Date.now() - disk.at < FRESH_MS) {
-      const byCp = new Map<string, number>();
-      for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
-      balHit = { at: disk.at, byCp };
-      balanceCache.set(periodKey, balHit);
-    }
-  }
-  if (movHit && balHit && Date.now() - movHit.at < FRESH_MS && Date.now() - balHit.at < FRESH_MS) {
-    const tag = await resolveAgentTag(input.login, input.fullName);
-    const group = tag ? await listTagCounterparties(tag) : [];
-    const data = buildSettlement({
-      login: input.login,
-      fullName: input.fullName,
-      from: input.from,
-      to: input.to,
-      tag,
-      group,
-      movements: movHit.byCp,
-      balances: balHit.byCp,
-    });
-    settlementsCache.set(cacheKey, { at: Date.now(), data });
-    return { ...data, msStatus: "ready" };
   }
 
   void warmMsSettlements(agentsForWarm, input.from, input.to, true);

@@ -52,8 +52,7 @@ import { ensureKpiBootstrapped, syncKpiFromMoySklad } from "../lib/kpi/ms-sync";
 import {
   getAgentMsSettlements,
   getAgentsMsSettlementSummaries,
-  invalidateMsSettlementsCache,
-  warmMsSettlements,
+  refreshMsSettlements,
 } from "../lib/kpi/ms-settlements";
 import { defaultKpiPeriod, resolveKpiPeriod } from "../lib/kpi/period";
 import { money, moneyAdd, moneyCmp, moneyMul, moneyPct, moneySub } from "../lib/kpi/money";
@@ -68,18 +67,14 @@ router.use("/kpi", (_req, _res, next) => {
 router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
   try {
     const period = parsePeriod(req.body?.from, req.body?.to, req.body?.preset);
-    invalidateMsSettlementsCache(period.from, period.to);
     const result = await syncKpiFromMoySklad(true, period);
     const agents = await db.select().from(kpiAgentsTable);
-    void warmMsSettlements(
-      agents
-        .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
-        .map((a) => ({ login: a.login, fullName: a.fullName })),
-      period.from,
-      period.to,
-      true,
-    );
-    res.json({ ok: true, ...result, preset: period.preset, label: period.label });
+    const settleAgents = agents
+      .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
+      .map((a) => ({ login: a.login, fullName: a.fullName }));
+    // Kutamiz — UI eski (stale) Приход/остаток ko‘rmasin.
+    await refreshMsSettlements(settleAgents, period.from, period.to);
+    res.json({ ok: true, ...result, preset: period.preset, label: period.label, msSettlements: "ready" });
   } catch (error) {
     next(error);
   }
