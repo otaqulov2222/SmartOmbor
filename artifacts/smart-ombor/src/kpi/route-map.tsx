@@ -947,24 +947,23 @@ export function RouteMap({
       ) : agentName ? (
         <div className="rm-agent-banner">
           <b>{agentName}</b>
-          <span>{hasLiveGps ? 'Jonli joylashuv' : 'GPS kutilmoqda'} · {doneCount}/{stops.length} nuqta</span>
+          <span>{hasLiveGps ? 'Jonli' : 'GPS yo‘q'} · {doneCount}/{stops.length}</span>
         </div>
       ) : null}
       <div className="rm-chain-bar">
         <div className="rm-chain-meta">
           <div className="rm-progress-block">
-            <b>Yo‘nalish: {doneCount} / {stops.length} bajarildi</b>
+            <b>{doneCount} / {stops.length}</b>
             <div className="rm-progress"><i style={{ width: `${progressPct}%` }} /></div>
           </div>
           {nextStop ? (
             <span className="rm-next-hint">
-              Navbatdagi: <b>#{nextStop.step} {nextStop.name}</b>
+              <b>#{nextStop.step} {nextStop.name}</b>
               {roadHint.distanceM != null ? ` · ${fmtDistance(roadHint.distanceM)}` : ''}
               {roadHint.durationSec != null ? ` · ${fmtEta(roadHint.durationSec)}` : ''}
-              {approxNext ? ' · taxminiy joy' : ''}
             </span>
           ) : stops.length ? (
-            <span className="rm-next-hint is-ok">Barcha nuqtalar bajarildi ✓</span>
+            <span className="rm-next-hint is-ok">Tugadi ✓</span>
           ) : null}
         </div>
         <div className="rm-chain-actions">
@@ -1016,14 +1015,7 @@ export function RouteMap({
       <div ref={wrapRef} className={`rm-canvas-wrap ${active || isFullscreen ? 'is-active' : ''} ${followOn ? 'is-follow' : ''}`}>
         <div ref={boxRef} className="rm-canvas" />
         {!hasLiveGps ? (
-          <div className="rm-gps-banner">
-            {viewer === 'admin'
-              ? 'Agent GPS yo‘q — agent telefonda GPS yoqilganda jonli ko‘rinadi.'
-              : 'GPS yo‘q — telefon GPS ni yoqing.'}
-          </div>
-        ) : null}
-        {approxNext ? (
-          <div className="rm-gps-banner is-warn">Taxminiy joy — «Bordim» yoki admin orqali aniq GPS saqlang.</div>
+          <div className="rm-gps-banner">{viewer === 'admin' ? 'Agent GPS yo‘q' : 'GPS yo‘q'}</div>
         ) : null}
         {followOn && hasLiveGps ? (
           <div className="rm-follow-badge"><Navigation size={12} /> Jonli</div>

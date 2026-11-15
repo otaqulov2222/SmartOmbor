@@ -150,9 +150,6 @@ export function GpsPage() {
       <header className="kpi-head">
         <div>
           <h1>GPS va marshrut {selectedAgent ? `— ${selectedAgent.fullName}` : ''}</h1>
-          <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
-            Nuqtalar = agentga biriktirilgan mijozlar (telefon Marshrut bilan bir xil). KPI dagi 5 = faqat MS aylanmasi.
-          </p>
         </div>
         <div className="kpi-actions">
           <button type="button" className="btn" onClick={() => void q.refetch()}>
@@ -189,35 +186,31 @@ export function GpsPage() {
       <div className="ag-stats">
         <article className="ag-stat is-blue">
           <div className="ag-stat-head">
-            <span>GPS faol agentlar</span>
+            <span>GPS faol</span>
             <span className="ag-stat-ico"><Navigation size={18} /></span>
           </div>
           <strong>{liveAgents.length} / {d?.agents.length || 0}</strong>
-          <small>Telefon GPS yoqilganda ko‘rinadi</small>
         </article>
         <article className="ag-stat is-green">
           <div className="ag-stat-head">
-            <span>Bajarilgan nuqtalar (✓)</span>
+            <span>Bajarilgan</span>
             <span className="ag-stat-ico"><CheckCircle2 size={18} /></span>
           </div>
           <strong>{visitedCount} / {d?.points.length || 0}</strong>
-          <small>Sana: {d?.date || 'bugun'}</small>
         </article>
         <article className="ag-stat is-amber">
           <div className="ag-stat-head">
-            <span>Qolgan nuqtalar</span>
+            <span>Qolgan</span>
             <span className="ag-stat-ico"><Compass size={18} /></span>
           </div>
-          <strong>{Math.max(0, (d?.points.length || 0) - visitedCount)} ta</strong>
-          <small>Navbat bo‘yicha 1 → 2 → 3 → 4 → 5</small>
+          <strong>{Math.max(0, (d?.points.length || 0) - visitedCount)}</strong>
         </article>
         <article className="ag-stat">
           <div className="ag-stat-head">
-            <span>Bugungi tashriflar jurnali</span>
+            <span>Tashriflar</span>
             <span className="ag-stat-ico"><MapPin size={18} /></span>
           </div>
-          <strong>{d?.routeLog.length || 0} ta</strong>
-          <small>Soat va GPS dalil bilan</small>
+          <strong>{d?.routeLog.length || 0}</strong>
         </article>
       </div>
 
@@ -377,7 +370,7 @@ export function GpsPage() {
                     ) : a.lat != null && a.lng != null ? (
                       <span className="kpi-chip">Eski · {fmtTime(a.lastSeenAt)}</span>
                     ) : (
-                      <span className="kpi-chip">Telefon GPS kutilmoqda</span>
+                      <span className="kpi-chip">GPS yo‘q</span>
                     )}
                   </td>
                   <td data-label="Mijozlari">{a.customersCount} ta</td>
