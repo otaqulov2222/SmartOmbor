@@ -12,6 +12,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
+import { logger } from "../logger";
 import { moysklad, moyskladConfigured } from "../moysklad";
 import { money } from "./money";
 
@@ -60,10 +61,11 @@ const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** v7: tez global skan + cashin/paymentin aniqlik; cache soft-refresh. */
-const CACHE_VERSION = "v7";
+/** v8: avval global (tez UI), keyin agent= enrich fonda; soft-refresh. */
+const CACHE_VERSION = "v8";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
-const CREDIT_ENRICH_CONCURRENCY = 8;
+/** CP × 4 entity parallel — MS rate-limit uchun past. */
+const CREDIT_ENRICH_CONCURRENCY = 3;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -113,6 +115,8 @@ const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: 
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
 const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
 const warming = new Map<string, Promise<void>>();
+/** Ochilgan agent modal — enrich navbatida birinchi. */
+let enrichPriorityLogin = "";
 
 function ensureCacheDir() {
   try {
@@ -361,33 +365,27 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
   await Promise.all(workers);
 }
 
-/** Tez: 8 entity parallel global skan (to‘liq pagination). */
+/** Tez: entity’larni 4 tadan parallel (429 kamayadi). */
 async function scanMovementsGlobal(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
-  const jobs = [
-    ...CREDIT_ENTITIES.map(async (entity) => {
-      const rows = await fetchEntityDocs(entity, moment);
-      return { side: "credit" as const, rows };
-    }),
-    ...DEBIT_ENTITIES.map(async (entity) => {
-      const rows = await fetchEntityDocs(entity, moment);
-      return { side: "debit" as const, rows };
-    }),
+  const all = [
+    ...CREDIT_ENTITIES.map((entity) => ({ entity, side: "credit" as const })),
+    ...DEBIT_ENTITIES.map((entity) => ({ entity, side: "debit" as const })),
   ];
-  const batches = await Promise.all(jobs);
-  for (const { side, rows } of batches) {
+  await mapPool(all, 4, async ({ entity, side }) => {
+    const rows = await fetchEntityDocs(entity, moment);
     for (const row of rows) {
       if (row.applicable === false) continue;
       bumpMovement(byCp, docAgentId(row), side, Number(row.sum || 0));
     }
-  }
+  });
   return byCp;
 }
 
 /**
- * Aniqlik: tegdagi kontragentlar uchun Приход ni agent= bilan qayta o‘qiydi.
- * Расход globaldan (allaqachon 1:1). Parallel.
+ * Aniqlik: kontragent uchun Приход = agent= filter (4 entity parallel).
+ * Расход globaldan qoladi.
  */
 async function enrichCreditsExact(
   byCp: Map<string, { credit: number; debit: number }>,
@@ -399,18 +397,26 @@ async function enrichCreditsExact(
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
   await mapPool(cpIds, CREDIT_ENRICH_CONCURRENCY, async (cpId) => {
     const agentFilter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
-    // Asosiy Приход = cashin + paymentin (MS da katta summalar shu yerda).
-    let credit = 0;
-    for (const entity of ["cashin", "paymentin", "supply", "commissionreportin"] as const) {
-      credit += sumApplicable(await fetchEntityDocs(entity, agentFilter));
-    }
+    const parts = await Promise.all(
+      CREDIT_ENTITIES.map(async (entity) => sumApplicable(await fetchEntityDocs(entity, agentFilter))),
+    );
+    const credit = parts.reduce((acc, n) => acc + n, 0);
     const cur = byCp.get(cpId) || { credit: 0, debit: 0 };
     cur.credit = credit;
     byCp.set(cpId, cur);
   });
 }
 
-async function loadPeriodMovements(from: string, to: string, focusCpIds: string[]) {
+function persistMovements(from: string, to: string, byCp: Map<string, { credit: number; debit: number }>) {
+  const at = Date.now();
+  movementCache.set(`${from}:${to}`, { at, byCp });
+  const entries: Record<string, { credit: number; debit: number }> = {};
+  for (const [id, v] of byCp) entries[id] = v;
+  writeDiskMap(movementsPath(from, to), entries);
+}
+
+/** Faqat global skan — enrich yo‘q (tez birinchi ekran). */
+async function loadPeriodMovementsFast(from: string, to: string) {
   const key = `${from}:${to}`;
   const hit = movementCache.get(key);
   if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
@@ -427,12 +433,7 @@ async function loadPeriodMovements(from: string, to: string, focusCpIds: string[
   }
 
   const byCp = await scanMovementsGlobal(from, to);
-  await enrichCreditsExact(byCp, focusCpIds, from, to);
-  const at = Date.now();
-  movementCache.set(key, { at, byCp });
-  const entries: Record<string, { credit: number; debit: number }> = {};
-  for (const [id, v] of byCp) entries[id] = v;
-  writeDiskMap(movementsPath(from, to), entries);
+  persistMovements(from, to, byCp);
   return byCp;
 }
 
@@ -529,41 +530,17 @@ function buildSettlement(input: {
   };
 }
 
-async function computeAll(
-  agents: Array<{ login: string; fullName: string }>,
+function publishSettlements(
+  tags: Array<{ agent: { login: string; fullName: string }; tag: string | null }>,
+  movements: Map<string, { credit: number; debit: number }>,
+  closings: Map<string, number>,
   from: string,
   to: string,
 ) {
-  const tags = await Promise.all(
-    agents.map(async (agent) => ({
-      agent,
-      tag: await resolveAgentTag(agent.login, agent.fullName),
-    })),
-  );
-
-  const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
-  await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
-
-  const focusCpIds: string[] = [];
-  const seen = new Set<string>();
-  for (const tag of uniqueTags) {
-    for (const cp of await listTagCounterparties(tag)) {
-      if (seen.has(cp.id)) continue;
-      seen.add(cp.id);
-      focusCpIds.push(cp.id);
-    }
-  }
-
-  // Avval guruhlar, keyin aylanma — agent filter bilan Kirim to‘liq bo‘lsin.
-  const [movements, closings] = await Promise.all([
-    loadPeriodMovements(from, to, focusCpIds),
-    loadClosingBalances(from, to),
-  ]);
-
   const byLogin: Record<string, AgentSettlement> = {};
   const at = Date.now();
   for (const { agent, tag } of tags) {
-    const group = tag ? await listTagCounterparties(tag) : [];
+    const group = tag ? groupCache.get(tag)?.rows || [] : [];
     const data = buildSettlement({
       login: agent.login,
       fullName: agent.fullName,
@@ -577,10 +554,68 @@ async function computeAll(
     byLogin[agent.login.toLowerCase()] = data;
     settlementsCache.set(`${foldName(agent.login)}:${from}:${to}`, { at, data });
   }
-
   summaryMem.set(`${from}:${to}`, { at, byLogin });
   writeDiskSummary(from, to, byLogin);
   return byLogin;
+}
+
+/**
+ * 1) Global skan + balans → darhol disk/UI (nol emas).
+ * 2) Har agent uchun Приход enrich → qayta yozish (1:1 aniqlik).
+ */
+async function computeAll(
+  agents: Array<{ login: string; fullName: string }>,
+  from: string,
+  to: string,
+  priorityLogin?: string,
+) {
+  const tags = await Promise.all(
+    agents.map(async (agent) => ({
+      agent,
+      tag: await resolveAgentTag(agent.login, agent.fullName),
+    })),
+  );
+
+  const uniqueTags = [...new Set(tags.map((t) => t.tag).filter(Boolean) as string[])];
+  await Promise.all(uniqueTags.map((tag) => listTagCounterparties(tag)));
+
+  const [movements, closings] = await Promise.all([
+    loadPeriodMovementsFast(from, to),
+    loadClosingBalances(from, to),
+  ]);
+
+  // Bosqich 1 — UI darhol to‘liq (global) raqamlarni ko‘radi.
+  publishSettlements(tags, movements, closings, from, to);
+  logger.info({ from, to, agents: agents.length }, "ms-settlements phase1 published");
+
+  if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
+
+  // Bosqich 2 — agent= bilan Kirim; ochilgan agent navbatda birinchi.
+  const remaining = tags.filter((t) => t.tag);
+  while (remaining.length) {
+    const prefer = enrichPriorityLogin;
+    let idx = prefer ? remaining.findIndex((t) => foldName(t.agent.login) === prefer) : 0;
+    if (idx < 0) idx = 0;
+    const { agent, tag } = remaining.splice(idx, 1)[0];
+    if (!tag) continue;
+    const group = await listTagCounterparties(tag);
+    if (!group.length) continue;
+    try {
+      await enrichCreditsExact(
+        movements,
+        group.map((cp) => cp.id),
+        from,
+        to,
+      );
+      persistMovements(from, to, movements);
+      publishSettlements(tags, movements, closings, from, to);
+      logger.info({ login: agent.login, cps: group.length }, "ms-settlements agent enriched");
+    } catch (error) {
+      logger.warn({ err: error, login: agent.login }, "ms-settlements enrich failed — keeping phase1");
+    }
+  }
+
+  return summaryMem.get(`${from}:${to}`)?.byLogin || {};
 }
 
 /** Fon isitish — bir davr uchun bitta parallel. */
@@ -589,17 +624,21 @@ export function warmMsSettlements(
   from: string,
   to: string,
   force = false,
+  priorityLogin?: string,
 ) {
   if (!moyskladConfigured()) return Promise.resolve();
+  if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   const key = `${from}:${to}`;
   const existing = peekSummary(from, to);
   if (!force && existing && Date.now() - existing.at < FRESH_MS) return Promise.resolve();
   const inflight = warming.get(key);
   if (inflight) return inflight;
 
-  const job = computeAll(agents, from, to)
+  const job = computeAll(agents, from, to, priorityLogin)
     .then(() => undefined)
-    .catch(() => undefined)
+    .catch((error) => {
+      logger.error({ err: error, from, to }, "ms-settlements computeAll failed");
+    })
     .finally(() => {
       warming.delete(key);
     });
@@ -669,9 +708,10 @@ export async function refreshMsSettlements(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
   to: string,
+  priorityLogin?: string,
 ) {
   if (!moyskladConfigured()) return;
-  // Faqat RAM/movement cache — disk summary saqlanadi (stale ko‘rinsin).
+  // Faqat RAM/movement+balance — disk summary saqlanadi (nol bo‘lmasin).
   for (const k of [...movementCache.keys()]) {
     if (k.startsWith(`${from}:${to}`)) movementCache.delete(k);
   }
@@ -685,7 +725,22 @@ export async function refreshMsSettlements(
   } catch {
     /* ignore */
   }
-  await computeAll(agents, from, to);
+  const key = `${from}:${to}`;
+  const inflight = warming.get(key);
+  if (inflight) {
+    await inflight;
+    return;
+  }
+  const job = computeAll(agents, from, to, priorityLogin)
+    .then(() => undefined)
+    .catch((error) => {
+      logger.error({ err: error, from, to }, "ms-settlements refresh failed");
+    })
+    .finally(() => {
+      warming.delete(key);
+    });
+  warming.set(key, job);
+  await job;
 }
 
 export async function getAgentsMsSettlementSummaries(
@@ -756,11 +811,11 @@ export async function getAgentMsSettlements(
   if (fromSummary) {
     settlementsCache.set(cacheKey, { at: summary!.at, data: fromSummary });
     if (age < FRESH_MS) return { ...fromSummary, msStatus: "ready" };
-    void warmMsSettlements(agentsForWarm, input.from, input.to, true);
+    void warmMsSettlements(agentsForWarm, input.from, input.to, true, input.login);
     return { ...fromSummary, msStatus: "stale" };
   }
 
-  void warmMsSettlements(agentsForWarm, input.from, input.to, true);
+  void warmMsSettlements(agentsForWarm, input.from, input.to, true, input.login);
   const tag = PRIMARY_TAG[foldName(input.login)] || null;
   return {
     ...empty,
