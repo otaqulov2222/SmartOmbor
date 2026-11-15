@@ -4,9 +4,10 @@
  * Manba (MS yordam — Деньги → Взаиморасчеты):
  *   Приход:  Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
  *   Расход:  Отгрузки, Исходящие платежи, Расходные ордера, Выданные отчёты комиссионера
- *   Остатки: /report/counterparty (momentTo) — ochilish va yakuniy alohida.
+ *   Конечный: /report/counterparty (davr oxiri)
+ *   Начальный: closing − credit + debit  (MS identity; report tarixiy ochilish bermaydi)
  *
- * UI millisekundda: disk/memory cache; MS skani fonda (force sync — kutadi).
+ * UI: disk/memory cache; MS skani fonda (force sync — kutadi).
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
@@ -48,16 +49,18 @@ const AGENT_TAG_ALIASES: Record<string, string[]> = {
   sevinch: ["sevinch"],
 };
 
-/** MS UI «Взаиморасчеты» — faqat shu hujjatlar (rasmiy yordam). */
+/**
+ * MS UI «Взаиморасчеты» hujjatlari.
+ * Приход (credit) / Расход (debit) — alohida tomonlar; aralashtirmaslik.
+ */
 const CREDIT_ENTITIES = ["supply", "paymentin", "cashin", "commissionreportin"] as const;
 const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"] as const;
 
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
-/** 1 so‘m (100 tiyin) — yuvarlash / float farqi. */
-const RECONCILE_EPS = 100;
-const CACHE_VERSION = "v3";
+/** v4: ochilishni report snapshot bilan buzmaslik (v3 Kirim=Chiqim qilardi). */
+const CACHE_VERSION = "v4";
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
   (existsSync("/var/lib/smart-ombor") ? "/var/lib/smart-ombor/ms-cache" : join(process.cwd(), ".ms-cache"));
@@ -68,11 +71,8 @@ type MsDoc = {
   applicable?: boolean;
   agent?: { id?: string; meta?: { href?: string }; name?: string };
 };
-/** MS /report/counterparty — balance = yakuniy qoldiq (momentTo). */
 type MsReportRow = {
   balance?: number;
-  credit?: number;
-  debit?: number;
   counterparty?: { id?: string; name?: string; meta?: { href?: string } };
 };
 
@@ -103,17 +103,9 @@ function docAgentId(doc: MsDoc) {
   return String(doc.agent?.id || cpIdFromHref(doc.agent?.meta?.href) || "").trim();
 }
 
-/** YYYY-MM-DD → oldingi kun (Toshkent kalendari uchun noon UTC). */
-function prevYmd(ymd: string) {
-  const d = new Date(`${ymd}T12:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
 const tagCache = new Map<string, { at: number; tag: string | null }>();
 const groupCache = new Map<string, { at: number; rows: Array<{ id: string; name: string }> }>();
-/** asOf (momentTo ymd+time key) → balances */
-const balanceAsOfCache = new Map<string, { at: number; byCp: Map<string, number> }>();
+const balanceCache = new Map<string, { at: number; byCp: Map<string, number> }>();
 const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: number; debit: number }> }>();
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
 const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
@@ -135,9 +127,8 @@ function movementsPath(from: string, to: string) {
   return join(CACHE_DIR, `mov-${CACHE_VERSION}-${from}_${to}.json`);
 }
 
-function balancesAsOfPath(asOfKey: string) {
-  const safe = asOfKey.replace(/[^\d\-]/g, "_");
-  return join(CACHE_DIR, `bal-${CACHE_VERSION}-${safe}.json`);
+function balancesPath(from: string, to: string) {
+  return join(CACHE_DIR, `bal-${CACHE_VERSION}-${from}_${to}.json`);
 }
 
 function readDiskSummary(from: string, to: string) {
@@ -244,24 +235,25 @@ async function listTagCounterparties(tag: string) {
 }
 
 /**
- * Kontragent qoldig‘i momentTo holatida (MS «Конечный остаток» shu nuqtada).
- * credit/debit bu yerda aylanma emas — debitor/kreditor zaxirasi; ishlatilmaydi.
+ * Davr oxiridagi qoldiq (MS «Конечный остаток»).
+ * momentFrom/momentTo bilan chaqiriladi — UI dagi yakuniy bilan mos.
  */
-async function loadBalancesAsOf(momentTo: string) {
-  const key = momentTo;
-  const cached = balanceAsOfCache.get(key);
-  if (cached && Date.now() - cached.at < FRESH_MS) return cached.byCp;
+async function loadClosingBalances(from: string, to: string) {
+  const key = `${from}:${to}`;
+  const hit = balanceCache.get(key);
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.byCp;
 
-  const disk = readDiskMap(balancesAsOfPath(key));
+  const disk = readDiskMap(balancesPath(from, to));
   if (disk && Date.now() - disk.at < FRESH_MS) {
     const byCp = new Map<string, number>();
     for (const [id, v] of Object.entries(disk.entries)) byCp.set(id, Number(v || 0));
-    balanceAsOfCache.set(key, { at: disk.at, byCp });
+    balanceCache.set(key, { at: disk.at, byCp });
     return byCp;
   }
 
   const byCp = new Map<string, number>();
-  const momentFrom = "2000-01-01 00:00:00";
+  const momentFrom = `${from} 00:00:00`;
+  const momentTo = `${to} 23:59:59`;
   for (let offset = 0; offset < 20_000; offset += PAGE) {
     const page = await moysklad<{ rows?: MsReportRow[] }>(
       `/report/counterparty?limit=${PAGE}&offset=${offset}&momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
@@ -277,14 +269,14 @@ async function loadBalancesAsOf(momentTo: string) {
   }
 
   const at = Date.now();
-  balanceAsOfCache.set(key, { at, byCp });
+  balanceCache.set(key, { at, byCp });
   const entries: Record<string, number> = {};
   for (const [id, v] of byCp) entries[id] = v;
-  writeDiskMap(balancesAsOfPath(key), entries);
+  writeDiskMap(balancesPath(from, to), entries);
   return byCp;
 }
 
-/** MS rasmiy hujjatlar bo‘yicha davr aylanmasi. */
+/** MS rasmiy hujjatlar bo‘yicha davr aylanmasi (Приход / Расход). */
 async function scanMovementsFromDocuments(from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
   const bump = (id: string, side: "credit" | "debit", sum: number) => {
@@ -294,7 +286,8 @@ async function scanMovementsFromDocuments(from: string, to: string) {
     byCp.set(id, cur);
   };
 
-  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59;applicable=true`;
+  // applicable filterini queryda majburiy qilmaymiz — ba'zi entitylarda 403/bo‘sh qaytaradi.
+  const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 
   const scan = async (entity: string, side: "credit" | "debit") => {
     for (let offset = 0; offset < 50_000; offset += PAGE) {
@@ -381,10 +374,9 @@ function emptySettlement(input: { login: string; fullName: string; from: string;
 }
 
 /**
- * opening/closing — MS report (mustaqil).
- * income/expense — hujjat skani; agar ochilish+kirim−chiqim≠yakuniy bo‘lsa,
- * Приход ni MS formulasi bilan tuzatamiz (tarixan undercount shu tomonda).
- *   closing = opening + credit − debit  ⇒  credit = closing − opening + debit
+ * closing — MS report (yakuniy).
+ * income/expense — hujjat skani (o‘zgartirilmaydi).
+ * opening = closing − income + expense  (MS: Конечный = Начальный + Приход − Расход).
  */
 function buildSettlement(input: {
   login: string;
@@ -394,7 +386,6 @@ function buildSettlement(input: {
   tag: string | null;
   group: Array<{ id: string; name: string }>;
   movements: Map<string, { credit: number; debit: number }>;
-  openings: Map<string, number>;
   closings: Map<string, number>;
 }): AgentSettlement {
   if (!input.tag) return emptySettlement(input);
@@ -402,14 +393,10 @@ function buildSettlement(input: {
   const rows = input.group
     .map((cp) => {
       const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
-      const openingKop = input.openings.get(cp.id) ?? 0;
       const closingKop = input.closings.get(cp.id) ?? 0;
-      let creditKop = mv.credit;
+      const creditKop = mv.credit;
       const debitKop = mv.debit;
-      const impliedClosing = openingKop + creditKop - debitKop;
-      if (Math.abs(impliedClosing - closingKop) > RECONCILE_EPS) {
-        creditKop = closingKop - openingKop + debitKop;
-      }
+      const openingKop = closingKop - creditKop + debitKop;
       return {
         id: cp.id,
         name: cp.name,
@@ -417,11 +404,7 @@ function buildSettlement(input: {
         income: som(creditKop),
         expense: som(debitKop),
         closing: som(closingKop),
-        keep:
-          creditKop !== 0 ||
-          debitKop !== 0 ||
-          openingKop !== 0 ||
-          closingKop !== 0,
+        keep: creditKop !== 0 || debitKop !== 0 || openingKop !== 0 || closingKop !== 0,
       };
     })
     .filter((row) => row.keep)
@@ -450,13 +433,9 @@ async function computeAll(
   from: string,
   to: string,
 ) {
-  const openingMoment = `${prevYmd(from)} 23:59:59`;
-  const closingMoment = `${to} 23:59:59`;
-
-  const [movements, openings, closings] = await Promise.all([
+  const [movements, closings] = await Promise.all([
     loadPeriodMovements(from, to),
-    loadBalancesAsOf(openingMoment),
-    loadBalancesAsOf(closingMoment),
+    loadClosingBalances(from, to),
   ]);
 
   const tags = await Promise.all(
@@ -481,7 +460,6 @@ async function computeAll(
       tag,
       group,
       movements,
-      openings,
       closings,
     });
     byLogin[agent.login.toLowerCase()] = data;
@@ -529,19 +507,15 @@ function clearVersionedDiskCache(from?: string, to?: string) {
   if (from && to) {
     unlinkQuiet(summaryPath(from, to));
     unlinkQuiet(movementsPath(from, to));
-    unlinkQuiet(balancesAsOfPath(`${prevYmd(from)} 23:59:59`));
-    unlinkQuiet(balancesAsOfPath(`${to} 23:59:59`));
+    unlinkQuiet(balancesPath(from, to));
     return;
   }
   try {
     for (const name of readdirSync(CACHE_DIR)) {
       if (
-        name.startsWith(`settlements-${CACHE_VERSION}-`) ||
-        name.startsWith(`mov-${CACHE_VERSION}-`) ||
-        name.startsWith(`bal-${CACHE_VERSION}-`) ||
-        name.startsWith("settlements-v2-") ||
-        name.startsWith("mov-v2-") ||
-        name.startsWith("bal-v2-")
+        name.startsWith("settlements-v") ||
+        name.startsWith("mov-v") ||
+        name.startsWith("bal-v")
       ) {
         unlinkQuiet(join(CACHE_DIR, name));
       }
@@ -556,8 +530,7 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
     const key = `${from}:${to}`;
     summaryMem.delete(key);
     movementCache.delete(key);
-    balanceAsOfCache.delete(`${prevYmd(from)} 23:59:59`);
-    balanceAsOfCache.delete(`${to} 23:59:59`);
+    balanceCache.delete(key);
     for (const k of [...settlementsCache.keys()]) {
       if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
     }
@@ -565,7 +538,7 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
     return;
   }
   summaryMem.clear();
-  balanceAsOfCache.clear();
+  balanceCache.clear();
   movementCache.clear();
   settlementsCache.clear();
   groupCache.clear();
@@ -573,9 +546,7 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
   clearVersionedDiskCache();
 }
 
-/**
- * Sync tugaguncha yangi MS raqamlarini hisoblaydi (stale qaytarmaydi).
- */
+/** Sync tugaguncha yangi MS raqamlarini hisoblaydi. */
 export async function refreshMsSettlements(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
@@ -586,7 +557,6 @@ export async function refreshMsSettlements(
   await warmMsSettlements(agents, from, to, true);
 }
 
-/** Jadval uchun: cache'dan darhol, yo‘q bo‘lsa fonda hisoblaydi. */
 export async function getAgentsMsSettlementSummaries(
   agents: Array<{ login: string; fullName: string }>,
   from: string,
@@ -639,7 +609,6 @@ export async function getAgentsMsSettlementSummaries(
   return { map: out, status: "warming" };
 }
 
-/** Detail: hech qachon MS skanini kutmaydi — cache yoki warming. */
 export async function getAgentMsSettlements(
   input: {
     login: string;
