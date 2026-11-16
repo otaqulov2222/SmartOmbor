@@ -74,17 +74,6 @@ function roleInfo(role: string) {
   return { label: role, group: 'office' as const, tone: '' };
 }
 
-function accessSummary(value: AccessModuleId[], locked?: boolean) {
-  if (locked) return 'Barcha bo‘limlar';
-  if (!value.length) return 'Bo‘lim tanlang…';
-  if (value.length === ACCESS_MODULES.length) return 'Barcha bo‘limlar';
-  const labels = value
-    .map((id) => ACCESS_MODULES.find((m) => m.id === id)?.label || id)
-    .slice(0, 2);
-  const rest = value.length - labels.length;
-  return rest > 0 ? `${labels.join(', ')} +${rest}` : labels.join(', ');
-}
-
 function AccessPicker({
   role,
   value,
@@ -101,6 +90,7 @@ function AccessPicker({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selected = new Set(value);
+  const count = locked ? ACCESS_MODULES.length : value.length;
 
   useEffect(() => {
     if (!open) return;
@@ -123,25 +113,19 @@ function AccessPicker({
     <div className={`emp-access-dd${compact ? ' is-compact' : ''}`} ref={rootRef}>
       <button
         type="button"
-        className={`emp-access-trigger input${open ? ' is-open' : ''}`}
+        className={`emp-access-btn${open ? ' is-open' : ''}`}
         onClick={() => setOpen((v) => !v)}
-        disabled={locked}
         title="Bo‘lim ruxsatlari"
       >
-        <span>{accessSummary(value, locked)}</span>
-        <ChevronDown size={16} />
+        <span>Ruxsatlar</span>
+        {count > 0 ? <em>{count}</em> : null}
+        <ChevronDown size={15} />
       </button>
       {open ? (
-        <div className="emp-access-menu" role="listbox" aria-label="Bo‘lim ruxsatlari">
-          {!locked ? (
-            <div className="emp-access-menu-actions">
-              <button type="button" onClick={() => onChange(defaultsForRole(role))}>Rol default</button>
-              <button type="button" onClick={() => onChange(ACCESS_MODULES.map((m) => m.id))}>Hammasi</button>
-              <button type="button" onClick={() => onChange(['office'])}>Faqat davomat</button>
-            </div>
-          ) : (
+        <div className="emp-access-menu" role="listbox" aria-label="Ruxsatlar">
+          {locked ? (
             <p className="emp-access-locked">Super Admin — barcha bo‘limlar ochiq</p>
-          )}
+          ) : null}
           <div className="emp-access-menu-list">
             {ACCESS_MODULES.map((m) => {
               const on = locked || selected.has(m.id);
@@ -453,8 +437,10 @@ export function EmployeesPage() {
                         onChange={(permissions) => setEditing({ ...editing, permissions })}
                       />
                     ) : (
-                      <span className="emp-perm-text" title={perms.map((id) => ACCESS_MODULES.find((m) => m.id === id)?.label || id).join(', ')}>
-                        {accessSummary(perms, s.login === 'bordouzadmin' || s.role === 'super_admin')}
+                      <span className="emp-perm-count">
+                        {s.login === 'bordouzadmin' || s.role === 'super_admin'
+                          ? `${ACCESS_MODULES.length} ta`
+                          : `${perms.length} ta`}
                       </span>
                     )}
                   </td>

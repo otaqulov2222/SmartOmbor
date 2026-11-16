@@ -767,36 +767,36 @@
 
 /* ---------- Employees Table & Copy Button ---------- */
 .emp-access-dd { position: relative; min-width: 0; }
-.emp-access-trigger {
-  width: 100%;
-  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
-  text-align: left; cursor: pointer;
-  background: #fff;
+.emp-access-btn {
+  width: 100%; min-height: 2.45rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  border: 1px solid #cfd9e6; border-radius: 10px;
+  background: #fff; color: #0f172a;
+  font-size: .86rem; font-weight: 750; cursor: pointer;
+  padding: .45rem .7rem;
 }
-.emp-access-trigger span {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: #0f172a; font-weight: 650;
+.emp-access-btn:hover { border-color: #93c5fd; background: #f8fbff; }
+.emp-access-btn.is-open {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .14);
 }
-.emp-access-trigger.is-open { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
-.emp-access-trigger:disabled { opacity: .75; cursor: default; }
+.emp-access-btn em {
+  font-style: normal;
+  min-width: 1.35rem; height: 1.35rem;
+  display: inline-grid; place-items: center;
+  border-radius: 999px;
+  background: #1d4ed8; color: #fff;
+  font-size: .72rem; font-weight: 800;
+  padding: 0 .3rem;
+}
 .emp-access-menu {
   position: absolute; z-index: 40; top: calc(100% + .28rem); left: 0; right: 0;
-  min-width: 16rem; max-height: 18rem; overflow: auto;
+  min-width: 15.5rem; max-height: 18rem; overflow: auto;
   background: #fff; border: 1px solid #d8e2ef; border-radius: 12px;
   box-shadow: 0 12px 28px rgba(15, 23, 42, .14);
   padding: .4rem;
 }
 .emp-access-dd.is-compact .emp-access-menu { right: auto; width: 16.5rem; }
-.emp-access-menu-actions {
-  display: flex; flex-wrap: wrap; gap: .25rem;
-  padding: .2rem .25rem .45rem; border-bottom: 1px solid #eef2f7; margin-bottom: .3rem;
-}
-.emp-access-menu-actions button {
-  border: 0; background: #f1f5f9; color: #334155;
-  border-radius: 8px; padding: .28rem .5rem;
-  font-size: .72rem; font-weight: 700; cursor: pointer;
-}
-.emp-access-menu-actions button:hover { background: #e2e8f0; }
 .emp-access-locked {
   margin: 0; padding: .35rem .45rem .55rem;
   font-size: .78rem; color: #64748b;
@@ -811,10 +811,8 @@
 .emp-access-option:hover { background: #f8fafc; }
 .emp-access-option.is-on { background: #eff6ff; color: #1e3a8a; }
 .emp-access-option input { accent-color: #1d4ed8; }
-.emp-perm-text {
-  display: inline-block; max-width: 12rem;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: #475569; font-size: .8rem; font-weight: 650;
+.emp-perm-count {
+  color: #64748b; font-size: .8rem; font-weight: 700;
 }
 .emp-add-grid {
   display: grid;
