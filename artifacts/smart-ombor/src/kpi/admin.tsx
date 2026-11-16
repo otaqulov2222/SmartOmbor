@@ -714,61 +714,206 @@ export function KpiDashboardPage() {
 /* ---------- 2. Agentlar va mijozlar (/kpi/agents) ---------- */
 export function KpiAgentsPage() {
   const [sub, setSub] = useState<'agents' | 'customers'>('agents');
-  const sync = useMsSync();
+  const initial = useMemo(() => defaultPeriod(), []);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [preset, setPreset] = useState<PeriodPreset>(initial.preset);
+  const sync = useMsSync(from, to, preset);
+  const applyPreset = (next: PeriodPreset) => {
+    if (next === 'custom') {
+      setPreset('custom');
+      return;
+    }
+    const range = periodFromPreset(next);
+    setPreset(next);
+    setFrom(range.from);
+    setTo(range.to);
+  };
+  const presetLabel = PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus';
   return (
-    <div className="kpi-page" data-testid="page-kpi-agents">
-      <header className="kpi-head">
-        <div>
-          <h1>Agentlar va mijozlar</h1>
+    <div className="kpi-page kpi-dash" data-testid="page-kpi-agents">
+      <header className="kpi-head kpi-dash-head">
+        <div className="kpi-dash-title">
+          <div className="kpi-dash-title-row">
+            <h1>Agentlar va mijozlar</h1>
+            <span className="kpi-period-badge">
+              <CalendarRange size={13} />
+              {presetLabel} · {isoToDmy(from)} — {isoToDmy(to)}
+            </span>
+          </div>
+          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
+            KPI, kirim va chiqim tanlangan davr bo‘yicha hisoblanadi (3 bosqich: 3% / 2% / 1%).
+          </p>
         </div>
         <div className="kpi-actions">
           <div className="kpi-seg">
             <button type="button" className={sub === 'agents' ? 'active' : ''} onClick={() => setSub('agents')}>Agentlar</button>
             <button type="button" className={sub === 'customers' ? 'active' : ''} onClick={() => setSub('customers')}>Mijozlar</button>
           </div>
-          <button type="button" className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <RefreshCw size={15} /> Sinxronlash
-          </button>
         </div>
       </header>
-      {sub === 'agents' ? <AgentsSection /> : <CustomersSection />}
+      <PeriodBar
+        from={from}
+        to={to}
+        preset={preset}
+        onPreset={applyPreset}
+        onFrom={(v) => { setFrom(v); setPreset(matchPreset(v, to)); }}
+        onTo={(v) => { setTo(v); setPreset(matchPreset(from, v)); }}
+        syncing={sync.isPending}
+        onSync={() => sync.mutate()}
+      />
+      {sub === 'agents' ? (
+        <AgentsSection from={from} to={to} preset={preset} periodLabel={presetLabel} />
+      ) : (
+        <CustomersSection />
+      )}
     </div>
   );
 }
 
 export const KpiCustomersPage = KpiAgentsPage;
 
-function AgentsSection() {
-  const list = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
+function AgentsSection({
+  from, to, preset, periodLabel,
+}: {
+  from: string; to: string; preset: PeriodPreset; periodLabel: string;
+}) {
+  const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`;
+  const list = useQuery({
+    queryKey: ['kpi-agents', from, to, preset],
+    queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 800;
+      return false;
+    },
+  });
+  const rows = list.data || [];
+  const agentMsPending = (a: Agent) =>
+    (a.msStatus === 'warming' || a.msStatus === 'stale') &&
+    Number(a.paidTotal || 0) === 0 &&
+    Number(a.salesTotal || 0) === 0 &&
+    (a.customers || 0) === 0;
+  const totals = useMemo(() => {
+    let kpi = 0;
+    let kirim = 0;
+    let chiqim = 0;
+    let mijoz = 0;
+    let ready = 0;
+    for (const a of rows) {
+      if (agentMsPending(a)) continue;
+      ready += 1;
+      kpi += Number(a.kpiTotal || 0);
+      kirim += Number(a.paidTotal || 0);
+      chiqim += Number(a.salesTotal || 0);
+      mijoz += Number(a.customers || 0);
+    }
+    return { kpi, kirim, chiqim, mijoz, ready, all: rows.length };
+  }, [rows]);
+  const msWarming = rows.some((a) => a.msStatus === 'warming');
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => Number(b.kpiTotal || 0) - Number(a.kpiTotal || 0)),
+    [rows],
+  );
+
   return (
-    <div className="kpi-table-wrap">
-      <table className="kpi-table">
-        <thead>
-          <tr>
-            <th>Agent</th>
-            <th>Portal login</th>
-            <th>Mijozlar</th>
-            <th>Savdo</th>
-            <th>Oylik fakt</th>
-            <th>Reja %</th>
-            <th>KPI</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(list.data || []).map((a) => (
-            <tr key={a.id}>
-              <td data-label="Agent"><b>{a.fullName}</b></td>
-              <td data-label="Portal login"><code>{a.login}</code></td>
-              <td data-label="Mijozlar">{a.customers}</td>
-              <td data-label="Savdo">{uzs(a.salesTotal)}</td>
-              <td data-label="Oylik fakt">{uzs(a.monthSales ?? 0)}</td>
-              <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
-              <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+    <>
+      {list.error ? <p className="kpi-error">{(list.error as Error).message}</p> : null}
+      {msWarming ? <p className="kpi-status-banner">MS ma’lumotlari yangilanmoqda…</p> : null}
+      <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.85rem' }}>
+        <Card
+          label="Agentlar"
+          value={`${totals.ready}/${totals.all || rows.length}`}
+          hint={`${periodLabel} · ${isoToDmy(from)} — ${isoToDmy(to)}`}
+          tone="blue"
+          icon={<Users size={16} />}
+        />
+        <Card
+          label="Kirim (davr)"
+          value={msWarming && totals.kirim === 0 ? '…' : uzs(totals.kirim)}
+          hint="MS Приход jami"
+          tone="ok"
+          icon={<Banknote size={16} />}
+        />
+        <Card
+          label="Chiqim (davr)"
+          value={msWarming && totals.chiqim === 0 ? '…' : uzs(totals.chiqim)}
+          hint="MS Расход jami"
+          tone="blue"
+          icon={<Wallet size={16} />}
+        />
+        <Card
+          label="KPI jami"
+          value={uzs(totals.kpi)}
+          hint="3 bosqich foizi · tanlangan muddat"
+          tone="purple"
+          icon={<Gauge size={16} />}
+        />
+      </div>
+      <div className="kpi-table-wrap">
+        <table className="kpi-table kpi-table-agents">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Portal login</th>
+              <th className="is-num">Mijozlar</th>
+              <th className="is-num">Kirim</th>
+              <th className="is-num">Chiqim</th>
+              <th className="is-num">Reja %</th>
+              <th className="is-num">KPI</th>
+              <th>Davr</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {sorted.map((a) => {
+              const pending = agentMsPending(a);
+              return (
+                <tr key={a.id}>
+                  <td data-label="Agent">
+                    <b>{a.fullName}</b>
+                    {a.folderName ? <div className="kpi-muted">Guruh: {a.folderName}</div> : null}
+                  </td>
+                  <td data-label="Portal login"><code>{a.login}</code></td>
+                  <td data-label="Mijozlar" className="is-num">{pending ? '…' : a.customers}</td>
+                  <td data-label="Kirim" className="is-num">{pending ? '…' : uzs(a.paidTotal ?? 0)}</td>
+                  <td data-label="Chiqim" className="is-num">{pending ? '…' : uzs(a.salesTotal)}</td>
+                  <td data-label="Reja %" className="is-num">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
+                  <td data-label="KPI" className="is-num"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
+                  <td data-label="Davr">
+                    <span className="kpi-period-badge" style={{ fontSize: '.78rem' }}>
+                      {isoToDmy(a.periodStart || from)} — {isoToDmy(a.periodEnd || to)}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+            {!sorted.length && !list.isLoading ? (
+              <tr>
+                <td colSpan={8} className="kpi-muted">Agentlar topilmadi.</td>
+              </tr>
+            ) : null}
+            {list.isLoading ? (
+              <tr>
+                <td colSpan={8} className="kpi-muted">Yuklanmoqda…</td>
+              </tr>
+            ) : null}
+          </tbody>
+          {sorted.length > 0 ? (
+            <tfoot>
+              <tr>
+                <td colSpan={2}><b>Jami ({totals.ready})</b></td>
+                <td className="is-num"><b>{totals.mijoz}</b></td>
+                <td className="is-num"><b>{uzs(totals.kirim)}</b></td>
+                <td className="is-num"><b>{uzs(totals.chiqim)}</b></td>
+                <td />
+                <td className="is-num"><b className="is-ok">{uzs(totals.kpi)}</b></td>
+                <td />
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+    </>
   );
 }
 
