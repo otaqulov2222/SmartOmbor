@@ -390,6 +390,30 @@
 }
 .office-warn { color: #fecaca; background: #4c1d1d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
 .office-ok { color: #bbf7d0; background: #14532d; border-radius: 12px; padding: 10px 12px; margin: 8px 0; font-size: .88rem; }
+.office-gps-meta {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #94a3b8;
+  font-size: .78rem;
+  line-height: 1.35;
+  word-break: break-all;
+}
+.office-bind-site {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(30, 64, 175, 0.35);
+  color: #dbeafe;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-weight: 600;
+  font-size: .9rem;
+  cursor: pointer;
+}
+.office-bind-site:disabled { opacity: .55; cursor: not-allowed; }
+.office-bind-site:not(:disabled):active { transform: scale(.99); }
 @media (max-width: 879px) {
   .office-shell { min-height: 100dvh; }
   .office {

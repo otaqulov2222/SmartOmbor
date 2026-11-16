@@ -4,16 +4,46 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 
-/** Test / asosiy ofis (Toshkent). Env bilan almashtirish mumkin. */
-export const OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.219353;
-export const OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.272828;
-export const OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
+const DEFAULT_OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.219353;
+const DEFAULT_OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.272828;
+const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
 /** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
-export const OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
+const DEFAULT_OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
 /** Keldim → Ketdim orasidagi minimal vaqt (tasodifiy ikki marta bosish). */
 const MIN_SHIFT_MS = 60_000;
 /** Bir xodim uchun parallel punch so‘rovlarini bloklash. */
 const punchLocks = new Set<string>();
+
+export type OfficeSite = {
+  name: string;
+  lat: number;
+  lng: number;
+  radiusM: number;
+  accuracyM: number;
+  start: string;
+  end: string;
+};
+
+function defaultSite(): OfficeSite {
+  return {
+    name: "Asosiy ofis",
+    lat: DEFAULT_OFFICE_LAT,
+    lng: DEFAULT_OFFICE_LNG,
+    radiusM: DEFAULT_OFFICE_RADIUS_M,
+    accuracyM: DEFAULT_OFFICE_ACCURACY_M,
+    start: "09:00",
+    end: "18:00",
+  };
+}
+
+/** @deprecated — officeSite() dan foydalaning */
+export const OFFICE_LAT = DEFAULT_OFFICE_LAT;
+/** @deprecated — officeSite() dan foydalaning */
+export const OFFICE_LNG = DEFAULT_OFFICE_LNG;
+/** @deprecated — officeSite() dan foydalaning */
+export const OFFICE_RADIUS_M = DEFAULT_OFFICE_RADIUS_M;
+/** @deprecated — officeSite() dan foydalaning */
+export const OFFICE_ACCURACY_M = DEFAULT_OFFICE_ACCURACY_M;
 
 export type PunchMethod = "face" | "qr";
 export type PunchKind = "in" | "out";
@@ -68,6 +98,7 @@ const FACE_MATCH_MAX = 10;
 const FACE_UNIQUE_MAX = 10;
 type Store = {
   secret: string;
+  site: OfficeSite;
   punches: OfficePunch[];
   faces: Record<string, FaceRow>;
   tasks: OfficeTask[];
@@ -77,8 +108,33 @@ type Store = {
 const FILE = dataFile("office.json");
 let memory: Store | null = null;
 
+function normalizeSite(raw: Partial<OfficeSite> | undefined): OfficeSite {
+  const base = defaultSite();
+  if (!raw || typeof raw !== "object") return base;
+  const lat = Number(raw.lat);
+  const lng = Number(raw.lng);
+  const radiusM = Number(raw.radiusM);
+  const accuracyM = Number(raw.accuracyM);
+  return {
+    name: String(raw.name || base.name).trim().slice(0, 80) || base.name,
+    lat: Number.isFinite(lat) && Math.abs(lat) <= 90 && !(lat === 0 && lng === 0) ? lat : base.lat,
+    lng: Number.isFinite(lng) && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0) ? lng : base.lng,
+    radiusM: Number.isFinite(radiusM) ? Math.min(5000, Math.max(30, radiusM)) : base.radiusM,
+    accuracyM: Number.isFinite(accuracyM) ? Math.min(2000, Math.max(50, accuracyM)) : base.accuracyM,
+    start: /^\d{2}:\d{2}$/.test(String(raw.start || "")) ? String(raw.start) : base.start,
+    end: /^\d{2}:\d{2}$/.test(String(raw.end || "")) ? String(raw.end) : base.end,
+  };
+}
+
 function empty(): Store {
-  return { secret: randomBytes(24).toString("hex"), punches: [], faces: {}, tasks: [], fiksa: {} };
+  return {
+    secret: randomBytes(24).toString("hex"),
+    site: defaultSite(),
+    punches: [],
+    faces: {},
+    tasks: [],
+    fiksa: {},
+  };
 }
 
 function load(): Store {
@@ -87,6 +143,7 @@ function load(): Store {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
     memory = {
       secret: parsed.secret || randomBytes(24).toString("hex"),
+      site: normalizeSite(parsed.site),
       punches: Array.isArray(parsed.punches)
         ? parsed.punches.map((row) => ({
             ...row,
@@ -194,8 +251,43 @@ export function metersBetween(lat1: number, lng1: number, lat2: number, lng2: nu
   return 2 * earth * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+export function officeSite(): OfficeSite {
+  return { ...load().site };
+}
+
+export function setOfficeSite(input: {
+  lat: number;
+  lng: number;
+  radiusM?: number;
+  accuracyM?: number;
+  name?: string;
+  start?: string;
+  end?: string;
+}) {
+  const lat = Number(input.lat);
+  const lng = Number(input.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    throw Object.assign(new Error("geo"), { status: 400 });
+  }
+  if (lat === 0 && lng === 0) throw Object.assign(new Error("geo"), { status: 400 });
+  const store = load();
+  store.site = normalizeSite({
+    ...store.site,
+    lat,
+    lng,
+    radiusM: input.radiusM ?? store.site.radiusM,
+    accuracyM: input.accuracyM ?? store.site.accuracyM,
+    name: input.name ?? store.site.name,
+    start: input.start ?? store.site.start,
+    end: input.end ?? store.site.end,
+  });
+  save(store);
+  return officeSite();
+}
+
 export function officeDistance(lat: number, lng: number) {
-  return metersBetween(lat, lng, OFFICE_LAT, OFFICE_LNG);
+  const site = officeSite();
+  return metersBetween(lat, lng, site.lat, site.lng);
 }
 
 export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
@@ -204,20 +296,22 @@ export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
   // Null Island / aniq 0,0 — spoof yoki bo‘sh payload.
   if (lat === 0 && lng === 0) return false;
   const acc = Number(accuracy);
+  const maxAcc = officeSite().accuracyM;
   // Real GPS always reports accuracy > 0. Missing/0 means spoofed or stale client payload.
-  if (!Number.isFinite(acc) || acc <= 0 || acc > OFFICE_ACCURACY_M) return false;
+  if (!Number.isFinite(acc) || acc <= 0 || acc > maxAcc) return false;
   return true;
 }
 
 export function insideOffice(lat: number, lng: number, accuracy?: number) {
   if (!geoPayloadOk(lat, lng, accuracy)) return false;
   const acc = Number(accuracy);
+  const site = officeSite();
   const dist = officeDistance(lat, lng);
   // Nuqta radius ichida — ofisda. Accuracy doirasini radiusga “sig‘dirish” binoda 40–80 m
   // masofani ham blok qilardi (masalan 44 m + accuracy/2).
-  if (dist <= OFFICE_RADIUS_M) return true;
+  if (dist <= site.radiusM) return true;
   // Chegaraga yaqin + yaxshi aniqlik — biroz soft buffer (GPS drift).
-  if (acc <= 80 && dist <= OFFICE_RADIUS_M + 20) return true;
+  if (acc <= 80 && dist <= site.radiusM + 20) return true;
   return false;
 }
 

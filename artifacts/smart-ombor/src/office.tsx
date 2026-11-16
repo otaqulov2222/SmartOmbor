@@ -531,6 +531,37 @@ export function OfficePage() {
     requestGpsFix(true);
   };
 
+  const bindOfficeHere = async () => {
+    if (!me?.director) return;
+    if (!gps) { setNote(t('office.gpsNeed')); return; }
+    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    setBusy(true); setNote(''); setOk('');
+    try {
+      const response = await fetch('/api/office/site', {
+        method: 'POST',
+        headers: officeHeaders(),
+        body: JSON.stringify({
+          lat: gps.lat,
+          lng: gps.lng,
+          radiusM: me.office.radiusM || 100,
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; office?: Me['office'] };
+      if (!response.ok) {
+        setNote(t(payload.error === 'geo' ? 'office.gpsBad' : 'office.fail', { m: Math.round(gps.accuracy) }));
+        return;
+      }
+      if (payload.office) setMe(prev => (prev ? { ...prev, office: payload.office! } : prev));
+      else await loadMe();
+      setOk(t('office.siteBound', {
+        lat: gps.lat.toFixed(6),
+        lng: gps.lng.toFixed(6),
+      }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const jumpSection = (id: 'mark' | 'history' | 'pay') => {
     setSection(id);
     const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : payRef.current;
@@ -618,6 +649,19 @@ export function OfficePage() {
           onNudge={pingGps}
           onEnableGps={pingGps}
         />}
+        {gps && <p className="office-gps-meta" data-testid="office-gps-meta">
+          {t('office.gpsMeta', {
+            lat: gps.lat.toFixed(6),
+            lng: gps.lng.toFixed(6),
+            acc: Math.round(gps.accuracy),
+            office: `${me?.office.lat.toFixed(6) || '—'}, ${me?.office.lng.toFixed(6) || '—'}`,
+          })}
+        </p>}
+        {me?.director && gps && !inZone ? (
+          <button type="button" className="office-bind-site" disabled={busy || !gpsAccurate} onClick={() => void bindOfficeHere()}>
+            {t('office.bindSite')}
+          </button>
+        ) : null}
         {ok && <p className="office-ok">{ok}</p>}
         {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <p className="office-warn">{note}</p>}
         <h2>{t('office.method')}</h2>

@@ -1,19 +1,17 @@
 import { Router, type IRouter } from "express";
 import { listLocalPeople, requireLocalUser, requireOfficeDirector } from "./local-auth";
 import {
-  OFFICE_ACCURACY_M,
-  OFFICE_LAT,
-  OFFICE_LNG,
-  OFFICE_RADIUS_M,
   currentQrToken,
   enrollFace,
   faceEnrolled,
   fiksaOf,
   insideOffice,
   officeDistance,
+  officeSite,
   punch,
   punchesFor,
   rangeDays,
+  setOfficeSite,
   setTabelMark,
   tashkentParts,
   tabelDay,
@@ -45,19 +43,39 @@ router.get("/office/me", (req, res) => {
   const user = requireLocalUser(req, res);
   if (!user) return;
   const now = tashkentParts();
+  const site = officeSite();
   res.json({
     id: user.id,
     name: user.name,
     login: user.login,
     role: user.role,
     director: directorOf(user.role),
-    office: { name: "Asosiy ofis", lat: OFFICE_LAT, lng: OFFICE_LNG, radiusM: OFFICE_RADIUS_M, accuracyM: OFFICE_ACCURACY_M, start: "09:00", end: "18:00" },
+    office: site,
     clock: now.clock,
     date: now.date,
     face: faceEnrolled(user.id),
     today: punchView(todayPunch(user.id)),
     fiksa: fiksaOf(user.id),
   });
+});
+
+router.post("/office/site", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    const site = setOfficeSite({
+      lat: Number(req.body?.lat),
+      lng: Number(req.body?.lng),
+      radiusM: req.body?.radiusM != null ? Number(req.body.radiusM) : undefined,
+      accuracyM: req.body?.accuracyM != null ? Number(req.body.accuracyM) : undefined,
+      name: req.body?.name != null ? String(req.body.name) : undefined,
+      start: req.body?.start != null ? String(req.body.start) : undefined,
+      end: req.body?.end != null ? String(req.body.end) : undefined,
+    });
+    res.json({ office: site });
+  } catch (error) {
+    const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "site" });
+  }
 });
 
 router.post("/office/face", (req, res) => {
@@ -142,8 +160,9 @@ router.get("/office/board", (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   const people = listLocalPeople();
   const byId = new Map(people.map((row) => [row.id, row]));
+  const site = officeSite();
   res.json({
-    office: { name: "Asosiy ofis", lat: OFFICE_LAT, lng: OFFICE_LNG, radiusM: OFFICE_RADIUS_M },
+    office: { name: site.name, lat: site.lat, lng: site.lng, radiusM: site.radiusM },
     items: todayBoard().map((row) => ({
       ...row,
       workedMs: workedMs(row),
