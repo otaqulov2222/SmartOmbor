@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Banknote, CalendarRange, Download, ExternalLink, Gauge, Handshake, KeyRound,
+  Banknote, CalendarRange, Download, ExternalLink, Gauge, Handshake,
   Pencil, RefreshCw, Trash2, Users, Wallet, X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -739,27 +739,21 @@ export function KpiAgentsPage() {
 export const KpiCustomersPage = KpiAgentsPage;
 
 function AgentsSection() {
-  const cache = useQueryClient();
   const list = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
-  const [editing, setEditing] = useState<{ id: string; password: string; salesPlan: string } | null>(null);
-  const save = useMutation({
-    mutationFn: (payload: { id: string; password?: string; salesPlan?: string }) =>
-      kpiFetch(`/kpi/agents/${payload.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          ...(payload.password ? { password: payload.password } : {}),
-          ...(payload.salesPlan != null ? { salesPlan: payload.salesPlan } : {}),
-        }),
-      }),
-    onSuccess: () => {
-      setEditing(null);
-      void cache.invalidateQueries({ queryKey: ['kpi-agents'] });
-    },
-  });
   return (
     <div className="kpi-table-wrap">
       <table className="kpi-table">
-        <thead><tr><th>Agent</th><th>Portal login</th><th>Mijozlar</th><th>Savdo</th><th>Oylik fakt</th><th>Reja %</th><th>KPI</th><th>Reja / Parol</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Agent</th>
+            <th>Portal login</th>
+            <th>Mijozlar</th>
+            <th>Savdo</th>
+            <th>Oylik fakt</th>
+            <th>Reja %</th>
+            <th>KPI</th>
+          </tr>
+        </thead>
         <tbody>
           {(list.data || []).map((a) => (
             <tr key={a.id}>
@@ -770,19 +764,6 @@ function AgentsSection() {
               <td data-label="Oylik fakt">{uzs(a.monthSales ?? 0)}</td>
               <td data-label="Reja %">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
               <td data-label="KPI"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
-              <td data-label="">
-                {editing?.id === a.id ? (
-                  <div className="kpi-row-actions">
-                    <input className="input" style={{ width: 120 }} placeholder="Yangi parol" value={editing.password} onChange={(e) => setEditing({ ...editing, password: e.target.value })} />
-                    <input className="input" style={{ width: 140 }} placeholder="Reja" value={editing.salesPlan} onChange={(e) => setEditing({ ...editing, salesPlan: e.target.value })} />
-                    <button type="button" className="btn btn-primary" onClick={() => save.mutate(editing)}>Saqlash</button>
-                  </div>
-                ) : (
-                  <button type="button" className="btn" onClick={() => setEditing({ id: a.id, password: '', salesPlan: a.salesPlan })}>
-                    <KeyRound size={14} /> Sozlash
-                  </button>
-                )}
-              </td>
             </tr>
           ))}
         </tbody>
