@@ -156,7 +156,18 @@ type Customer = {
 };
 type Order = {
   id: string; number: string; status: string; total: string; paidAmount: string; orderDate: string;
-  agentId: string; customerId: string; agentName?: string; customerName?: string;
+  agentId: string; customerId: string; agentName?: string; agentLogin?: string; customerName?: string;
+  isHouseAccount?: boolean;
+  kpi?: {
+    id: string; orderId: string; baseAmount: string; stagePercent: string; kpiAmount: string;
+    status: string; stageName: string; daysRemaining: number | null;
+  } | null;
+};
+type OrdersPayload = {
+  rows: Order[];
+  periodStart?: string;
+  periodEnd?: string;
+  periodLabel?: string;
 };
 type Policy = {
   id: string; name: string; baseType: string; startAnchor: string; warningDays: number;
@@ -1127,24 +1138,53 @@ function CustomersSection() {
 /* ---------- 3. Savdo, to‘lov va KPI qoidalari (/kpi/orders) ---------- */
 export function KpiOrdersPage() {
   const [sub, setSub] = useState<'orders' | 'rules'>('orders');
-  const sync = useMsSync();
+  const initial = useMemo(() => defaultPeriod(), []);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [preset, setPreset] = useState<PeriodPreset>(initial.preset);
+  const sync = useMsSync(from, to, preset);
+  const applyPreset = (next: PeriodPreset) => {
+    if (next === 'custom') {
+      setPreset('custom');
+      return;
+    }
+    const range = periodFromPreset(next);
+    setPreset(next);
+    setFrom(range.from);
+    setTo(range.to);
+  };
   return (
-    <div className="kpi-page" data-testid="page-kpi-orders">
-      <header className="kpi-head">
-        <div>
-          <h1>Savdo, to‘lov va KPI</h1>
+    <div className="kpi-page kpi-dash" data-testid="page-kpi-orders">
+      <header className="kpi-head kpi-dash-head">
+        <div className="kpi-dash-title">
+          <div className="kpi-dash-title-row">
+            <h1>Savdo, to‘lov va KPI</h1>
+          </div>
         </div>
         <div className="kpi-actions">
           <div className="kpi-seg">
             <button type="button" className={sub === 'orders' ? 'active' : ''} onClick={() => setSub('orders')}>Savdo va KPI</button>
             <button type="button" className={sub === 'rules' ? 'active' : ''} onClick={() => setSub('rules')}>3 bosqich qoidalari</button>
           </div>
-          <button type="button" className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <RefreshCw size={15} /> Sinxronlash
-          </button>
         </div>
       </header>
-      {sub === 'orders' ? <OrdersAndKpiSection /> : <RulesSection />}
+      {sub === 'orders' ? (
+        <>
+          <PeriodBar
+            from={from}
+            to={to}
+            preset={preset}
+            onPreset={applyPreset}
+            onFrom={(v) => { setFrom(v); setPreset(matchPreset(v, to)); }}
+            onTo={(v) => { setTo(v); setPreset(matchPreset(from, v)); }}
+            syncing={sync.isPending}
+            onSync={() => sync.mutate()}
+          />
+          <OrdersAndKpiSection from={from} to={to} preset={preset} />
+        </>
+      ) : (
+        <RulesSection />
+      )}
     </div>
   );
 }
@@ -1152,26 +1192,55 @@ export function KpiOrdersPage() {
 export const KpiPaymentsPage = KpiOrdersPage;
 export const KpiSettingsPage = KpiOrdersPage;
 
-function OrdersAndKpiSection() {
+function OrdersAndKpiSection({
+  from, to, preset,
+}: {
+  from: string; to: string; preset: PeriodPreset;
+}) {
   const [agentFilter, setAgentFilter] = useState('');
-  const agents = useQuery({ queryKey: ['kpi-agents'], queryFn: () => kpiFetch<Agent[]>('/kpi/agents') });
-  const customers = useQuery({ queryKey: ['kpi-customers'], queryFn: () => kpiFetch<Customer[]>('/kpi/customers') });
-  const orders = useQuery({ queryKey: ['kpi-orders'], queryFn: () => kpiFetch<Order[]>('/kpi/orders') });
-  const calcs = useQuery({ queryKey: ['kpi-calcs'], queryFn: () => kpiFetch<Calc[]>('/kpi/calculations') });
-  const maps = useMemo(() => {
-    const a = new Map((agents.data || []).map((x) => [x.id, x.fullName]));
-    const c = new Map((customers.data || []).map((x) => [x.id, x.name]));
-    const k = new Map((calcs.data || []).map((x) => [x.orderId, x]));
-    return { a, c, k };
-  }, [agents.data, customers.data, calcs.data]);
-  const rows = (orders.data || []).filter((o) => !agentFilter || o.agentId === agentFilter);
+  const [hideHouse, setHideHouse] = useState(true);
+  const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}${agentFilter ? `&agentId=${encodeURIComponent(agentFilter)}` : ''}`;
+  const agents = useQuery({
+    queryKey: ['kpi-agents', from, to, preset],
+    queryFn: () => kpiFetch<Agent[]>(`/kpi/agents?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`),
+  });
+  const orders = useQuery({
+    queryKey: ['kpi-orders', from, to, preset, agentFilter],
+    queryFn: () => kpiFetch<OrdersPayload>(`/kpi/orders${qs}`),
+  });
+  const rows = useMemo(() => {
+    const list = orders.data?.rows || [];
+    return hideHouse ? list.filter((o) => !o.isHouseAccount) : list;
+  }, [orders.data, hideHouse]);
+  const totals = useMemo(() => {
+    let savdo = 0;
+    let tolangan = 0;
+    let kpi = 0;
+    for (const o of rows) {
+      savdo += Number(o.total || 0);
+      tolangan += Number(o.paidAmount || 0);
+      kpi += Number(o.kpi?.kpiAmount || 0);
+    }
+    return { savdo, tolangan, kpi, n: rows.length };
+  }, [rows]);
+
   return (
     <>
-      <div className="kpi-panel">
+      <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.85rem' }}>
+        <Card label="Jo‘natmalar" value={totals.n} tone="blue" icon={<Users size={16} />} />
+        <Card label="Savdo" value={uzs(totals.savdo)} tone="slate" icon={<Wallet size={16} />} />
+        <Card label="To‘langan" value={uzs(totals.tolangan)} tone="ok" icon={<Banknote size={16} />} />
+        <Card label="KPI" value={uzs(totals.kpi)} tone="purple" icon={<Gauge size={16} />} />
+      </div>
+      <div className="kpi-panel" style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <select className="input" style={{ maxWidth: 260 }} value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}>
           <option value="">Barcha agentlar</option>
           {(agents.data || []).map((a) => <option key={a.id} value={a.id}>{a.fullName}</option>)}
         </select>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.9rem' }}>
+          <input type="checkbox" checked={hideHouse} onChange={(e) => setHideHouse(e.target.checked)} />
+          Ofis / Van seling yashirish
+        </label>
       </div>
       <div className="kpi-table-wrap">
         <table className="kpi-table">
@@ -1180,29 +1249,52 @@ function OrdersAndKpiSection() {
               <th>Jo‘natma</th>
               <th>Mijoz</th>
               <th>Agent</th>
-              <th>Savdo</th>
-              <th>To‘langan</th>
+              <th className="is-num">Savdo</th>
+              <th className="is-num">To‘langan</th>
               <th>Bosqich</th>
-              <th>KPI</th>
+              <th className="is-num">KPI</th>
               <th>Holat</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((o) => {
-              const k = maps.k.get(o.id);
+              const k = o.kpi;
+              const paid = Number(o.paidAmount || 0);
+              const house = Boolean(o.isHouseAccount);
+              let bosqich = '—';
+              let kpiText = '—';
+              if (house) {
+                bosqich = 'Ofis';
+                kpiText = '—';
+              } else if (k) {
+                const pct = Number(k.stagePercent || 0);
+                if (paid <= 0) {
+                  bosqich = pct > 0 ? `To‘lansa: ${pct}%` : '—';
+                  kpiText = '0 so‘m';
+                } else {
+                  bosqich = `${k.stageName} (${pct}%)`;
+                  kpiText = uzs(k.kpiAmount);
+                }
+              }
               return (
                 <tr key={o.id}>
-                  <td data-label="Jo‘natma"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{o.orderDate}</div></td>
-                  <td data-label="Mijoz">{o.customerName || maps.c.get(o.customerId) || '—'}</td>
-                  <td data-label="Agent"><b>{o.agentName || maps.a.get(o.agentId) || '—'}</b></td>
-                  <td data-label="Savdo">{uzs(o.total)}</td>
-                  <td data-label="To‘langan">{uzs(o.paidAmount)}</td>
-                  <td data-label="Bosqich">{k ? `${k.stageName} (${Number(k.stagePercent)}%)` : '—'}<div className="kpi-muted">{k?.daysRemaining != null ? `${k.daysRemaining} kun qoldi` : ''}</div></td>
-                  <td data-label="KPI"><b className="is-ok">{k ? uzs(k.kpiAmount) : '0 so‘m'}</b></td>
+                  <td data-label="Jo‘natma"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{isoToDmy(o.orderDate)}</div></td>
+                  <td data-label="Mijoz">{o.customerName || '—'}</td>
+                  <td data-label="Agent"><b>{o.agentName || '—'}</b></td>
+                  <td data-label="Savdo" className="is-num">{uzs(o.total)}</td>
+                  <td data-label="To‘langan" className="is-num">{uzs(o.paidAmount)}</td>
+                  <td data-label="Bosqich">{bosqich}</td>
+                  <td data-label="KPI" className="is-num"><b className="is-ok">{kpiText}</b></td>
                   <td data-label="Holat"><span className={`kpi-chip ${o.status}`}>{kpiStatusLabel(o.status)}</span></td>
                 </tr>
               );
             })}
+            {!rows.length && !orders.isLoading ? (
+              <tr><td colSpan={8} className="kpi-muted">Bu davrda jo‘natma yo‘q.</td></tr>
+            ) : null}
+            {orders.isLoading ? (
+              <tr><td colSpan={8} className="kpi-muted">Yuklanmoqda…</td></tr>
+            ) : null}
           </tbody>
         </table>
       </div>

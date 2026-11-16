@@ -1041,15 +1041,60 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureKpiBootstrapped();
     const status = String(req.query.status ?? "").trim();
+    const agentId = String(req.query.agentId ?? "").trim();
+    const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
     const rows = await db.select().from(kpiOrdersTable)
-      .where(status ? eq(kpiOrdersTable.status, status) : undefined)
+      .where(
+        and(
+          status ? eq(kpiOrdersTable.status, status) : undefined,
+          agentId ? eq(kpiOrdersTable.agentId, agentId) : undefined,
+          sql`${kpiOrdersTable.orderDate} >= ${period.from}`,
+          sql`${kpiOrdersTable.orderDate} <= ${period.to}`,
+        ),
+      )
       .orderBy(desc(kpiOrdersTable.orderDate), desc(kpiOrdersTable.createdAt))
-      .limit(250);
-    const agents = await db.select({ id: kpiAgentsTable.id, fullName: kpiAgentsTable.fullName }).from(kpiAgentsTable);
+      .limit(500);
+    const agents = await db
+      .select({ id: kpiAgentsTable.id, fullName: kpiAgentsTable.fullName, login: kpiAgentsTable.login })
+      .from(kpiAgentsTable);
     const customers = await db.select({ id: kpiCustomersTable.id, name: kpiCustomersTable.name }).from(kpiCustomersTable);
-    const aMap = new Map(agents.map((a) => [a.id, a.fullName]));
+    const aMap = new Map(agents.map((a) => [a.id, a]));
     const cMap = new Map(customers.map((c) => [c.id, c.name]));
-    res.json(rows.map((r) => ({ ...r, agentName: aMap.get(r.agentId) || "—", customerName: cMap.get(r.customerId) || "—" })));
+    const orderIds = rows.map((r) => r.id);
+    const calcs = orderIds.length
+      ? await db.select().from(kpiCalculationsTable).where(inArray(kpiCalculationsTable.orderId, orderIds))
+      : [];
+    const kMap = new Map(calcs.map((c) => [c.orderId, c]));
+    res.json({
+      periodStart: period.from,
+      periodEnd: period.to,
+      periodLabel: period.label,
+      periodPreset: period.preset,
+      rows: rows.map((r) => {
+        const agent = aMap.get(r.agentId);
+        const k = kMap.get(r.id);
+        const isHouse = agent?.login === "ofis" || agent?.login === "vanseling";
+        return {
+          ...r,
+          agentName: agent?.fullName || "—",
+          agentLogin: agent?.login || "",
+          customerName: cMap.get(r.customerId) || "—",
+          isHouseAccount: isHouse,
+          kpi: k
+            ? {
+                id: k.id,
+                orderId: k.orderId,
+                baseAmount: k.baseAmount,
+                stagePercent: k.stagePercent,
+                kpiAmount: k.kpiAmount,
+                status: k.status,
+                stageName: k.stageName,
+                daysRemaining: k.daysRemaining,
+              }
+            : null,
+        };
+      }),
+    });
   } catch (error) {
     next(error);
   }
