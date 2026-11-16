@@ -8,7 +8,8 @@
  *   Начальный       — closing − Приход + Расход
  *
  * MS yordam hujjatlari:
- *   Приход: Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
+ *   Приход: Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера,
+ *           Возвраты покупателей (salesreturn)
  *   Расход: Отгрузки, Исходящие платежи, Расходные ордера, Выданные отчёты комиссионера
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from "fs";
@@ -61,17 +62,23 @@ const AGENT_TAG_ALIASES: Record<string, string[]> = {
  * MS UI «Взаиморасчеты» hujjatlari.
  * Приход (credit) / Расход (debit) — alohida tomonlar; aralashtirmaslik.
  */
-const CREDIT_ENTITIES = ["supply", "paymentin", "cashin", "commissionreportin"] as const;
+const CREDIT_ENTITIES = [
+  "supply",
+  "paymentin",
+  "cashin",
+  "commissionreportin",
+  "salesreturn",
+] as const;
 const DEBIT_ENTITIES = ["demand", "paymentout", "cashout", "commissionreportout"] as const;
 
 const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v14: hujjat summasiga valyuta kursi (rate.value) — USD cashin MS Приход bilan 1:1.
- * Chiqim yo‘li o‘zgarmagan (UZS demand rate yo‘q).
+ * v15: Приход ga salesreturn (Возврат покупателя) — MS Взаиморасчеты bilan 1:1.
+ * v14: rate.value (USD→UZS). Chiqim o‘zgarmagan.
  */
-const CACHE_VERSION = "v14";
+const CACHE_VERSION = "v15";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CREDIT_ENRICH_CONCURRENCY = 2;
 const MS_FAST = { maxAttempts: 6 } as const;
