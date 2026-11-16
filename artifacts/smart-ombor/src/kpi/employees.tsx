@@ -217,6 +217,8 @@ export function EmployeesPage() {
           </button>
         </div>
         {create.error ? <p className="kpi-error">{(create.error as Error).message}</p> : null}
+        {update.error ? <p className="kpi-error">{(update.error as Error).message}</p> : null}
+        {remove.error ? <p className="kpi-error">{(remove.error as Error).message}</p> : null}
       </section>
 
       <div className="kpi-table-wrap">
@@ -257,23 +259,18 @@ export function EmployeesPage() {
                   </td>
                   <td data-label="Lavozim">
                     {isEdit && s.login !== 'bordouzadmin' ? (
-                      <>
-                        <input
-                          className="input"
-                          list="emp-role-options"
-                          placeholder="Tanlang yoki yozing…"
-                          value={ROLE_META[editing.role]?.label || editing.role}
-                          onChange={(e) => setEditing({ ...editing, role: e.target.value })}
-                        />
-                        <datalist id="emp-role-options">
-                          {ROLE_PRESETS.map((r) => (
-                            <option key={r.value} value={r.label} />
-                          ))}
-                          {extraRoles.map((r) => (
-                            <option key={r} value={r} />
-                          ))}
-                        </datalist>
-                      </>
+                      <select
+                        className="input"
+                        value={ROLE_PRESETS.some((r) => r.value === editing.role) || extraRoles.includes(editing.role) ? editing.role : (editing.role || 'worker')}
+                        onChange={(e) => setEditing({ ...editing, role: e.target.value })}
+                      >
+                        {ROLE_PRESETS.map((r) => (
+                          <option key={r.value} value={r.value}>{r.label}</option>
+                        ))}
+                        {extraRoles.map((r) => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
                     ) : (
                       <span className={`emp-role-badge ${info.tone}`}>{info.label}</span>
                     )}

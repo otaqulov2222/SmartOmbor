@@ -17,7 +17,13 @@ function normalizeRole(value: string) {
   const known = KNOWN_ROLES.find((item) => item === role);
   return known || role;
 }
-type Store = { secret: string; accounts: Account[]; sessions: Record<string, string> };
+type Store = {
+  secret: string;
+  accounts: Account[];
+  sessions: Record<string, string>;
+  /** O‘chirilgan loginlar — SEED_AGENTS ularni qayta yaratmasin. */
+  removedLogins?: string[];
+};
 
 const sessions = new Map<string, string>();
 let memory: Store | null = null;
@@ -60,6 +66,9 @@ export async function hydrateLocalAccounts() {
         secret: remote.secret,
         accounts: remote.accounts,
         sessions: remote.sessions && typeof remote.sessions === "object" ? remote.sessions : {},
+        removedLogins: Array.isArray(remote.removedLogins)
+          ? remote.removedLogins.map((l) => String(l).toLowerCase())
+          : [],
       };
       ensureAdmin(memory);
       for (const [token, login] of Object.entries(memory.sessions)) sessions.set(token, login);
@@ -91,7 +100,14 @@ function readDisk(): Store {
   try {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
     if (parsed.secret && Array.isArray(parsed.accounts)) {
-      return { secret: parsed.secret, accounts: parsed.accounts, sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {} };
+      return {
+        secret: parsed.secret,
+        accounts: parsed.accounts,
+        sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {},
+        removedLogins: Array.isArray(parsed.removedLogins)
+          ? parsed.removedLogins.map((l) => String(l).toLowerCase())
+          : [],
+      };
     }
   } catch {
     /* first run */
@@ -100,6 +116,7 @@ function readDisk(): Store {
     secret: randomBytes(24).toString("base64url"),
     accounts: [{ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" }],
     sessions: {},
+    removedLogins: [],
   };
   write(store);
   return store;
@@ -129,6 +146,11 @@ const SEED_AGENTS: Array<[string, string, string]> = [
 /** Returns true when admin or default MoySklad agents were created or corrected. */
 function ensureAdmin(store: Store): boolean {
   let changed = false;
+  if (!Array.isArray(store.removedLogins)) {
+    store.removedLogins = [];
+    changed = true;
+  }
+  const removed = new Set(store.removedLogins.map((l) => l.toLowerCase()));
   const admin = store.accounts.find((account) => account.login === "bordouzadmin");
   if (admin) {
     // Parolni majburan qayta yozmaymiz — admin o‘zgartirgan bo‘lsa saqlanadi.
@@ -145,6 +167,7 @@ function ensureAdmin(store: Store): boolean {
     changed = true;
   }
   for (const [name, login, defaultPassword] of SEED_AGENTS) {
+    if (removed.has(login.toLowerCase())) continue;
     const existing = store.accounts.find((a) => a.login.toLowerCase() === login);
     if (!existing) {
       store.accounts.push({ id: `agent-${login}`, name, login, password: defaultPassword, role: "agent", phone: "" });
@@ -155,6 +178,19 @@ function ensureAdmin(store: Store): boolean {
     }
   }
   return changed;
+}
+
+function markRemovedLogin(store: Store, login: string) {
+  const key = login.trim().toLowerCase();
+  if (!key) return;
+  if (!Array.isArray(store.removedLogins)) store.removedLogins = [];
+  if (!store.removedLogins.includes(key)) store.removedLogins.push(key);
+}
+
+function clearRemovedLogin(store: Store, login: string) {
+  const key = login.trim().toLowerCase();
+  if (!Array.isArray(store.removedLogins) || !key) return;
+  store.removedLogins = store.removedLogins.filter((l) => l !== key);
 }
 
 function remember(token: string, login: string) {
@@ -279,6 +315,7 @@ router.post("/local-accounts", (req, res) => {
     res.status(409).json({ error: "exists" });
     return;
   }
+  clearRemovedLogin(store, login);
   store.accounts.push({ id: randomUUID(), name, login, password, role, phone });
   write(store);
   res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone || "" })));
@@ -328,6 +365,7 @@ router.delete("/local-accounts/:id", (req, res) => {
     res.status(400).json({ error: "invalid" });
     return;
   }
+  markRemovedLogin(store, target.login);
   store.accounts = store.accounts.filter((account) => account.id !== target.id);
   write(store);
   forgetLogin(target.login);
