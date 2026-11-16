@@ -477,14 +477,6 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     ).catch(() => ({ map: new Map(), status: "warming" as const }));
     const msMap = settled.map;
     const kpiRows = await Promise.all(agents.map((a) => agentPeriodKpi(a.id, period.from, period.to)));
-    const salesFallback = await Promise.all(
-      agents.map(async (agent) => {
-        const ms = msMap.get(agent.login.toLowerCase());
-        if (ms && (Number(ms.expense) !== 0 || (ms.rows?.length || 0) > 0)) return ms.expense || "0.00";
-        if (ms?.folderName && settled.status !== "warming") return ms.expense || "0.00";
-        return agentPeriodSales(agent.id, period.from, period.to);
-      }),
-    );
     const out = agents.map((agent, i) => {
       const ms = msMap.get(agent.login.toLowerCase());
       const hasMsData =
@@ -493,10 +485,15 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
           Number(ms!.expense) !== 0 ||
           Number(ms!.income) !== 0 ||
           Number(ms!.closing) !== 0);
-      const hasMs = hasMsData || (Boolean(ms?.folderName) && settled.status !== "warming");
-      const salesTotal = hasMsData ? (ms?.expense || "0.00") : hasMs ? (ms?.expense || "0.00") : salesFallback[i];
-      const paidTotal = hasMsData || hasMs ? (ms?.income || "0.00") : "0.00";
+      // Agent uchun MS bor — faqat uning raqami; warming paytida soxta 0 qo‘ymaymiz.
+      const salesTotal = hasMsData ? (ms?.expense || "0.00") : "0.00";
+      const paidTotal = hasMsData ? (ms?.income || "0.00") : "0.00";
       const salesPlan = money(agent.salesPlan);
+      const rowStatus = hasMsData
+        ? settled.status === "warming"
+          ? "stale"
+          : settled.status
+        : settled.status;
       return {
         id: agent.id,
         fullName: agent.fullName,
@@ -507,14 +504,14 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         startedAt: agent.startedAt,
         salesPlan,
         notes: agent.notes,
-        customers: ms?.customers ?? 0,
+        customers: hasMsData ? (ms?.customers ?? 0) : 0,
         salesTotal,
         monthSales: salesTotal,
         paidTotal,
-        opening: ms?.opening || "0.00",
-        closing: ms?.closing || "0.00",
+        opening: hasMsData ? ms?.opening || "0.00" : "0.00",
+        closing: hasMsData ? ms?.closing || "0.00" : "0.00",
         folderName: ms?.folderName || null,
-        planPct: computePlanPct(salesTotal, salesPlan),
+        planPct: hasMsData ? computePlanPct(salesTotal, salesPlan) : null,
         kpiTotal: kpiRows[i],
         createdAt: agent.createdAt,
         periodStart: period.from,
@@ -522,7 +519,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         periodLabel: period.label,
         periodPreset: period.preset,
         source: "moysklad_settlements",
-        msStatus: settled.status,
+        msStatus: rowStatus,
       };
     });
     res.json(out);

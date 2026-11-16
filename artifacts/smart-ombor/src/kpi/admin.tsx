@@ -479,12 +479,13 @@ export function KpiDashboardPage() {
   const [preset, setPreset] = useState<PeriodPreset>(initial.preset);
   const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`;
   const q = useQuery({ queryKey: ['kpi-dash', from, to, preset], queryFn: () => kpiFetch<Dash>(`/kpi/dashboard${qs}`) });
+  const queryClient = useQueryClient();
   const agents = useQuery({
     queryKey: ['kpi-agents', from, to, preset],
     queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`),
     refetchInterval: (query) => {
       const rows = query.state.data;
-      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 1500;
+      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 800;
       return false;
     },
   });
@@ -504,13 +505,25 @@ export function KpiDashboardPage() {
     ),
     refetchInterval: (query) => {
       const st = query.state.data?.msStatus;
-      if (st === 'warming' || st === 'stale') return 1200;
+      if (st === 'warming' || st === 'stale') return 1000;
       return false;
     },
   });
+  // Modal tayyor bo‘lsa — ro‘yxatdagi soxta 0 yangilansin.
+  useEffect(() => {
+    if (!openAgentId) return;
+    if ((detail.data?.rows?.length || 0) === 0) return;
+    if (detail.data?.msStatus === 'warming') return;
+    void queryClient.invalidateQueries({ queryKey: ['kpi-agents', from, to, preset] });
+  }, [openAgentId, detail.data?.rows?.length, detail.data?.msStatus, detail.data?.income, detail.data?.expense, from, to, preset, queryClient]);
   const openAgent = sorted.find((a) => a.id === openAgentId);
   const detailHasRows = (detail.data?.rows?.length || 0) > 0;
   const detailWarming = Boolean(openAgentId) && (detail.isFetching || detail.isLoading) && !detailHasRows;
+  const agentMsPending = (a: Agent) =>
+    (a.msStatus === 'warming' || a.msStatus === 'stale') &&
+    Number(a.paidTotal || 0) === 0 &&
+    Number(a.salesTotal || 0) === 0 &&
+    (a.customers || 0) === 0;
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -586,9 +599,9 @@ export function KpiDashboardPage() {
                     </button>
                   </td>
                   <td data-label="Login" className="kpi-muted">{a.login}</td>
-                  <td data-label="Mijozlari" className="is-num">{a.customers}</td>
-                  <td data-label="Kirim" className="is-num">{uzs(a.paidTotal ?? 0)}</td>
-                  <td data-label="Chiqim" className="is-num">{uzs(a.salesTotal)}</td>
+                  <td data-label="Mijozlari" className="is-num">{agentMsPending(a) ? '…' : a.customers}</td>
+                  <td data-label="Kirim" className="is-num">{agentMsPending(a) ? '…' : uzs(a.paidTotal ?? 0)}</td>
+                  <td data-label="Chiqim" className="is-num">{agentMsPending(a) ? '…' : uzs(a.salesTotal)}</td>
                   <td data-label="Reja %" className="is-num">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
                   <td data-label="KPI" className="is-num"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
                 </tr>
