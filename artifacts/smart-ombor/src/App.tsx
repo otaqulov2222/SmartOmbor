@@ -39,8 +39,10 @@ import {
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
 import { EmployeesPage } from '@/kpi/employees';
 import {
+  cabinetHomeForRole,
   effectiveAccess,
   homeForAccess,
+  isAgentRole as accessIsAgentRole,
   pathAllowedByAccess,
   type AccessModuleId,
 } from '@/access';
@@ -72,6 +74,7 @@ type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
   { key: 'nav.myCabinet', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.myCabinet', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
@@ -86,7 +89,6 @@ const navigation: NavItem[] = [
   { key: 'nav.partners', href: '/partners', icon: Handshake, group: 'nav.group.operations' },
   { key: 'nav.employees', href: '/employees', icon: Users, group: 'nav.group.workspace' },
   { key: 'nav.gps', href: '/gps', icon: MapPin, group: 'nav.group.workspace' },
-  { key: 'nav.myAgent', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.kpi', href: '/kpi', icon: Gauge, group: 'nav.group.kpi' },
   { key: 'nav.kpiAgents', href: '/kpi/agents', icon: Users, group: 'nav.group.kpi' },
   { key: 'nav.kpiCustomers', href: '/kpi/customers', icon: Handshake, group: 'nav.group.kpi' },
@@ -102,7 +104,7 @@ const primaryHrefs = ['/dashboard', '/gps', '/employees', '/products', '/partner
 const officeHrefs = ['/office', '/office/report'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/my-kpi', '/receipts', '/transfers', '/inventory'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory'] },
   { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
@@ -129,7 +131,7 @@ function isWarehouse(role?: string | null) {
   return role === 'warehouse_manager' || role === 'warehouse_staff';
 }
 function isAgentRole(role?: string | null) {
-  return role === 'agent';
+  return accessIsAgentRole(role);
 }
 function isEmployeeCabinet(role?: string | null) {
   return Boolean(role) && !isDirector(role) && !isWarehouse(role) && !isAgentRole(role);
@@ -398,6 +400,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const permissions = session?.permissions || sessionAccess(role);
   const access = new Set(permissions as AccessModuleId[]);
   const has = (id: AccessModuleId) => access.has(id);
+  const cabinetHref = cabinetHomeForRole(role);
   const compactNav = access.size <= 3 && !has('dashboard') && !has('employees') && !has('kpi');
   const effectiveRail = !compactNav && rail;
   const moreGroupsVisible = moreGroups
@@ -408,7 +411,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     .filter((group) => group.hrefs.length > 0);
   const moreHrefsVisible = moreGroupsVisible.flatMap((g) => g.hrefs);
   const inMore = moreHrefsVisible.includes(path);
-  const inOfficeNav = officeHrefs.includes(path) || path === '/office';
+  const inOfficeNav = officeHrefs.includes(path) || path === '/office' || path === '/my-kpi';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const [moreOpen, setMoreOpen] = useState(inMore);
   const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
@@ -451,7 +454,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
           {has('dashboard') ? navItem('/dashboard') : null}
           {has('products') ? navItem('/products') : null}
           {has('employees') ? navItem('/employees') : null}
-          {has('my_cabinet') && !has('office') ? navItem('/office') : null}
+          {has('my_cabinet') && !has('office') ? navItem(cabinetHref) : null}
           {has('office') ? <>
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
@@ -459,7 +462,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
               <ChevronDown size={16} className="nav-more-chevron"/>
             </button>
             {officeOpen && <div className="nav-office-sub">
-              {has('my_cabinet') ? navItem('/office') : null}
+              {has('my_cabinet') ? navItem(cabinetHref) : null}
               {navItem('/office/report')}
             </div>}
           </> : null}
@@ -1717,6 +1720,16 @@ function SignedInHome() {
     : homeForRole(role, permissions);
   return <Redirect to={next}/>;
 }
+
+/** Bitta «Mening kabinetim»: agent → KPI kabinet, qolganlar → davomat kabineti. */
+function MyCabinetRoute() {
+  const session = readLocalSession();
+  if (!isAgentRole(session?.role)) return <Redirect to="/office"/>;
+  return <AgentCabinetPage/>;
+}
+function StaffCabinetRoute() {
+  return <OfficePage/>;
+}
 function HomeRoute() {
   return <><Show when="signed-in"><SignedInHome/></Show><Show when="signed-out"><EntryScreen><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`}/></EntryScreen></Show></>;
 }
@@ -1735,7 +1748,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/partners', titleKey: 'nav.partners', element: <PartnersPage/> },
   { path: '/employees', titleKey: 'nav.employees', element: <EmployeesPage/> },
   { path: '/gps', titleKey: 'nav.gps', element: <GpsPage/> },
-  { path: '/my-kpi', titleKey: 'nav.myAgent', element: <AgentCabinetPage/> },
+  { path: '/my-kpi', titleKey: 'nav.myCabinet', element: <MyCabinetRoute/> },
   { path: '/kpi', titleKey: 'nav.kpi', element: <KpiDashboardPage/> },
   { path: '/kpi/agents', titleKey: 'nav.kpiAgents', element: <KpiAgentsPage/> },
   { path: '/kpi/customers', titleKey: 'nav.kpiCustomers', element: <KpiCustomersPage/> },
@@ -1748,7 +1761,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
   { path: '/office/tasks', titleKey: 'nav.myCabinet', element: <Redirect to="/office"/> },
   { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
-  { path: '/office', titleKey: 'nav.myCabinet', element: <OfficePage/> },
+  { path: '/office', titleKey: 'nav.myCabinet', element: <StaffCabinetRoute/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
   { path: '/audit', titleKey: 'nav.audit', element: <AuditPage/> },

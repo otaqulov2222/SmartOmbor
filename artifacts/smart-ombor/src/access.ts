@@ -14,7 +14,6 @@ export type AccessModuleId =
   | 'office'
   | 'kpi'
   | 'gps'
-  | 'my_kpi'
   | 'analytics'
   | 'reports'
   | 'settings'
@@ -36,11 +35,11 @@ export const ACCESS_MODULES: AccessModule[] = [
   { id: 'inventory', label: 'Inventarizatsiya', paths: ['/inventory'] },
   { id: 'partners', label: 'Hamkor zavodlar', paths: ['/partners'] },
   { id: 'employees', label: 'Xodimlar', paths: ['/employees'] },
-  { id: 'my_cabinet', label: 'Mening kabinetim', paths: ['/office'] },
+  /** Bitta kabinet: rol bo‘yicha agent/ofis/savdo UI tanlanadi. */
+  { id: 'my_cabinet', label: 'Mening kabinetim', paths: ['/office', '/my-kpi'] },
   { id: 'office', label: 'Davomat hisoboti', paths: ['/office/report'] },
   { id: 'kpi', label: 'KPI', paths: ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'] },
   { id: 'gps', label: 'GPS va marshrut', paths: ['/gps'] },
-  { id: 'my_kpi', label: 'Agent kabineti', paths: ['/my-kpi'] },
   { id: 'analytics', label: 'Tahlil', paths: ['/analytics', '/non-moving', '/factories', '/branches', '/recommendations'] },
   { id: 'reports', label: 'Hisobotlar', paths: ['/reports'] },
   { id: 'settings', label: 'Sozlamalar', paths: ['/settings'] },
@@ -69,11 +68,29 @@ const ROLE_DEFAULTS: Record<string, AccessModuleId[]> = {
     'partners', 'products', 'stock', 'scanner', 'receipts', 'transfers', 'inventory',
     'my_cabinet', 'office',
   ],
-  agent: ['my_kpi', 'my_cabinet'],
+  agent: ['my_cabinet'],
   accountant: ['my_cabinet', 'office', 'reports', 'analytics'],
   analyst: ['my_cabinet', 'office', 'analytics', 'reports', 'dashboard'],
   worker: ['my_cabinet'],
 };
+
+/** Rolga qarab shaxsiy kabinet yo‘li. */
+export function isAgentRole(role?: string | null) {
+  const key = String(role || '').trim();
+  return key === 'agent' || /agent|агент/i.test(key);
+}
+
+export function cabinetHomeForRole(role?: string | null) {
+  return isAgentRole(role) ? '/my-kpi' : '/office';
+}
+
+function migrateAccessId(raw: string): AccessModuleId | null {
+  const id = raw.trim();
+  // Eski «Agent kabineti» → bitta Mening kabinetim
+  if (id === 'my_kpi') return 'my_cabinet';
+  if ((ALL_ACCESS_IDS as string[]).includes(id)) return id as AccessModuleId;
+  return null;
+}
 
 function withLegacyOffice(list: AccessModuleId[]): AccessModuleId[] {
   // Eski «office» = punch + hisobot. Endi punch → my_cabinet.
@@ -86,19 +103,18 @@ function withLegacyOffice(list: AccessModuleId[]): AccessModuleId[] {
 export function defaultsForRole(role?: string | null): AccessModuleId[] {
   const key = String(role || '').trim();
   if (ROLE_DEFAULTS[key]) return withLegacyOffice([...ROLE_DEFAULTS[key]]);
-  if (/agent|агент/i.test(key)) return withLegacyOffice([...ROLE_DEFAULTS.agent]);
+  if (isAgentRole(key)) return withLegacyOffice([...ROLE_DEFAULTS.agent]);
   if (/ombor|sklad|склад/i.test(key)) return withLegacyOffice([...ROLE_DEFAULTS.warehouse_staff]);
   if (/admin|rahbar|menejer|direktor/i.test(key)) return withLegacyOffice([...ROLE_DEFAULTS.manager]);
   return withLegacyOffice([...ROLE_DEFAULTS.worker]);
 }
 
 export function normalizeAccessList(raw: unknown, role?: string | null): AccessModuleId[] {
-  const allowed = new Set(ALL_ACCESS_IDS);
   if (String(role || '') === 'super_admin') return [...ALL_ACCESS_IDS];
   if (!Array.isArray(raw)) return defaultsForRole(role);
   const picked = raw
-    .map((v) => String(v).trim())
-    .filter((v): v is AccessModuleId => allowed.has(v as AccessModuleId));
+    .map((v) => migrateAccessId(String(v || '')))
+    .filter((v): v is AccessModuleId => Boolean(v));
   const unique = withLegacyOffice([...new Set(picked)]);
   return unique.length ? unique : defaultsForRole(role);
 }
@@ -112,6 +128,7 @@ export function effectiveAccess(role?: string | null, permissions?: string[] | n
 export function moduleForPath(path: string): AccessModuleId | null {
   if (PATH_TO_MODULE.has(path)) return PATH_TO_MODULE.get(path)!;
   if (path.startsWith('/kpi')) return 'kpi';
+  if (path.startsWith('/my-kpi')) return 'my_cabinet';
   if (path.startsWith('/office')) return path.includes('/report') ? 'office' : 'my_cabinet';
   return null;
 }
@@ -125,11 +142,15 @@ export function pathAllowedByAccess(path: string, role?: string | null, permissi
 
 export function homeForAccess(role?: string | null, permissions?: string[] | null): string {
   const access = new Set(effectiveAccess(role, permissions));
+  if (access.has('my_cabinet') && (isAgentRole(role) || access.size <= 2)) {
+    return cabinetHomeForRole(role);
+  }
   const prefer: AccessModuleId[] = [
-    'dashboard', 'partners', 'my_kpi', 'my_cabinet', 'office', 'products', 'stock', 'kpi', 'gps',
+    'dashboard', 'partners', 'my_cabinet', 'office', 'products', 'stock', 'kpi', 'gps',
   ];
   for (const id of prefer) {
     if (!access.has(id)) continue;
+    if (id === 'my_cabinet') return cabinetHomeForRole(role);
     const mod = ACCESS_MODULES.find((m) => m.id === id);
     if (mod?.paths[0]) return mod.paths[0];
   }
@@ -143,6 +164,6 @@ export const NAV_PRIMARY_MODULES: AccessModuleId[] = [
 ];
 /** «Boshqalar» ichida. */
 export const NAV_MORE_MODULES: AccessModuleId[] = [
-  'stock', 'scanner', 'my_kpi', 'receipts', 'transfers', 'inventory',
+  'stock', 'scanner', 'receipts', 'transfers', 'inventory',
   'analytics', 'reports', 'settings', 'audit',
 ];

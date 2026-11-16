@@ -28,7 +28,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 const ACCESS_IDS = [
   "dashboard", "products", "stock", "scanner", "receipts", "transfers", "inventory",
-  "partners", "employees", "my_cabinet", "office", "kpi", "gps", "my_kpi",
+  "partners", "employees", "my_cabinet", "office", "kpi", "gps",
   "analytics", "reports", "settings", "audit",
 ] as const;
 type AccessId = (typeof ACCESS_IDS)[number];
@@ -48,7 +48,7 @@ const ROLE_ACCESS: Record<string, AccessId[]> = {
     "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory",
     "my_cabinet", "office",
   ],
-  agent: ["my_kpi", "my_cabinet"],
+  agent: ["my_cabinet"],
   accountant: ["my_cabinet", "office", "reports", "analytics"],
   analyst: ["my_cabinet", "office", "analytics", "reports", "dashboard"],
   worker: ["my_cabinet"],
@@ -82,6 +82,13 @@ function defaultsForRole(role: string): AccessId[] {
   return [...ROLE_ACCESS.worker];
 }
 
+function migrateAccessId(raw: string): AccessId | null {
+  const id = raw.trim();
+  if (id === "my_kpi") return "my_cabinet";
+  if ((ACCESS_IDS as readonly string[]).includes(id)) return id as AccessId;
+  return null;
+}
+
 function withLegacyOffice(list: AccessId[]): AccessId[] {
   // Eski «office» punch+hisobot edi — punch endi my_cabinet.
   if (list.includes("office") && !list.includes("my_cabinet")) return [...list, "my_cabinet"];
@@ -90,10 +97,9 @@ function withLegacyOffice(list: AccessId[]): AccessId[] {
 
 function normalizePermissions(raw: unknown, role: string): AccessId[] {
   if (role === "super_admin") return [...ACCESS_IDS];
-  const allow = new Set<string>(ACCESS_IDS);
   if (!Array.isArray(raw)) return withLegacyOffice(defaultsForRole(role));
   const picked = withLegacyOffice([...new Set(
-    raw.map((v) => String(v).trim()).filter((v): v is AccessId => allow.has(v)),
+    raw.map((v) => migrateAccessId(String(v || ""))).filter((v): v is AccessId => Boolean(v)),
   )]);
   return picked.length ? picked : withLegacyOffice(defaultsForRole(role));
 }
