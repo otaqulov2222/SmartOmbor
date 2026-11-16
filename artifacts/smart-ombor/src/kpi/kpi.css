@@ -766,6 +766,49 @@
 }
 
 /* ---------- Employees Table & Copy Button ---------- */
+.emp-access {
+  margin-top: .85rem;
+  padding: .75rem .85rem;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #f8fafc;
+  display: grid;
+  gap: .55rem;
+}
+.emp-access-head { display: flex; flex-wrap: wrap; gap: .35rem .75rem; align-items: baseline; }
+.emp-access-head b { font-size: .9rem; color: #0f172a; }
+.emp-access-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+.emp-access-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: .35rem;
+}
+.emp-access-chip {
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .42rem .55rem;
+  border: 1px solid #d8e0ea;
+  border-radius: 10px;
+  background: #fff;
+  font-size: .78rem; font-weight: 650; color: #475569;
+  cursor: pointer; user-select: none;
+}
+.emp-access-chip input { accent-color: #1d4ed8; }
+.emp-access-chip.is-on {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+.emp-access-chip.is-locked { opacity: .85; cursor: default; }
+.emp-perm-summary { display: flex; flex-wrap: wrap; gap: .25rem; max-width: 16rem; }
+.emp-perm-pill {
+  display: inline-flex; align-items: center;
+  padding: .15rem .45rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: .68rem;
+  font-weight: 700;
+}
 .emp-add-grid {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr 1fr 1.3fr auto;

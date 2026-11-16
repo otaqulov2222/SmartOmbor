@@ -38,6 +38,15 @@ import {
 } from '@/kpi/admin';
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
 import { EmployeesPage } from '@/kpi/employees';
+import {
+  ACCESS_MODULES,
+  effectiveAccess,
+  homeForAccess,
+  NAV_MORE_MODULES,
+  NAV_PRIMARY_MODULES,
+  pathAllowedByAccess,
+  type AccessModuleId,
+} from '@/access';
 import { GpsPage } from '@/kpi/gps';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
@@ -128,20 +137,17 @@ function isAgentRole(role?: string | null) {
 function isEmployeeCabinet(role?: string | null) {
   return Boolean(role) && !isDirector(role) && !isWarehouse(role) && !isAgentRole(role);
 }
-function homeForRole(role?: string | null) {
-  if (isAgentRole(role)) return '/my-kpi';
-  if (isEmployeeCabinet(role)) return '/office';
-  if (isWarehouse(role)) return '/partners';
-  return '/dashboard';
+function sessionAccess(role?: string | null, permissions?: string[] | null) {
+  return effectiveAccess(role, permissions);
 }
-function pathAllowedForRole(path: string, role?: string | null) {
-  if (isDirector(role)) return true;
-  if (isAgentRole(role)) return path === '/my-kpi' || path === '/office';
-  if (isEmployeeCabinet(role)) return path === '/office';
-  if (isWarehouse(role)) {
-    return warehouseAllowedHrefs.has(path);
-  }
-  return true;
+function homeForRole(role?: string | null, permissions?: string[] | null) {
+  return homeForAccess(role, permissions);
+}
+function pathAllowedForRole(path: string, role?: string | null, permissions?: string[] | null) {
+  return pathAllowedByAccess(path, role, permissions);
+}
+function hrefForModule(id: AccessModuleId): string | null {
+  return ACCESS_MODULES.find((m) => m.id === id)?.paths[0] || null;
 }
 
 /* ---------- small helpers ---------- */
@@ -234,13 +240,20 @@ function LocalSignInNotice() {
 const LOCAL_SESSION = 'smart-ombor-session';
 const RETURN_PATH = 'smart-ombor-return';
 const accessRoles = ['super_admin', 'manager', 'sales_admin', 'warehouse_manager', 'warehouse_staff', 'analyst', 'accountant', 'worker'] as const;
-type LocalSession = { token: string; name: string; login: string; role: string };
+type LocalSession = { token: string; name: string; login: string; role: string; permissions?: string[] };
 
 function readLocalSession(): LocalSession | null {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(LOCAL_SESSION) || '') as Partial<LocalSession>;
     if (!parsed.token || !parsed.login || !parsed.role) return null;
-    return { token: parsed.token, name: parsed.name || parsed.login, login: parsed.login, role: parsed.role };
+    const permissions = sessionAccess(parsed.role, parsed.permissions);
+    return {
+      token: parsed.token,
+      name: parsed.name || parsed.login,
+      login: parsed.login,
+      role: parsed.role,
+      permissions,
+    };
   } catch {
     return null;
   }
@@ -279,20 +292,27 @@ function LocalLoginForm() {
       });
       if (!response.ok) { setError(true); return; }
       const body = await response.json() as LocalSession;
-      sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({ token: body.token, name: body.name, login: body.login, role: body.role }));
+      const permissions = sessionAccess(body.role, body.permissions);
+      sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({
+        token: body.token,
+        name: body.name,
+        login: body.login,
+        role: body.role,
+        permissions,
+      }));
       window.dispatchEvent(new Event('smart-ombor-auth'));
       const here = `${window.location.pathname}${window.location.search}`;
       const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
-      // Ombordu/agent/ofis — admin sahifasiga “qaytib” tushib qolmasin.
-      if (isDirector(body.role)) {
+      // Faqat to‘liq admin — oldingi sahifaga qaytsin; boshqalar o‘z ruxsatlari bo‘yicha.
+      if (body.role === 'super_admin' || body.role === 'manager') {
         const preferred = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '';
-        const target = preferred && pathAllowedForRole(preferred.split('?')[0], body.role)
+        const target = preferred && pathAllowedForRole(preferred.split('?')[0], body.role, permissions)
           ? preferred
-          : homeForRole(body.role);
+          : homeForRole(body.role, permissions);
         setLocation(target);
       } else {
-        setLocation(homeForRole(body.role));
+        setLocation(homeForRole(body.role, permissions));
       }
     } catch {
       setError(true);
@@ -326,16 +346,19 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const roleLabel = useRole();
   const [path] = useLocation(); const [open, setOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
-  const role = readLocalSession()?.role || '';
-  const director = isDirector(role);
-  const officeManager = canManageOffice(role);
-  const warehouse = isWarehouse(role);
-  const agent = isAgentRole(role);
-  const officeOnly = isEmployeeCabinet(role);
-  const effectiveRail = !agent && !officeOnly && rail;
-  const visibleMoreGroups = agent || officeOnly ? [] : warehouse ? warehouseMoreGroups : moreGroups;
-  const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
-  const inMore = visibleMoreHrefs.includes(path);
+  const session = readLocalSession();
+  const role = session?.role || '';
+  const permissions = session?.permissions || sessionAccess(role);
+  const access = new Set(permissions as AccessModuleId[]);
+  const has = (id: AccessModuleId) => access.has(id);
+  const compactNav = access.size <= 3 && !has('dashboard') && !has('employees') && !has('kpi');
+  const effectiveRail = !compactNav && rail;
+  const moreHrefsVisible = NAV_MORE_MODULES
+    .filter((id) => has(id))
+    .map((id) => hrefForModule(id))
+    .filter((href): href is string => Boolean(href));
+  const inMore = moreHrefsVisible.includes(path)
+    || (has('analytics') && ['/analytics', '/non-moving', '/factories', '/branches', '/recommendations'].includes(path));
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const [moreOpen, setMoreOpen] = useState(inMore);
@@ -355,11 +378,11 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     },
     staleTime: 10_000,
     refetchInterval: 8_000,
-    enabled: director || warehouse,
+    enabled: has('partners'),
   });
   const initials = userName.split(' ').map(x => x[0]).join('').slice(0, 2).toUpperCase();
   const navItem = (href: string) => {
-    if (!pathAllowedForRole(href, role)) return null;
+    if (!pathAllowedForRole(href, role, permissions)) return null;
     const item = navigation.find(entry => entry.href === href);
     if (!item) return null;
     const Icon = item.icon;
@@ -372,33 +395,14 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   return <div className={`app ${effectiveRail ? 'is-rail' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-      <div className="sidebar-top"><BrandMark light/>{!agent && !officeOnly && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
+      <div className="sidebar-top"><BrandMark light/>{!compactNav && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
-          {agent ? <>
-            {navItem('/my-kpi')}
-            {navItem('/office')}
-          </> : officeOnly ? <>
-            {navItem('/office')}
-          </> : warehouse ? <>
-            {navItem('/partners')}
-            {navItem('/products')}
-            {navItem('/stock')}
-            {navItem('/scanner')}
-            <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setMoreOpen(false); }} data-testid="button-navigation-office">
-              <Fingerprint size={18} strokeWidth={1.9}/>
-              <span>{t('nav.office')}</span>
-              <ChevronDown size={16} className="nav-more-chevron"/>
-            </button>
-            {officeOpen && <div className="nav-office-sub">
-              {navItem('/office')}
-              {officeManager && navItem('/office/report')}
-            </div>}
-            <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
-          </> : <>
-            {navItem('/dashboard')}
-            {navItem('/products')}
-            {navItem('/employees')}
+          {NAV_PRIMARY_MODULES.filter((id) => id !== 'office' && has(id)).map((id) => {
+            const href = hrefForModule(id);
+            return href ? navItem(href) : null;
+          })}
+          {has('office') ? <>
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
               <span>{t('nav.office')}</span>
@@ -406,8 +410,10 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             </button>
             {officeOpen && <div className="nav-office-sub">
               {navItem('/office')}
-              {officeManager && navItem('/office/report')}
+              {navItem('/office/report')}
             </div>}
+          </> : null}
+          {has('kpi') ? <>
             <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
               <Gauge size={18} strokeWidth={1.9}/>
               <span>{t('nav.group.kpi')}</span>
@@ -416,19 +422,26 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {kpiOpen && <div className="nav-office-sub">
               {kpiHrefs.map(href => navItem(href))}
             </div>}
-            {navItem('/gps')}
-            {navItem('/partners')}
+          </> : null}
+          {moreHrefsVisible.length ? (
             <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
-          </>}
+          ) : null}
         </div>
-        {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
+        {moreOpen && moreHrefsVisible.length ? (
+          <div className="nav-more-panel">
+            <div className="nav-group">
+              <p>{t('nav.more')}</p>
+              {moreHrefsVisible.map((href) => navItem(href))}
+            </div>
+          </div>
+        ) : null}
       </nav>
       <div className="sidebar-bottom">
         <div className="user" title={`${userName}${role ? ` · ${roleLabel(role)}` : ''}`}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b>{role ? <small>{roleLabel(role)}</small> : null}</span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
       </div>
     </aside>
     <div className="main">
-      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{(director || warehouse) && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
+      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{has('scanner') && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;
@@ -1589,8 +1602,10 @@ function WorkspaceRoutes() {
     window.addEventListener('smart-ombor-auth', refresh);
     return () => window.removeEventListener('smart-ombor-auth', refresh);
   }, []);
-  const signedIn = Boolean(readLocalSession()) || sessionTick < 0;
-  const localRole = readLocalSession()?.role;
+  const session = readLocalSession();
+  const signedIn = Boolean(session) || sessionTick < 0;
+  const localRole = session?.role;
+  const localPerms = session?.permissions;
   const current = navigation.find(entry => entry.href === location);
   const title = current ? t(current.key) : t('brand.name');
   const pages = (
@@ -1609,12 +1624,8 @@ function WorkspaceRoutes() {
       if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
       return <EntryScreen><LocalLoginForm/></EntryScreen>;
     }
-    if (isEmployeeCabinet(localRole)) {
-      if (location !== '/office') return <Redirect to="/office"/>;
-      return <LocalShell title={title}>{pages}</LocalShell>;
-    }
-    if (!pathAllowedForRole(location, localRole)) {
-      return <Redirect to={homeForRole(localRole)}/>;
+    if (!pathAllowedForRole(location, localRole, localPerms)) {
+      return <Redirect to={homeForRole(localRole, localPerms)}/>;
     }
     return <LocalShell title={title}>{pages}</LocalShell>;
   }
@@ -1623,9 +1634,13 @@ function WorkspaceRoutes() {
 function SignedInHome() {
   const back = sessionStorage.getItem(RETURN_PATH) || '';
   sessionStorage.removeItem(RETURN_PATH);
-  const role = readLocalSession()?.role;
+  const session = readLocalSession();
+  const role = session?.role;
+  const permissions = session?.permissions;
   const candidate = back.startsWith('/') && !back.startsWith('//') ? back : '';
-  const next = candidate && pathAllowedForRole(candidate.split('?')[0], role) ? candidate : homeForRole(role);
+  const next = candidate && pathAllowedForRole(candidate.split('?')[0], role, permissions)
+    ? candidate
+    : homeForRole(role, permissions);
   return <Redirect to={next}/>;
 }
 function HomeRoute() {

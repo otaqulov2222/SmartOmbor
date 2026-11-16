@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import {
+  ACCESS_MODULES,
+  defaultsForRole,
+  normalizeAccessList,
+  type AccessModuleId,
+} from '@/access';
 import { kpiFetch, uzs } from '@/kpi/api';
 import './kpi.css';
 
@@ -11,6 +17,7 @@ type Staff = {
   password: string;
   role: string;
   phone: string;
+  permissions?: AccessModuleId[];
 };
 
 type AgentRow = {
@@ -67,6 +74,66 @@ function roleInfo(role: string) {
   return { label: role, group: 'office' as const, tone: '' };
 }
 
+function AccessPicker({
+  role,
+  value,
+  onChange,
+  locked,
+}: {
+  role: string;
+  value: AccessModuleId[];
+  onChange: (next: AccessModuleId[]) => void;
+  locked?: boolean;
+}) {
+  const selected = new Set(value);
+  const toggle = (id: AccessModuleId) => {
+    if (locked) return;
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(normalizeAccessList([...next], role));
+  };
+  return (
+    <div className="emp-access">
+      <div className="emp-access-head">
+        <b>Bo‘lim ruxsatlari</b>
+        <span className="kpi-muted">Qaysi menyular ochilsin — MoySkladdagi kabi</span>
+      </div>
+      {locked ? (
+        <p className="kpi-muted">Super Admin uchun barcha bo‘limlar ochiq.</p>
+      ) : (
+        <div className="emp-access-actions">
+          <button type="button" className="btn btn-sm" onClick={() => onChange(defaultsForRole(role))}>
+            Rol bo‘yicha default
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => onChange(ACCESS_MODULES.map((m) => m.id))}>
+            Hammasini ochish
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => onChange(['office'])}>
+            Faqat davomat
+          </button>
+        </div>
+      )}
+      <div className="emp-access-grid">
+        {ACCESS_MODULES.map((m) => {
+          const on = locked || selected.has(m.id);
+          return (
+            <label key={m.id} className={`emp-access-chip${on ? ' is-on' : ''}${locked ? ' is-locked' : ''}`}>
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={locked}
+                onChange={() => toggle(m.id)}
+              />
+              <span>{m.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function EmployeesPage() {
   const cache = useQueryClient();
   const [filter, setFilter] = useState<'all' | 'agent' | 'warehouse' | 'office' | 'admin'>('all');
@@ -74,7 +141,14 @@ export function EmployeesPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Staff | null>(null);
   const [customMode, setCustomMode] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', login: '', password: '', role: 'warehouse_staff' });
+  const [form, setForm] = useState({
+    name: '',
+    phone: '',
+    login: '',
+    password: '',
+    role: 'warehouse_staff',
+    permissions: defaultsForRole('warehouse_staff') as AccessModuleId[],
+  });
 
   const staff = useQuery({
     queryKey: ['bordo-staff'],
@@ -98,10 +172,21 @@ export function EmployeesPage() {
     mutationFn: () =>
       kpiFetch('/local-accounts', {
         method: 'POST',
-        body: JSON.stringify({ ...form, role: resolveRole(form.role) }),
+        body: JSON.stringify({
+          ...form,
+          role: resolveRole(form.role),
+          permissions: normalizeAccessList(form.permissions, resolveRole(form.role)),
+        }),
       }),
     onSuccess: () => {
-      setForm({ name: '', phone: '', login: '', password: '', role: 'warehouse_staff' });
+      setForm({
+        name: '',
+        phone: '',
+        login: '',
+        password: '',
+        role: 'warehouse_staff',
+        permissions: defaultsForRole('warehouse_staff'),
+      });
       setCustomMode(false);
       void cache.invalidateQueries({ queryKey: ['bordo-staff'] });
     },
@@ -111,7 +196,11 @@ export function EmployeesPage() {
     mutationFn: (row: Staff) =>
       kpiFetch(`/local-accounts/${row.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...row, role: resolveRole(row.role) }),
+        body: JSON.stringify({
+          ...row,
+          role: resolveRole(row.role),
+          permissions: normalizeAccessList(row.permissions, resolveRole(row.role)),
+        }),
       }),
     onSuccess: () => {
       setEditing(null);
@@ -178,13 +267,19 @@ export function EmployeesPage() {
                 className="input"
                 placeholder="Lavozim nomini yozing (masalan: Kassir, Haydovchi…)"
                 value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                onChange={(e) => {
+                  const role = e.target.value;
+                  setForm({ ...form, role, permissions: defaultsForRole(resolveRole(role) || role) });
+                }}
                 autoFocus
               />
               <button
                 type="button"
                 className="btn"
-                onClick={() => { setCustomMode(false); setForm({ ...form, role: 'warehouse_staff' }); }}
+                onClick={() => {
+                  setCustomMode(false);
+                  setForm({ ...form, role: 'warehouse_staff', permissions: defaultsForRole('warehouse_staff') });
+                }}
               >
                 Ro‘yxat
               </button>
@@ -196,9 +291,10 @@ export function EmployeesPage() {
               onChange={(e) => {
                 if (e.target.value === '__custom__') {
                   setCustomMode(true);
-                  setForm({ ...form, role: '' });
+                  setForm({ ...form, role: '', permissions: defaultsForRole('worker') });
                 } else {
-                  setForm({ ...form, role: e.target.value });
+                  const role = e.target.value;
+                  setForm({ ...form, role, permissions: defaultsForRole(role) });
                 }
               }}
             >
@@ -214,12 +310,18 @@ export function EmployeesPage() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={create.isPending || !form.login.trim() || form.password.length < 4}
+            disabled={create.isPending || !form.login.trim() || form.password.length < 4 || form.permissions.length < 1}
             onClick={() => create.mutate()}
           >
             <Plus size={16} /> Qo‘shish
           </button>
         </div>
+        <AccessPicker
+          role={resolveRole(form.role)}
+          value={form.permissions}
+          onChange={(permissions) => setForm({ ...form, permissions })}
+          locked={resolveRole(form.role) === 'super_admin'}
+        />
         {create.error ? <p className="kpi-error">{(create.error as Error).message}</p> : null}
         {update.error ? <p className="kpi-error">{(update.error as Error).message}</p> : null}
         {remove.error ? <p className="kpi-error">{(remove.error as Error).message}</p> : null}
@@ -233,6 +335,7 @@ export function EmployeesPage() {
               <th>Lavozim</th>
               <th>Login</th>
               <th>Parol</th>
+              <th>Ruxsatlar</th>
               <th>Ko‘rsatkich</th>
               <th className="emp-th-actions">Amallar</th>
             </tr>
@@ -243,6 +346,7 @@ export function EmployeesPage() {
               const ag = agentByLogin.get(s.login.toLowerCase());
               const isEdit = editing?.id === s.id;
               const isCopied = copiedId === s.id;
+              const perms = normalizeAccessList(s.permissions, s.role);
               return (
                 <tr key={s.id}>
                   <td data-label="Xodim">
@@ -266,7 +370,14 @@ export function EmployeesPage() {
                       <select
                         className="input"
                         value={ROLE_PRESETS.some((r) => r.value === editing.role) || extraRoles.includes(editing.role) ? editing.role : (editing.role || 'worker')}
-                        onChange={(e) => setEditing({ ...editing, role: e.target.value })}
+                        onChange={(e) => {
+                          const role = e.target.value;
+                          setEditing({
+                            ...editing,
+                            role,
+                            permissions: defaultsForRole(role),
+                          });
+                        }}
                       >
                         {ROLE_PRESETS.map((r) => (
                           <option key={r.value} value={r.value}>{r.label}</option>
@@ -303,6 +414,23 @@ export function EmployeesPage() {
                       </span>
                     )}
                   </td>
+                  <td data-label="Ruxsatlar">
+                    {isEdit && s.login !== 'bordouzadmin' ? (
+                      <AccessPicker
+                        role={resolveRole(editing.role)}
+                        value={normalizeAccessList(editing.permissions, editing.role)}
+                        onChange={(permissions) => setEditing({ ...editing, permissions })}
+                      />
+                    ) : (
+                      <div className="emp-perm-summary">
+                        {perms.slice(0, 4).map((id) => {
+                          const label = ACCESS_MODULES.find((m) => m.id === id)?.label || id;
+                          return <span key={id} className="emp-perm-pill">{label}</span>;
+                        })}
+                        {perms.length > 4 ? <span className="kpi-muted">+{perms.length - 4}</span> : null}
+                      </div>
+                    )}
+                  </td>
                   <td data-label="Ko‘rsatkich">
                     {ag ? (
                       <div>
@@ -332,7 +460,10 @@ export function EmployeesPage() {
                         <button
                           type="button"
                           className="emp-icon-btn"
-                          onClick={() => setEditing({ ...s })}
+                          onClick={() => setEditing({
+                            ...s,
+                            permissions: normalizeAccessList(s.permissions, s.role),
+                          })}
                           title="Tahrirlash"
                         >
                           <Pencil size={14} />

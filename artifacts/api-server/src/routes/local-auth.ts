@@ -26,7 +26,41 @@ const ROLE_LABELS: Record<string, string> = {
   "ofis xodimi": "worker",
 };
 
-type Account = { id: string; name: string; login: string; password: string; role: string; phone?: string };
+const ACCESS_IDS = [
+  "dashboard", "products", "stock", "scanner", "receipts", "transfers", "inventory",
+  "partners", "employees", "office", "kpi", "gps", "my_kpi",
+  "analytics", "reports", "settings", "audit",
+] as const;
+type AccessId = (typeof ACCESS_IDS)[number];
+
+const ROLE_ACCESS: Record<string, AccessId[]> = {
+  super_admin: [...ACCESS_IDS],
+  manager: [...ACCESS_IDS],
+  sales_admin: [
+    "dashboard", "products", "partners", "employees", "office", "kpi", "gps",
+    "analytics", "reports", "settings",
+  ],
+  warehouse_manager: [
+    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory", "office", "analytics",
+  ],
+  warehouse_staff: [
+    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory", "office",
+  ],
+  agent: ["my_kpi", "office"],
+  accountant: ["office", "reports", "analytics"],
+  analyst: ["office", "analytics", "reports", "dashboard"],
+  worker: ["office"],
+};
+
+type Account = {
+  id: string;
+  name: string;
+  login: string;
+  password: string;
+  role: string;
+  phone?: string;
+  permissions?: AccessId[];
+};
 
 function normalizeRole(value: string) {
   const role = value.trim().replace(/\s+/g, " ").slice(0, 48);
@@ -36,6 +70,37 @@ function normalizeRole(value: string) {
   const mapped = ROLE_LABELS[role.toLowerCase()];
   if (mapped) return mapped;
   return role;
+}
+
+function defaultsForRole(role: string): AccessId[] {
+  if (ROLE_ACCESS[role]) return [...ROLE_ACCESS[role]];
+  if (/agent|агент/i.test(role)) return [...ROLE_ACCESS.agent];
+  if (/ombor|sklad|склад/i.test(role)) return [...ROLE_ACCESS.warehouse_staff];
+  if (/admin|rahbar|menejer|direktor/i.test(role)) return [...ROLE_ACCESS.manager];
+  return [...ROLE_ACCESS.worker];
+}
+
+function normalizePermissions(raw: unknown, role: string): AccessId[] {
+  if (role === "super_admin") return [...ACCESS_IDS];
+  const allow = new Set<string>(ACCESS_IDS);
+  if (!Array.isArray(raw)) return defaultsForRole(role);
+  const picked = [...new Set(
+    raw.map((v) => String(v).trim()).filter((v): v is AccessId => allow.has(v)),
+  )];
+  return picked.length ? picked : defaultsForRole(role);
+}
+
+function publicAccount(account: Account) {
+  const permissions = normalizePermissions(account.permissions, account.role);
+  return {
+    id: account.id,
+    name: account.name,
+    login: account.login,
+    password: account.password,
+    role: account.role,
+    phone: account.phone || "",
+    permissions,
+  };
 }
 type Store = {
   secret: string;
@@ -286,7 +351,15 @@ function ensureAdmin(store: Store): boolean {
     if (removed.has(login.toLowerCase())) continue;
     const existing = store.accounts.find((a) => a.login.toLowerCase() === login);
     if (!existing) {
-      store.accounts.push({ id: `agent-${login}`, name, login, password: defaultPassword, role: "agent", phone: "" });
+      store.accounts.push({
+        id: `agent-${login}`,
+        name,
+        login,
+        password: defaultPassword,
+        role: "agent",
+        phone: "",
+        permissions: defaultsForRole("agent"),
+      });
       changed = true;
     } else if (existing.password === "1234") {
       existing.password = defaultPassword;
@@ -385,6 +458,25 @@ export function requireOfficeDirector(req: Request, res: Response): Account | nu
   return current;
 }
 
+/** Xodimlar bo‘limini boshqarish — faqat employees ruxsati yoki rahbar. */
+function requireStaffManager(req: Request, res: Response): Account | null {
+  const current = actor(req);
+  if (!current) {
+    res.status(401).json({ error: "invalid" });
+    return null;
+  }
+  const perms = normalizePermissions(current.permissions, current.role);
+  if (
+    current.role === "super_admin"
+    || current.role === "manager"
+    || perms.includes("employees")
+  ) {
+    return current;
+  }
+  res.status(403).json({ error: "Xodimlar bo‘limiga ruxsat yo‘q." });
+  return null;
+}
+
 export function listLocalPeople() {
   return read().accounts.map(({ id, name, login, role }) => ({ id, name, login, role }));
 }
@@ -405,18 +497,30 @@ router.post("/local-login", (req, res) => {
   }
   const token = randomBytes(24).toString("base64url");
   remember(token, account.login);
-  res.json({ token, name: account.name, login: account.login, role: account.role });
+  const permissions = normalizePermissions(account.permissions, account.role);
+  // Login paytida saqlangan ruxsatlarni ham yangilab qo‘yamiz (eski akkauntlar).
+  if (!Array.isArray(account.permissions) || account.permissions.length === 0) {
+    account.permissions = permissions;
+    write(store);
+  }
+  res.json({
+    token,
+    name: account.name,
+    login: account.login,
+    role: account.role,
+    permissions,
+  });
 });
 
 router.get("/local-accounts", (req, res) => {
-  if (!requireOfficeDirector(req, res)) return;
+  if (!requireStaffManager(req, res)) return;
   const store = read();
   if (ensureAdmin(store)) write(store);
-  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
+  res.json(store.accounts.map(publicAccount));
 });
 
 router.post("/local-accounts", async (req, res) => {
-  if (!requireOfficeDirector(req, res)) return;
+  if (!requireStaffManager(req, res)) return;
   const login = String(req.body?.login ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
   const name = String(req.body?.name ?? "").trim() || login;
@@ -432,14 +536,15 @@ router.post("/local-accounts", async (req, res) => {
     return;
   }
   clearRemovedLogin(store, login);
-  store.accounts.push({ id: randomUUID(), name, login, password, role, phone });
+  const permissions = normalizePermissions(req.body?.permissions, role);
+  store.accounts.push({ id: randomUUID(), name, login, password, role, phone, permissions });
   await writeReliable(store);
   await reactivateKpiAgent(login);
-  res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone || "" })));
+  res.status(201).json(store.accounts.map(publicAccount));
 });
 
 router.patch("/local-accounts/:id", async (req, res) => {
-  if (!requireOfficeDirector(req, res)) return;
+  if (!requireStaffManager(req, res)) return;
   const store = read();
   const target = store.accounts.find((account) => account.id === req.params.id);
   if (!target) {
@@ -448,8 +553,10 @@ router.patch("/local-accounts/:id", async (req, res) => {
   }
   if (target.login === "bordouzadmin") {
     if (req.body?.name) target.name = String(req.body.name).trim() || target.name;
+    target.role = "super_admin";
+    target.permissions = [...ACCESS_IDS];
     await writeReliable(store);
-    res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
+    res.json(store.accounts.map(publicAccount));
     return;
   }
   const nextLogin = req.body?.login ? String(req.body.login).trim().toLowerCase() : target.login;
@@ -465,16 +572,22 @@ router.patch("/local-accounts/:id", async (req, res) => {
     const r = normalizeRole(String(req.body.role));
     if (r) target.role = r;
   }
+  if (req.body?.permissions != null) {
+    target.permissions = normalizePermissions(req.body.permissions, target.role);
+  } else if (req.body?.role) {
+    // Rol o‘zgarsa va permissions yuborilmasa — yangi rol defaultlari.
+    target.permissions = defaultsForRole(target.role);
+  }
   if (req.body?.password && String(req.body.password).length >= 4) {
     target.password = String(req.body.password);
     forgetLogin(oldLogin);
   }
   await writeReliable(store);
-  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
+  res.json(store.accounts.map(publicAccount));
 });
 
 router.delete("/local-accounts/:id", async (req, res) => {
-  const current = requireOfficeDirector(req, res);
+  const current = requireStaffManager(req, res);
   if (!current) return;
   const store = read();
   const target = store.accounts.find((account) => account.id === req.params.id);
@@ -487,7 +600,7 @@ router.delete("/local-accounts/:id", async (req, res) => {
   await writeReliable(store);
   forgetLogin(target.login);
   await deactivateKpiAgent(target.login);
-  res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
+  res.json(store.accounts.map(publicAccount));
 });
 
 export default router;
