@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Users } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ACCESS_MODULES,
   defaultsForRole,
@@ -89,16 +90,52 @@ function AccessPicker({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const selected = new Set(value);
+
+  const placeMenu = () => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const width = Math.max(rect.width, compact ? 264 : 248);
+    const menuH = Math.min(288, window.innerHeight - 24);
+    const spaceBelow = window.innerHeight - rect.bottom - 10;
+    const openUp = spaceBelow < 180 && rect.top > spaceBelow;
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+    const top = openUp
+      ? Math.max(8, rect.top - menuH - 6)
+      : Math.min(rect.bottom + 6, window.innerHeight - menuH - 8);
+    setMenuPos({ top, left, width });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPos(null);
+      return;
+    }
+    placeMenu();
+  }, [open, compact]);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
+    const onReposition = () => placeMenu();
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [open, compact]);
 
   const toggle = (id: AccessModuleId) => {
     if (locked) return;
@@ -111,6 +148,7 @@ function AccessPicker({
   return (
     <div className={`emp-access-dd${compact ? ' is-compact' : ''}`} ref={rootRef}>
       <button
+        ref={btnRef}
         type="button"
         className={`emp-access-btn${open ? ' is-open' : ''}`}
         onClick={() => setOpen((v) => !v)}
@@ -119,29 +157,38 @@ function AccessPicker({
         <span>Ruxsatlar</span>
         <ChevronDown size={15} />
       </button>
-      {open ? (
-        <div className="emp-access-menu" role="listbox" aria-label="Ruxsatlar">
-          {locked ? (
-            <p className="emp-access-locked">Super Admin — barcha bo‘limlar ochiq</p>
-          ) : null}
-          <div className="emp-access-menu-list">
-            {ACCESS_MODULES.map((m) => {
-              const on = locked || selected.has(m.id);
-              return (
-                <label key={m.id} className={`emp-access-option${on ? ' is-on' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={locked}
-                    onChange={() => toggle(m.id)}
-                  />
-                  <span>{m.label}</span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      {open && menuPos
+        ? createPortal(
+          <div
+            ref={menuRef}
+            className="emp-access-menu emp-access-menu-portal"
+            role="listbox"
+            aria-label="Ruxsatlar"
+            style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
+          >
+            {locked ? (
+              <p className="emp-access-locked">Super Admin — barcha bo‘limlar ochiq</p>
+            ) : null}
+            <div className="emp-access-menu-list">
+              {ACCESS_MODULES.map((m) => {
+                const on = locked || selected.has(m.id);
+                return (
+                  <label key={m.id} className={`emp-access-option${on ? ' is-on' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={locked}
+                      onChange={() => toggle(m.id)}
+                    />
+                    <span>{m.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>,
+          document.body,
+        )
+        : null}
     </div>
   );
 }

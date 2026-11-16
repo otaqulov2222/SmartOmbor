@@ -791,7 +791,12 @@
   box-shadow: 0 12px 28px rgba(15, 23, 42, .14);
   padding: .4rem;
 }
-.emp-access-dd.is-compact .emp-access-menu { right: auto; width: 16.5rem; }
+.emp-access-menu-portal {
+  position: fixed !important;
+  right: auto !important;
+  z-index: 12000;
+  max-height: min(18rem, calc(100vh - 16px));
+}
 .emp-access-locked {
   margin: 0; padding: .35rem .45rem .55rem;
   font-size: .78rem; color: #64748b;
