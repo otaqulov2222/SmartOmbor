@@ -39,11 +39,8 @@ import {
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
 import { EmployeesPage } from '@/kpi/employees';
 import {
-  ACCESS_MODULES,
   effectiveAccess,
   homeForAccess,
-  NAV_MORE_MODULES,
-  NAV_PRIMARY_MODULES,
   pathAllowedByAccess,
   type AccessModuleId,
 } from '@/access';
@@ -105,7 +102,7 @@ const primaryHrefs = ['/dashboard', '/gps', '/employees', '/products', '/partner
 const officeHrefs = ['/office', '/office/report'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory'] },
+  { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/my-kpi', '/receipts', '/transfers', '/inventory'] },
   { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
@@ -146,10 +143,6 @@ function homeForRole(role?: string | null, permissions?: string[] | null) {
 function pathAllowedForRole(path: string, role?: string | null, permissions?: string[] | null) {
   return pathAllowedByAccess(path, role, permissions);
 }
-function hrefForModule(id: AccessModuleId): string | null {
-  return ACCESS_MODULES.find((m) => m.id === id)?.paths[0] || null;
-}
-
 /* ---------- small helpers ---------- */
 function useRole() {
   const { t } = useI18n();
@@ -353,12 +346,14 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const has = (id: AccessModuleId) => access.has(id);
   const compactNav = access.size <= 3 && !has('dashboard') && !has('employees') && !has('kpi');
   const effectiveRail = !compactNav && rail;
-  const moreHrefsVisible = NAV_MORE_MODULES
-    .filter((id) => has(id))
-    .map((id) => hrefForModule(id))
-    .filter((href): href is string => Boolean(href));
-  const inMore = moreHrefsVisible.includes(path)
-    || (has('analytics') && ['/analytics', '/non-moving', '/factories', '/branches', '/recommendations'].includes(path));
+  const moreGroupsVisible = moreGroups
+    .map((group) => ({
+      ...group,
+      hrefs: group.hrefs.filter((href) => pathAllowedForRole(href, role, permissions)),
+    }))
+    .filter((group) => group.hrefs.length > 0);
+  const moreHrefsVisible = moreGroupsVisible.flatMap((g) => g.hrefs);
+  const inMore = moreHrefsVisible.includes(path);
   const inOfficeNav = officeHrefs.includes(path) || path === '/office';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const [moreOpen, setMoreOpen] = useState(inMore);
@@ -398,10 +393,10 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <div className="sidebar-top"><BrandMark light/>{!compactNav && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
-          {NAV_PRIMARY_MODULES.filter((id) => id !== 'office' && has(id)).map((id) => {
-            const href = hrefForModule(id);
-            return href ? navItem(href) : null;
-          })}
+          {/* Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar */}
+          {has('dashboard') ? navItem('/dashboard') : null}
+          {has('products') ? navItem('/products') : null}
+          {has('employees') ? navItem('/employees') : null}
           {has('office') ? <>
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
@@ -423,16 +418,20 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
               {kpiHrefs.map(href => navItem(href))}
             </div>}
           </> : null}
+          {has('gps') ? navItem('/gps') : null}
+          {has('partners') ? navItem('/partners') : null}
           {moreHrefsVisible.length ? (
             <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           ) : null}
         </div>
         {moreOpen && moreHrefsVisible.length ? (
           <div className="nav-more-panel">
-            <div className="nav-group">
-              <p>{t('nav.more')}</p>
-              {moreHrefsVisible.map((href) => navItem(href))}
-            </div>
+            {moreGroupsVisible.map((group) => (
+              <div key={group.key} className="nav-group">
+                <p>{t(group.key)}</p>
+                {group.hrefs.map((href) => navItem(href))}
+              </div>
+            ))}
           </div>
         ) : null}
       </nav>

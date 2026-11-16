@@ -125,9 +125,12 @@ export function homeForAccess(role?: string | null, permissions?: string[] | nul
   return first?.paths[0] || '/office';
 }
 
+/** Asosiy menyu tartibi (Davomat/KPI alohida chiziladi). */
 export const NAV_PRIMARY_MODULES: AccessModuleId[] = [
-  'dashboard', 'products', 'employees', 'partners', 'stock', 'scanner', 'gps', 'my_kpi',
+  'dashboard', 'products', 'employees', 'gps', 'partners',
 ];
+/** «Boshqalar» ichida. */
 export const NAV_MORE_MODULES: AccessModuleId[] = [
-  'receipts', 'transfers', 'inventory', 'analytics', 'reports', 'settings', 'audit',
+  'stock', 'scanner', 'my_kpi', 'receipts', 'transfers', 'inventory',
+  'analytics', 'reports', 'settings', 'audit',
 ];
