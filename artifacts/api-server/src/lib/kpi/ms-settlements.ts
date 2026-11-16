@@ -3,8 +3,9 @@
  *
  * Qoida: taxmin yo‘q, tenglashtirish yo‘q — har bir raqam MS dagi bilan 1:1.
  *   Приход / Расход — har kontragent uchun agent= filter (to‘liq hujjatlar)
- *   Конечный       — /report/counterparty
- *   Начальный      — closing − Приход + Расход
+ *   Summa           — doc.sum × rate.value (valyuta kursi; UZS da rate yo‘q)
+ *   Конечный        — /report/counterparty
+ *   Начальный       — closing − Приход + Расход
  *
  * MS yordam hujjatlari:
  *   Приход: Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера
@@ -67,14 +68,15 @@ const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v13: Kirim = davr bo‘yicha TO‘LIQ credit skan (cashin/paymentin yo‘qolmasin);
- * Chiqim = agent= (allaqachon 1:1). Cache versiyasi yangi — eski noto‘g‘ri Kirim o‘chadi.
+ * v14: hujjat summasiga valyuta kursi (rate.value) — USD cashin MS Приход bilan 1:1.
+ * Chiqim yo‘li o‘zgarmagan (UZS demand rate yo‘q).
  */
-const CACHE_VERSION = "v13";
+const CACHE_VERSION = "v14";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
-const CREDIT_ENRICH_CONCURRENCY = 4;
-const MS_FAST = { maxAttempts: 3 } as const;
-const AGENT_DOC_CONCURRENCY = 8;
+const CREDIT_ENRICH_CONCURRENCY = 2;
+const MS_FAST = { maxAttempts: 6 } as const;
+/** Pastroq: 429 → MS API blok (200+ xato/min). */
+const AGENT_DOC_CONCURRENCY = 2;
 const CP_INDEX_TTL_MS = 60 * 60_000;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
@@ -84,8 +86,19 @@ type MsCp = { id?: string; name?: string; tags?: string[]; meta?: { href?: strin
 type MsDoc = {
   sum?: number;
   applicable?: boolean;
+  /** MS: sum — hujjat valyutasida; rate.value — asosiy valyutaga kurs (masalan USD→UZS 12000). */
+  rate?: { value?: number; currency?: { meta?: { href?: string } } };
   agent?: { id?: string; meta?: { href?: string }; name?: string };
 };
+
+/** Взаиморасчеты sum — asosiy valyutada (kopecks). rate.value bo‘lsa ko‘paytiriladi. */
+function docSumKop(doc: MsDoc) {
+  const sum = Number(doc.sum || 0);
+  if (!Number.isFinite(sum) || sum === 0) return 0;
+  const rate = Number(doc.rate?.value);
+  if (Number.isFinite(rate) && rate > 0) return sum * rate;
+  return sum;
+}
 type MsReportRow = {
   balance?: number;
   counterparty?: { id?: string; name?: string; meta?: { href?: string } };
@@ -444,8 +457,7 @@ function sumApplicable(rows: MsDoc[]) {
   let total = 0;
   for (const row of rows) {
     if (row.applicable === false) continue;
-    const n = Number(row.sum || 0);
-    if (Number.isFinite(n)) total += n;
+    total += docSumKop(row);
   }
   return total;
 }
@@ -482,11 +494,11 @@ async function scanMovementsGlobal(from: string, to: string) {
     ...CREDIT_ENTITIES.map((entity) => ({ entity, side: "credit" as const })),
     ...DEBIT_ENTITIES.map((entity) => ({ entity, side: "debit" as const })),
   ];
-  await mapPool(all, 8, async ({ entity, side }) => {
+  await mapPool(all, 2, async ({ entity, side }) => {
     const rows = await fetchEntityDocs(entity, moment);
     for (const row of rows) {
       if (row.applicable === false) continue;
-      bumpMovement(byCp, docAgentId(row), side, Number(row.sum || 0));
+      bumpMovement(byCp, docAgentId(row), side, docSumKop(row));
     }
   });
   return byCp;
@@ -535,10 +547,9 @@ async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: str
   for (const id of cpIds) byCp.set(id, { credit: 0, debit: 0 });
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 
-  // 1) agent= — debit aniq; credit boshlang‘ich
+  // 1) Chiqim: agent= (MS Расход 1:1). Kirim global skandan — so‘rovlar kamayadi.
   const perCpTasks: Array<{ cpId: string; entity: string; side: "credit" | "debit" }> = [];
   for (const cpId of cpIds) {
-    for (const entity of CREDIT_ENTITIES) perCpTasks.push({ cpId, entity, side: "credit" });
     for (const entity of DEBIT_ENTITIES) perCpTasks.push({ cpId, entity, side: "debit" });
   }
   await mapPool(perCpTasks, AGENT_DOC_CONCURRENCY, async ({ cpId, entity, side }) => {
@@ -547,16 +558,16 @@ async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: str
     bumpMovement(byCp, cpId, side, sum);
   });
 
-  // 2) To‘liq Приход skan (cashin/paymentin agent= filter ba’zan kam qaytaradi)
+  // 2) To‘liq Приход skan (cashin/paymentin agent= ba’zan kam qaytaradi)
   const globalCredit = new Map<string, number>();
-  await mapPool([...CREDIT_ENTITIES], 4, async (entity) => {
+  await mapPool([...CREDIT_ENTITIES], 2, async (entity) => {
     const rows = await fetchEntityDocs(entity, moment);
     for (const row of rows) {
       if (row.applicable === false) continue;
       const id = docAgentId(row);
       if (!want.has(id)) continue;
-      const n = Number(row.sum || 0);
-      if (!Number.isFinite(n) || n === 0) continue;
+      const n = docSumKop(row);
+      if (!n) continue;
       globalCredit.set(id, (globalCredit.get(id) || 0) + n);
     }
   });
@@ -642,7 +653,7 @@ async function computeOneAgentFast(input: {
   to: string;
 }): Promise<AgentSettlement> {
   const started = Date.now();
-  setMoySkladMaxInFlight(20);
+  setMoySkladMaxInFlight(6);
   try {
     let tag = await resolveAgentTag(input.login, input.fullName);
     let group = tag ? await listTagCounterparties(tag) : [];

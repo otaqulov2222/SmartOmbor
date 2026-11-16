@@ -108,8 +108,8 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
   throw last;
 }
 
-let maxInFlight = 12;
-const MIN_GAP_MS = 5;
+let maxInFlight = 6;
+const MIN_GAP_MS = 50;
 let inFlight = 0;
 let lastStart = 0;
 let reservedSlots = 0;
@@ -117,12 +117,12 @@ const waiters: Array<() => void> = [];
 
 /** KPI settlements kabi qisqa burst — 10–15s ichida tugash uchun. */
 export function setMoySkladMaxInFlight(n: number) {
-  maxInFlight = Math.max(4, Math.min(24, Math.floor(n)));
+  maxInFlight = Math.max(2, Math.min(8, Math.floor(n)));
   flushWaiters();
 }
 
 export function resetMoySkladMaxInFlight() {
-  maxInFlight = 12;
+  maxInFlight = 6;
   flushWaiters();
 }
 
@@ -188,7 +188,8 @@ function temporaryMoySklad(error: unknown): boolean {
 
 function retryDelay(error: unknown, attempt: number) {
   if (error instanceof MoySkladError && error.status === 429) {
-    return error.retryAfterMs ?? Math.min(15_000, 2000 * (attempt + 1));
+    // MS: 200+ xato/min → API blok. 429 da sekinroq kutamiz.
+    return error.retryAfterMs ?? Math.min(30_000, 3000 * (attempt + 1));
   }
   return 500 * (attempt + 1);
 }
