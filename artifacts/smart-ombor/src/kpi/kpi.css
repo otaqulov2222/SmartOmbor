@@ -780,14 +780,9 @@
   border-color: #60a5fa;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, .14);
 }
-.emp-access-btn em {
-  font-style: normal;
-  min-width: 1.35rem; height: 1.35rem;
-  display: inline-grid; place-items: center;
-  border-radius: 999px;
-  background: #1d4ed8; color: #fff;
-  font-size: .72rem; font-weight: 800;
-  padding: 0 .3rem;
+.emp-access-btn.is-view {
+  width: auto; min-width: 7.5rem; min-height: 2.1rem;
+  padding: .35rem .65rem; font-size: .8rem;
 }
 .emp-access-menu {
   position: absolute; z-index: 40; top: calc(100% + .28rem); left: 0; right: 0;
@@ -811,9 +806,6 @@
 .emp-access-option:hover { background: #f8fafc; }
 .emp-access-option.is-on { background: #eff6ff; color: #1e3a8a; }
 .emp-access-option input { accent-color: #1d4ed8; }
-.emp-perm-count {
-  color: #64748b; font-size: .8rem; font-weight: 700;
-}
 .emp-add-grid {
   display: grid;
   grid-template-columns: 1.1fr .9fr .9fr .9fr 1.1fr 1.2fr auto;

@@ -90,7 +90,6 @@ function AccessPicker({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selected = new Set(value);
-  const count = locked ? ACCESS_MODULES.length : value.length;
 
   useEffect(() => {
     if (!open) return;
@@ -118,7 +117,6 @@ function AccessPicker({
         title="Bo‘lim ruxsatlari"
       >
         <span>Ruxsatlar</span>
-        {count > 0 ? <em>{count}</em> : null}
         <ChevronDown size={15} />
       </button>
       {open ? (
@@ -360,7 +358,6 @@ export function EmployeesPage() {
               const ag = agentByLogin.get(s.login.toLowerCase());
               const isEdit = editing?.id === s.id;
               const isCopied = copiedId === s.id;
-              const perms = normalizeAccessList(s.permissions, s.role);
               return (
                 <tr key={s.id}>
                   <td data-label="Xodim">
@@ -437,11 +434,18 @@ export function EmployeesPage() {
                         onChange={(permissions) => setEditing({ ...editing, permissions })}
                       />
                     ) : (
-                      <span className="emp-perm-count">
-                        {s.login === 'bordouzadmin' || s.role === 'super_admin'
-                          ? `${ACCESS_MODULES.length} ta`
-                          : `${perms.length} ta`}
-                      </span>
+                      <button
+                        type="button"
+                        className="emp-access-btn is-view"
+                        onClick={() => setEditing({
+                          ...s,
+                          permissions: normalizeAccessList(s.permissions, s.role),
+                        })}
+                        title="Ruxsatlarni ko‘rish / tahrirlash"
+                      >
+                        <span>Ruxsatlar</span>
+                        <ChevronDown size={15} />
+                      </button>
                     )}
                   </td>
                   <td data-label="Ko‘rsatkich">
