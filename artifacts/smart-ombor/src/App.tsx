@@ -101,12 +101,12 @@ const moreGroups: { key: TKey; hrefs: string[] }[] = [
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
 const warehouseAllowedHrefs = new Set([
-  '/dashboard', '/products', '/stock', '/receipts', '/transfers', '/inventory',
-  '/scanner', '/recommendations', '/office', '/office/report', '/partners',
+  '/partners', '/products', '/stock', '/receipts', '/transfers', '/inventory',
+  '/scanner', '/recommendations', '/office', '/office/report',
 ]);
-const warehousePrimaryHrefs = ['/dashboard', '/partners', '/products', '/stock', '/office'];
+const warehousePrimaryHrefs = ['/partners', '/products', '/stock', '/scanner', '/office'];
 const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/scanner', '/receipts', '/transfers', '/inventory', '/recommendations'] },
+  { key: 'nav.more.warehouse', hrefs: ['/receipts', '/transfers', '/inventory', '/recommendations'] },
 ];
 const agentPrimaryHrefs = ['/my-kpi', '/office'];
 const roleOptions: Array<AppUserRole | 'sales_admin' | 'agent'> = ['super_admin', 'manager', 'sales_admin', 'agent', 'warehouse_manager', 'warehouse_staff', 'analyst'];
@@ -284,13 +284,16 @@ function LocalLoginForm() {
       const here = `${window.location.pathname}${window.location.search}`;
       const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
-      const preferred = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '';
-      const target = isEmployeeCabinet(body.role)
-        ? '/office'
-        : preferred && pathAllowedForRole(preferred.split('?')[0], body.role)
+      // Ombordu/agent/ofis — admin sahifasiga “qaytib” tushib qolmasin.
+      if (isDirector(body.role)) {
+        const preferred = here.startsWith('/') && here !== '/' ? here : saved.startsWith('/') && !saved.startsWith('//') ? saved : '';
+        const target = preferred && pathAllowedForRole(preferred.split('?')[0], body.role)
           ? preferred
           : homeForRole(body.role);
-      setLocation(target);
+        setLocation(target);
+      } else {
+        setLocation(homeForRole(body.role));
+      }
     } catch {
       setError(true);
     } finally {
@@ -320,6 +323,7 @@ function LocalShell({ children, title }: { children: ReactNode; title: string })
 }
 function WorkspaceChrome({ children, title, userName, onSignOut }: { children: ReactNode; title: string; userName: string; onSignOut: () => void }) {
   const { t, fmt } = useI18n();
+  const roleLabel = useRole();
   const [path] = useLocation(); const [open, setOpen] = useState(false);
   const [rail, setRail] = useState(() => localStorage.getItem('smart-ombor-nav') === 'icons');
   const role = readLocalSession()?.role || '';
@@ -329,7 +333,6 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   const agent = isAgentRole(role);
   const officeOnly = isEmployeeCabinet(role);
   const effectiveRail = !agent && !officeOnly && rail;
-  const visiblePrimary = agent ? agentPrimaryHrefs : officeOnly ? ['/office'] : warehouse ? warehousePrimaryHrefs : primaryHrefs;
   const visibleMoreGroups = agent || officeOnly ? [] : warehouse ? warehouseMoreGroups : moreGroups;
   const visibleMoreHrefs = visibleMoreGroups.flatMap(group => group.hrefs);
   const inMore = visibleMoreHrefs.includes(path);
@@ -377,10 +380,25 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {navItem('/office')}
           </> : officeOnly ? <>
             {navItem('/office')}
+          </> : warehouse ? <>
+            {navItem('/partners')}
+            {navItem('/products')}
+            {navItem('/stock')}
+            {navItem('/scanner')}
+            <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setMoreOpen(false); }} data-testid="button-navigation-office">
+              <Fingerprint size={18} strokeWidth={1.9}/>
+              <span>{t('nav.office')}</span>
+              <ChevronDown size={16} className="nav-more-chevron"/>
+            </button>
+            {officeOpen && <div className="nav-office-sub">
+              {navItem('/office')}
+              {officeManager && navItem('/office/report')}
+            </div>}
+            <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </> : <>
             {navItem('/dashboard')}
             {navItem('/products')}
-            {director && navItem('/employees')}
+            {navItem('/employees')}
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
               <span>{t('nav.office')}</span>
@@ -390,26 +408,23 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
               {navItem('/office')}
               {officeManager && navItem('/office/report')}
             </div>}
-            {director && <>
-              <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
-                <Gauge size={18} strokeWidth={1.9}/>
-                <span>{t('nav.group.kpi')}</span>
-                <ChevronDown size={16} className="nav-more-chevron"/>
-              </button>
-              {kpiOpen && <div className="nav-office-sub">
-                {kpiHrefs.map(href => navItem(href))}
-              </div>}
-            </>}
-            {director && navItem('/gps')}
+            <button type="button" className={`nav-item nav-more ${kpiOpen ? 'is-open' : ''} ${inKpiNav && !kpiOpen ? 'is-active' : ''}`} aria-expanded={kpiOpen} title={t('nav.group.kpi')} onClick={() => { setKpiOpen(value => !value); setOfficeOpen(false); setMoreOpen(false); }} data-testid="button-navigation-kpi">
+              <Gauge size={18} strokeWidth={1.9}/>
+              <span>{t('nav.group.kpi')}</span>
+              <ChevronDown size={16} className="nav-more-chevron"/>
+            </button>
+            {kpiOpen && <div className="nav-office-sub">
+              {kpiHrefs.map(href => navItem(href))}
+            </div>}
+            {navItem('/gps')}
             {navItem('/partners')}
-            {warehouse && navItem('/stock')}
             <button type="button" className={`nav-item nav-more ${moreOpen ? 'is-open' : ''} ${inMore && !moreOpen ? 'is-active' : ''}`} aria-expanded={moreOpen} title={t('nav.more')} onClick={() => { setMoreOpen(value => !value); setOfficeOpen(false); setKpiOpen(false); }} data-testid="button-navigation-more">{moreOpen ? <ChevronUp size={18} strokeWidth={1.9}/> : <MoreHorizontal size={18} strokeWidth={1.9}/>}<span>{t('nav.more')}</span>{!moreOpen && <ChevronDown size={16} className="nav-more-chevron"/>}</button>
           </>}
         </div>
         {moreOpen && <div className="nav-more-panel">{visibleMoreGroups.map(group => <div key={group.key} className="nav-group"><p>{t(group.key)}</p>{group.hrefs.map(href => navItem(href))}</div>)}</div>}
       </nav>
       <div className="sidebar-bottom">
-        <div className="user" title={userName}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b></span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
+        <div className="user" title={`${userName}${role ? ` · ${roleLabel(role)}` : ''}`}><span className="avatar">{initials}</span><span className="user-copy"><b>{userName}</b>{role ? <small>{roleLabel(role)}</small> : null}</span><button type="button" onClick={onSignOut} className="icon-btn user-out" aria-label={t('common.signOut')} title={t('common.signOut')} data-testid="button-sign-out"><LogOut size={16}/></button></div>
       </div>
     </aside>
     <div className="main">
