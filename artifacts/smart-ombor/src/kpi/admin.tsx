@@ -524,6 +524,17 @@ export function KpiDashboardPage() {
     Number(a.paidTotal || 0) === 0 &&
     Number(a.salesTotal || 0) === 0 &&
     (a.customers || 0) === 0;
+  /** Ro‘yxatda bor bo‘lsa modal kartochkalari darhol ko‘rinsin. */
+  const listHintReady = Boolean(openAgent && !agentMsPending(openAgent));
+  const cardCustomers = detailWarming
+    ? (listHintReady ? openAgent!.customers : '…')
+    : (detail.data?.customers ?? 0);
+  const cardKirim = detailWarming
+    ? (listHintReady ? uzs(openAgent!.paidTotal ?? 0) : '…')
+    : uzs(detail.data?.income ?? 0);
+  const cardChiqim = detailWarming
+    ? (listHintReady ? uzs(openAgent!.salesTotal) : '…')
+    : uzs(detail.data?.expense ?? 0);
   const applyPreset = (next: PeriodPreset) => {
     if (next === 'custom') {
       setPreset('custom');
@@ -638,21 +649,9 @@ export function KpiDashboardPage() {
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
                 <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>
-                  <Card
-                    label="Mijozlar"
-                    value={detailWarming ? '…' : (detail.data?.customers ?? 0)}
-                    tone="slate"
-                  />
-                  <Card
-                    label="Kirim"
-                    value={detailWarming ? '…' : uzs(detail.data?.income ?? 0)}
-                    tone="ok"
-                  />
-                  <Card
-                    label="Chiqim"
-                    value={detailWarming ? '…' : uzs(detail.data?.expense ?? 0)}
-                    tone="blue"
-                  />
+                  <Card label="Mijozlar" value={cardCustomers} tone="slate" />
+                  <Card label="Kirim" value={cardKirim} tone="ok" />
+                  <Card label="Chiqim" value={cardChiqim} tone="blue" />
                   <Card label="KPI" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />
                 </div>
                 {detail.data && !detail.data.folderName && !detailWarming ? (

@@ -19,7 +19,9 @@ import {
   moysklad,
   moyskladConfigured,
   resetMoySkladMaxInFlight,
+  resetMoySkladMinGapMs,
   setMoySkladMaxInFlight,
+  setMoySkladMinGapMs,
 } from "../moysklad";
 import { money } from "./money";
 
@@ -75,15 +77,17 @@ const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v15: Приход ga salesreturn (Возврат покупателя) — MS Взаиморасчеты bilan 1:1.
- * v14: rate.value (USD→UZS). Chiqim o‘zgarmagan.
+ * v16: tezlik — agent= OR-batch (global period skan yo‘q). Raqamlar v15 bilan bir xil.
+ * v15: salesreturn. v14: rate.value.
  */
-const CACHE_VERSION = "v15";
+const CACHE_VERSION = "v16";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
-const CREDIT_ENRICH_CONCURRENCY = 2;
+const CREDIT_ENRICH_CONCURRENCY = 4;
 const MS_FAST = { maxAttempts: 6 } as const;
-/** Pastroq: 429 → MS API blok (200+ xato/min). */
-const AGENT_DOC_CONCURRENCY = 2;
+/** Agent modal: entity so‘rovlari parallel (OR-batch). */
+const AGENT_DOC_CONCURRENCY = 8;
+/** MS filter URL uzunligi — agent OR chunk (katta = kamroq so‘rov). */
+const AGENT_FILTER_CHUNK = 15;
 const CP_INDEX_TTL_MS = 60 * 60_000;
 const CACHE_DIR =
   process.env.SMART_OMBOR_CACHE_DIR ||
@@ -544,8 +548,9 @@ function persistMovements(from: string, to: string, byCp: Map<string, { credit: 
 }
 
 /**
- * Chiqim: agent= (MS Расход bilan 1:1).
- * Kirim: avval agent=, keyin davr bo‘yicha to‘liq credit skan → max (cashin yo‘qolmasin).
+ * Kirim + Chiqim: faqat shu agent kontragentlari uchun agent= OR-batch.
+ * Global period skan YO‘Q — bir xil aniqliq, ancha tez.
+ * MS: bir xil maydon bo‘yicha bir nechta shart = OR.
  */
 async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: string) {
   const byCp = new Map<string, { credit: number; debit: number }>();
@@ -554,41 +559,28 @@ async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: str
   for (const id of cpIds) byCp.set(id, { credit: 0, debit: 0 });
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 
-  // 1) Chiqim: agent= (MS Расход 1:1). Kirim global skandan — so‘rovlar kamayadi.
-  const perCpTasks: Array<{ cpId: string; entity: string; side: "credit" | "debit" }> = [];
-  for (const cpId of cpIds) {
-    for (const entity of DEBIT_ENTITIES) perCpTasks.push({ cpId, entity, side: "debit" });
+  const chunks: string[][] = [];
+  for (let i = 0; i < cpIds.length; i += AGENT_FILTER_CHUNK) {
+    chunks.push(cpIds.slice(i, i + AGENT_FILTER_CHUNK));
   }
-  await mapPool(perCpTasks, AGENT_DOC_CONCURRENCY, async ({ cpId, entity, side }) => {
-    const filter = `agent=${MS_ENTITY_BASE}/${cpId};${moment}`;
-    const sum = sumApplicable(await fetchEntityDocs(entity, filter));
-    bumpMovement(byCp, cpId, side, sum);
-  });
 
-  // 2) To‘liq Приход skan (cashin/paymentin agent= ba’zan kam qaytaradi)
-  const globalCredit = new Map<string, number>();
-  await mapPool([...CREDIT_ENTITIES], 2, async (entity) => {
-    const rows = await fetchEntityDocs(entity, moment);
+  const tasks: Array<{ entity: string; side: "credit" | "debit"; filter: string }> = [];
+  for (const chunk of chunks) {
+    const agentOr = chunk.map((id) => `agent=${MS_ENTITY_BASE}/${id}`).join(";");
+    const filter = `${agentOr};${moment}`;
+    for (const entity of CREDIT_ENTITIES) tasks.push({ entity, side: "credit", filter });
+    for (const entity of DEBIT_ENTITIES) tasks.push({ entity, side: "debit", filter });
+  }
+
+  await mapPool(tasks, AGENT_DOC_CONCURRENCY, async ({ entity, side, filter }) => {
+    const rows = await fetchEntityDocs(entity, filter);
     for (const row of rows) {
       if (row.applicable === false) continue;
       const id = docAgentId(row);
       if (!want.has(id)) continue;
-      const n = docSumKop(row);
-      if (!n) continue;
-      globalCredit.set(id, (globalCredit.get(id) || 0) + n);
+      bumpMovement(byCp, id, side, docSumKop(row));
     }
   });
-  for (const [id, credit] of globalCredit) {
-    const cur = byCp.get(id) || { credit: 0, debit: 0 };
-    if (credit > cur.credit) {
-      logger.info(
-        { cpId: id, agentCredit: cur.credit, globalCredit: credit },
-        "ms-settlements credit topped up from global scan",
-      );
-      cur.credit = credit;
-      byCp.set(id, cur);
-    }
-  }
 
   return byCp;
 }
@@ -612,6 +604,7 @@ async function loadClosingsForCpIds(cpIds: string[], from: string, to: string) {
   }
   if (!missing.length) return out;
 
+  // Faqat per-id report — bulk list ba’zan 0 qaytaradi (aniqlik buziladi).
   const momentFrom = `${from} 00:00:00`;
   const momentTo = `${to} 23:59:59`;
   await mapPool(missing, 12, async (id) => {
@@ -660,7 +653,10 @@ async function computeOneAgentFast(input: {
   to: string;
 }): Promise<AgentSettlement> {
   const started = Date.now();
-  setMoySkladMaxInFlight(6);
+  agentFastActive += 1;
+  enrichPriorityLogin = foldName(input.login);
+  setMoySkladMaxInFlight(8);
+  setMoySkladMinGapMs(10);
   try {
     let tag = await resolveAgentTag(input.login, input.fullName);
     let group = tag ? await listTagCounterparties(tag) : [];
@@ -679,10 +675,12 @@ async function computeOneAgentFast(input: {
       logger.error({ login: input.login, tag }, "ms-settlements agent has zero counterparties");
     }
     const cpIds = group.map((g) => g.id);
+    const movStarted = Date.now();
     const [movements, closings] = await Promise.all([
       loadMovementsForCpIdsExact(cpIds, input.from, input.to),
       loadClosingsForCpIds(cpIds, input.from, input.to),
     ]);
+    const movMs = Date.now() - movStarted;
 
     // Period movement cache’ga merge
     const periodKey = `${input.from}:${input.to}`;
@@ -703,11 +701,19 @@ async function computeOneAgentFast(input: {
     });
     patchAgentIntoSummary(input.from, input.to, data);
     logger.info(
-      { login: input.login, cps: group.length, rows: data.rows.length, ms: Date.now() - started },
+      {
+        login: input.login,
+        cps: group.length,
+        rows: data.rows.length,
+        movMs,
+        ms: Date.now() - started,
+      },
       "ms-settlements agent-fast ready",
     );
     return data;
   } finally {
+    agentFastActive = Math.max(0, agentFastActive - 1);
+    resetMoySkladMinGapMs();
     resetMoySkladMaxInFlight();
   }
 }
@@ -783,6 +789,15 @@ export type AgentSettlement = {
 export type MsSettleStatus = "ready" | "stale" | "warming";
 
 const agentJobs = new Map<string, Promise<AgentSettlement>>();
+/** Modal hisobi ketayotganda warm boshqa agentlarni kutsin. */
+let agentFastActive = 0;
+
+async function waitForAgentFastSlot(login: string) {
+  const key = foldName(login);
+  while (agentFastActive > 0 && enrichPriorityLogin && key !== enrichPriorityLogin) {
+    await new Promise((r) => setTimeout(r, 40));
+  }
+}
 
 function hasSettlementData(s: AgentSettlement | undefined | null) {
   if (!s) return false;
@@ -962,18 +977,27 @@ export function warmMsSettlements(
 
   const job = (async () => {
     const remaining = [...agents];
-    while (remaining.length) {
+    const takeNext = () => {
       const prefer = enrichPriorityLogin;
       let idx = prefer ? remaining.findIndex((a) => foldName(a.login) === prefer) : 0;
       if (idx < 0) idx = 0;
-      const agent = remaining.splice(idx, 1)[0];
-      await ensureAgentSettlement({
-        login: agent.login,
-        fullName: agent.fullName,
-        from,
-        to,
-      });
-    }
+      return remaining.splice(idx, 1)[0];
+    };
+    // 2 agent parallel — ro‘yxat tez to‘ladi, MS limitni yemaydi.
+    const workers = Array.from({ length: Math.min(2, Math.max(agents.length, 1)) }, async () => {
+      while (remaining.length) {
+        const agent = takeNext();
+        if (!agent) return;
+        await waitForAgentFastSlot(agent.login);
+        await ensureAgentSettlement({
+          login: agent.login,
+          fullName: agent.fullName,
+          from,
+          to,
+        });
+      }
+    });
+    await Promise.all(workers);
   })()
     .then(() => undefined)
     .catch((error) => {
@@ -1100,8 +1124,10 @@ export async function getAgentsMsSettlementSummaries(
     return { map: out, status: "ready" };
   }
 
-  // Bitta navbat — parallel to‘ldirish YO‘Q (server 500 bo‘lmasin).
-  void warmMsSettlements(agents, from, to, true);
+  // Modal ochilishiga yo‘l berish — warm biroz kechiktiriladi.
+  setTimeout(() => {
+    void warmMsSettlements(agents, from, to, true);
+  }, 400);
   for (const agent of agents) {
     const login = agent.login.toLowerCase();
     const tag = PRIMARY_TAG[login] || null;
@@ -1133,15 +1159,28 @@ export async function getAgentMsSettlements(
 
   const cacheKey = `${foldName(input.login)}:${input.from}:${input.to}`;
   const hit = settlementsCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < FRESH_MS && hasSettlementData(hit.data)) {
-    return { ...hit.data, msStatus: "ready" };
+  if (hit && hasSettlementData(hit.data)) {
+    const age = Date.now() - hit.at;
+    if (age < FRESH_MS) return { ...hit.data, msStatus: "ready" };
+    if (age < STALE_MS) {
+      // Eski aniq raqam — darhol; yangilash fonda.
+      enrichPriorityLogin = foldName(input.login);
+      void ensureAgentSettlement(input);
+      return { ...hit.data, msStatus: "stale" };
+    }
   }
 
   const summary = peekSummary(input.from, input.to);
   const fromSummary = summary?.byLogin[input.login.toLowerCase()];
-  if (fromSummary && hasSettlementData(fromSummary) && summary && Date.now() - summary.at < FRESH_MS) {
+  if (fromSummary && hasSettlementData(fromSummary) && summary) {
+    const age = Date.now() - summary.at;
     settlementsCache.set(cacheKey, { at: summary.at, data: fromSummary });
-    return { ...fromSummary, msStatus: "ready" };
+    if (age < FRESH_MS) return { ...fromSummary, msStatus: "ready" };
+    if (age < STALE_MS) {
+      enrichPriorityLogin = foldName(input.login);
+      void ensureAgentSettlement(input);
+      return { ...fromSummary, msStatus: "stale" };
+    }
   }
 
   // Faqat OCHILGAN agent — boshqalarni shu yerda ishga tushirma.

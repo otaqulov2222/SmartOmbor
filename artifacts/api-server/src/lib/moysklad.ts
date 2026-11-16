@@ -109,7 +109,9 @@ export async function moyskladSend<T>(path: string, body?: unknown, method: "POS
 }
 
 let maxInFlight = 6;
-const MIN_GAP_MS = 50;
+let minGapMs = 50;
+const DEFAULT_MAX_IN_FLIGHT = 6;
+const DEFAULT_MIN_GAP_MS = 50;
 let inFlight = 0;
 let lastStart = 0;
 let reservedSlots = 0;
@@ -117,13 +119,22 @@ const waiters: Array<() => void> = [];
 
 /** KPI settlements kabi qisqa burst — 10–15s ichida tugash uchun. */
 export function setMoySkladMaxInFlight(n: number) {
-  maxInFlight = Math.max(2, Math.min(8, Math.floor(n)));
+  maxInFlight = Math.max(2, Math.min(10, Math.floor(n)));
   flushWaiters();
 }
 
 export function resetMoySkladMaxInFlight() {
-  maxInFlight = 6;
+  maxInFlight = DEFAULT_MAX_IN_FLIGHT;
   flushWaiters();
+}
+
+/** Agent modal burst — MIN_GAP ni vaqtincha qisqartirish (429 bo‘lmasa). */
+export function setMoySkladMinGapMs(n: number) {
+  minGapMs = Math.max(0, Math.min(200, Math.floor(n)));
+}
+
+export function resetMoySkladMinGapMs() {
+  minGapMs = DEFAULT_MIN_GAP_MS;
 }
 
 /** Kirim paytida katalog sync slotlarni yeb qo‘ymasligi uchun. */
@@ -160,7 +171,7 @@ async function takeSlot(): Promise<void> {
   } else {
     inFlight += 1;
   }
-  const pause = lastStart + MIN_GAP_MS - Date.now();
+  const pause = lastStart + minGapMs - Date.now();
   if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
   lastStart = Date.now();
 }
