@@ -453,17 +453,11 @@ export function requireOfficeDirector(req: Request, res: Response): Account | nu
     res.status(401).json({ error: "invalid" });
     return null;
   }
-  if (
-    current.role !== "super_admin"
-    && current.role !== "manager"
-    && current.role !== "sales_admin"
-    && current.role !== "warehouse_manager"
-    && current.role !== "warehouse_staff"
-  ) {
-    res.status(403).json({ error: "forbidden" });
-    return null;
-  }
-  return current;
+  if (current.role === "super_admin" || current.role === "manager") return current;
+  const perms = normalizePermissions(current.permissions, current.role);
+  if (perms.includes("office") || perms.includes("employees")) return current;
+  res.status(403).json({ error: "forbidden" });
+  return null;
 }
 
 /** Xodimlar bo‘limini boshqarish — faqat employees ruxsati yoki rahbar. */
@@ -516,6 +510,21 @@ router.post("/local-login", (req, res) => {
     name: account.name,
     login: account.login,
     role: account.role,
+    permissions,
+  });
+});
+
+/** Joriy sessiya — ruxsatlar har doim serverdan (eski sessionStorage to‘liq menyuni ochib yubormasin). */
+router.get("/local-me", (req, res) => {
+  const user = requireLocalUser(req, res);
+  if (!user) return;
+  const permissions = normalizePermissions(user.permissions, user.role);
+  res.json({
+    id: user.id,
+    name: user.name,
+    login: user.login,
+    role: user.role,
+    phone: user.phone || "",
     permissions,
   });
 });
@@ -582,6 +591,8 @@ router.patch("/local-accounts/:id", async (req, res) => {
   }
   if (req.body?.permissions != null) {
     target.permissions = normalizePermissions(req.body.permissions, target.role);
+    // Ruxsat o‘zgasa eski sessiya to‘liq menyuni ko‘rsatmasin — qayta login / local-me.
+    forgetLogin(target.login);
   }
   // Rol o‘zgarganda ruxsatlarni avtomatik reset qilmaymiz —
   // ular alohida «Ruxsatlar» orqali boshqariladi.

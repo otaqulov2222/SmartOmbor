@@ -239,7 +239,10 @@ function readLocalSession(): LocalSession | null {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(LOCAL_SESSION) || '') as Partial<LocalSession>;
     if (!parsed.token || !parsed.login || !parsed.role) return null;
-    const permissions = sessionAccess(parsed.role, parsed.permissions);
+    // Eski sessiya permissions yo‘q bo‘lsa — rol defaultiga kengaytirmaymiz (to‘liq menyu ochilib qolardi).
+    const permissions = Array.isArray(parsed.permissions) && parsed.permissions.length
+      ? sessionAccess(parsed.role, parsed.permissions)
+      : [];
     return {
       token: parsed.token,
       name: parsed.name || parsed.login,
@@ -249,6 +252,58 @@ function readLocalSession(): LocalSession | null {
     };
   } catch {
     return null;
+  }
+}
+
+function writeLocalSession(next: LocalSession, notify = true) {
+  const permissions = sessionAccess(next.role, next.permissions);
+  const payload = {
+    token: next.token,
+    name: next.name,
+    login: next.login,
+    role: next.role,
+    permissions,
+  };
+  const prev = sessionStorage.getItem(LOCAL_SESSION) || '';
+  const serialized = JSON.stringify(payload);
+  if (prev === serialized) return;
+  sessionStorage.setItem(LOCAL_SESSION, serialized);
+  if (notify) window.dispatchEvent(new Event('smart-ombor-auth'));
+}
+
+async function syncLocalSessionFromServer() {
+  const session = (() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(LOCAL_SESSION) || '') as Partial<LocalSession>;
+    } catch {
+      return null;
+    }
+  })();
+  if (!session?.token) return null;
+  try {
+    const response = await fetch('/api/local-me', {
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    if (response.status === 401) {
+      sessionStorage.removeItem(LOCAL_SESSION);
+      window.dispatchEvent(new Event('smart-ombor-auth'));
+      return null;
+    }
+    if (!response.ok) return readLocalSession();
+    const body = await response.json() as {
+      name?: string; login?: string; role?: string; permissions?: string[];
+    };
+    const next: LocalSession = {
+      token: session.token,
+      name: body.name || session.name || session.login || '',
+      login: body.login || session.login || '',
+      role: body.role || session.role || '',
+      permissions: sessionAccess(body.role || session.role, body.permissions),
+    };
+    writeLocalSession(next, true);
+    return next;
+  } catch {
+    return readLocalSession();
   }
 }
 function PasswordField({ value, onChange, testId, autoComplete }: { value: string; onChange: (value: string) => void; testId: string; autoComplete?: string }) {
@@ -286,14 +341,13 @@ function LocalLoginForm() {
       if (!response.ok) { setError(true); return; }
       const body = await response.json() as LocalSession;
       const permissions = sessionAccess(body.role, body.permissions);
-      sessionStorage.setItem(LOCAL_SESSION, JSON.stringify({
+      writeLocalSession({
         token: body.token,
         name: body.name,
         login: body.login,
         role: body.role,
         permissions,
-      }));
-      window.dispatchEvent(new Event('smart-ombor-auth'));
+      });
       const here = `${window.location.pathname}${window.location.search}`;
       const saved = sessionStorage.getItem(RETURN_PATH) || '';
       sessionStorage.removeItem(RETURN_PATH);
@@ -1597,10 +1651,27 @@ function WorkspaceRoutes() {
   const [location] = useLocation();
   const { t } = useI18n();
   const [sessionTick, setSessionTick] = useState(0);
+  const [sessionReady, setSessionReady] = useState(!clerkPubKey ? false : true);
   useEffect(() => {
     const refresh = () => setSessionTick(value => value + 1);
     window.addEventListener('smart-ombor-auth', refresh);
     return () => window.removeEventListener('smart-ombor-auth', refresh);
+  }, []);
+  useEffect(() => {
+    if (clerkPubKey) {
+      setSessionReady(true);
+      return;
+    }
+    let live = true;
+    void syncLocalSessionFromServer().finally(() => {
+      if (live) setSessionReady(true);
+    });
+    const onFocus = () => { void syncLocalSessionFromServer(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      live = false;
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
   const session = readLocalSession();
   const signedIn = Boolean(session) || sessionTick < 0;
@@ -1619,6 +1690,9 @@ function WorkspaceRoutes() {
   );
 
   if (!clerkPubKey) {
+    if (!sessionReady) {
+      return <EntryScreen><p className="muted" style={{ padding: 24 }}>{t('common.loading')}</p></EntryScreen>;
+    }
     if (!signedIn) {
       const next = `${window.location.pathname}${window.location.search}`;
       if (next.startsWith('/') && next !== '/') sessionStorage.setItem(RETURN_PATH, next);
