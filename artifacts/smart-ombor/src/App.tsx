@@ -71,7 +71,7 @@ const clerkAppearance = {
 type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
-  { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.myCabinet', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
   { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
@@ -397,6 +397,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
           {has('dashboard') ? navItem('/dashboard') : null}
           {has('products') ? navItem('/products') : null}
           {has('employees') ? navItem('/employees') : null}
+          {has('my_cabinet') && !has('office') ? navItem('/office') : null}
           {has('office') ? <>
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
@@ -404,7 +405,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
               <ChevronDown size={16} className="nav-more-chevron"/>
             </button>
             {officeOpen && <div className="nav-office-sub">
-              {navItem('/office')}
+              {has('my_cabinet') ? navItem('/office') : null}
               {navItem('/office/report')}
             </div>}
           </> : null}
@@ -1671,9 +1672,9 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.dashboard', element: <Redirect to="/dashboard"/> },
   { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
-  { path: '/office/tasks', titleKey: 'nav.office', element: <Redirect to="/office"/> },
+  { path: '/office/tasks', titleKey: 'nav.myCabinet', element: <Redirect to="/office"/> },
   { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
-  { path: '/office', titleKey: 'nav.office', element: <OfficePage/> },
+  { path: '/office', titleKey: 'nav.myCabinet', element: <OfficePage/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
   { path: '/audit', titleKey: 'nav.audit', element: <AuditPage/> },

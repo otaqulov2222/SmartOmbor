@@ -28,7 +28,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 const ACCESS_IDS = [
   "dashboard", "products", "stock", "scanner", "receipts", "transfers", "inventory",
-  "partners", "employees", "office", "kpi", "gps", "my_kpi",
+  "partners", "employees", "my_cabinet", "office", "kpi", "gps", "my_kpi",
   "analytics", "reports", "settings", "audit",
 ] as const;
 type AccessId = (typeof ACCESS_IDS)[number];
@@ -37,19 +37,21 @@ const ROLE_ACCESS: Record<string, AccessId[]> = {
   super_admin: [...ACCESS_IDS],
   manager: [...ACCESS_IDS],
   sales_admin: [
-    "dashboard", "products", "partners", "employees", "office", "kpi", "gps",
+    "dashboard", "products", "partners", "employees", "my_cabinet", "office", "kpi", "gps",
     "analytics", "reports", "settings",
   ],
   warehouse_manager: [
-    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory", "office", "analytics",
+    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory",
+    "my_cabinet", "office", "analytics",
   ],
   warehouse_staff: [
-    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory", "office",
+    "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory",
+    "my_cabinet", "office",
   ],
-  agent: ["my_kpi", "office"],
-  accountant: ["office", "reports", "analytics"],
-  analyst: ["office", "analytics", "reports", "dashboard"],
-  worker: ["office"],
+  agent: ["my_kpi", "my_cabinet"],
+  accountant: ["my_cabinet", "office", "reports", "analytics"],
+  analyst: ["my_cabinet", "office", "analytics", "reports", "dashboard"],
+  worker: ["my_cabinet"],
 };
 
 type Account = {
@@ -80,14 +82,20 @@ function defaultsForRole(role: string): AccessId[] {
   return [...ROLE_ACCESS.worker];
 }
 
+function withLegacyOffice(list: AccessId[]): AccessId[] {
+  // Eski «office» punch+hisobot edi — punch endi my_cabinet.
+  if (list.includes("office") && !list.includes("my_cabinet")) return [...list, "my_cabinet"];
+  return list;
+}
+
 function normalizePermissions(raw: unknown, role: string): AccessId[] {
   if (role === "super_admin") return [...ACCESS_IDS];
   const allow = new Set<string>(ACCESS_IDS);
-  if (!Array.isArray(raw)) return defaultsForRole(role);
-  const picked = [...new Set(
+  if (!Array.isArray(raw)) return withLegacyOffice(defaultsForRole(role));
+  const picked = withLegacyOffice([...new Set(
     raw.map((v) => String(v).trim()).filter((v): v is AccessId => allow.has(v)),
-  )];
-  return picked.length ? picked : defaultsForRole(role);
+  )]);
+  return picked.length ? picked : withLegacyOffice(defaultsForRole(role));
 }
 
 function publicAccount(account: Account) {
