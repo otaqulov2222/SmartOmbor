@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ACCESS_MODULES,
+  isOfficeAdmin,
   defaultsForRole,
   normalizeAccessList,
   type AccessModuleId,
@@ -170,7 +171,9 @@ function AccessPicker({
               <p className="emp-access-locked">Super Admin — barcha bo‘limlar ochiq</p>
             ) : null}
             <div className="emp-access-menu-list">
-              {ACCESS_MODULES.map((m) => {
+              {ACCESS_MODULES
+                .filter((m) => m.id !== 'office' || locked || isOfficeAdmin(role))
+                .map((m) => {
                 const on = locked || selected.has(m.id);
                 return (
                   <label key={m.id} className={`emp-access-option${on ? ' is-on' : ''}`}>

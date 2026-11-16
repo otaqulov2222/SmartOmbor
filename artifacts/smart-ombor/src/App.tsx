@@ -43,6 +43,7 @@ import {
   effectiveAccess,
   homeForAccess,
   isAgentRole as accessIsAgentRole,
+  isOfficeAdmin,
   pathAllowedByAccess,
   type AccessModuleId,
 } from '@/access';
@@ -73,7 +74,7 @@ const clerkAppearance = {
 type NavItem = { key: TKey; href: string; icon: typeof Package; group: TKey };
 const navigation: NavItem[] = [
   { key: 'nav.dashboard', href: '/dashboard', icon: LayoutDashboard, group: 'nav.group.workspace' },
-  { key: 'nav.myCabinet', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
+  { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
   { key: 'nav.myCabinet', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
@@ -100,41 +101,17 @@ const navigation: NavItem[] = [
   { key: 'nav.audit', href: '/audit', icon: Activity, group: 'nav.group.system' },
   { key: 'nav.settings', href: '/settings', icon: Settings2, group: 'nav.group.system' },
 ];
-const primaryHrefs = ['/dashboard', '/gps', '/employees', '/products', '/partners'];
-const officeHrefs = ['/office', '/office/report'];
 const kpiHrefs = ['/kpi', '/kpi/agents', '/kpi/orders'];
 const moreGroups: { key: TKey; hrefs: string[] }[] = [
   { key: 'nav.more.warehouse', hrefs: ['/stock', '/scanner', '/receipts', '/transfers', '/inventory'] },
   { key: 'nav.more.accounts', hrefs: ['/recommendations', '/analytics', '/non-moving', '/factories', '/branches', '/reports', '/audit', '/settings'] },
 ];
 const moreHrefs = moreGroups.flatMap(group => group.hrefs);
-const warehouseAllowedHrefs = new Set([
-  '/partners', '/products', '/stock', '/receipts', '/transfers', '/inventory',
-  '/scanner', '/recommendations', '/office', '/office/report',
-]);
-const warehousePrimaryHrefs = ['/partners', '/products', '/stock', '/scanner', '/office'];
-const warehouseMoreGroups: { key: TKey; hrefs: string[] }[] = [
-  { key: 'nav.more.warehouse', hrefs: ['/receipts', '/transfers', '/inventory', '/recommendations'] },
-];
-const agentPrimaryHrefs = ['/my-kpi', '/office'];
 const roleOptions: Array<AppUserRole | 'sales_admin' | 'agent'> = ['super_admin', 'manager', 'sales_admin', 'agent', 'warehouse_manager', 'warehouse_staff', 'analyst'];
 
-/* ---------- role access ---------- */
-function isDirector(role?: string | null) {
-  return role === 'super_admin' || role === 'manager' || role === 'sales_admin';
-}
-function canManageOffice(role?: string | null) {
-  // Ombor xodimi ham Davomat ichida Hisobot + Topshiriqlarni ko‘rsin.
-  return isDirector(role) || isWarehouse(role);
-}
-function isWarehouse(role?: string | null) {
-  return role === 'warehouse_manager' || role === 'warehouse_staff';
-}
+/* ---------- role access (faqat access.ts qoidalari; eski canManageOffice/warehouse flat nav o‘chirilgan) ---------- */
 function isAgentRole(role?: string | null) {
   return accessIsAgentRole(role);
-}
-function isEmployeeCabinet(role?: string | null) {
-  return Boolean(role) && !isDirector(role) && !isWarehouse(role) && !isAgentRole(role);
 }
 function sessionAccess(role?: string | null, permissions?: string[] | null) {
   return effectiveAccess(role, permissions);
@@ -411,8 +388,9 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     .filter((group) => group.hrefs.length > 0);
   const moreHrefsVisible = moreGroupsVisible.flatMap((g) => g.hrefs);
   const inMore = moreHrefsVisible.includes(path);
-  const inOfficeNav = officeHrefs.includes(path) || path === '/office' || path === '/my-kpi';
+  const inOfficeNav = path === '/office' || path === '/office/report';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
+  const showOfficeMenu = isOfficeAdmin(role) && (has('office') || has('my_cabinet'));
   const [moreOpen, setMoreOpen] = useState(inMore);
   const [officeOpen, setOfficeOpen] = useState(inOfficeNav);
   const [kpiOpen, setKpiOpen] = useState(inKpiNav);
@@ -450,19 +428,27 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <div className="sidebar-top"><BrandMark light/>{!compactNav && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
       <nav className="nav" aria-label={t('brand.name')}>
         <div className="nav-primary">
-          {/* Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar */}
+          {/*
+            NAV LOCK (foydalanuvchi ruxsatisiz o‘zgartirmang):
+            1) Tartib: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
+            2) Rahbar (super_admin/manager): Davomat = KPI kabi dropdown
+               ichida: Davomat (/office) + Davomat hisobot (/office/report)
+               — flat «Mening kabinetim» + alohida hisobot YO‘Q
+            3) Oddiy xodim/agent: faqat Mening kabinetim (rol → /office yoki /my-kpi)
+            4) Hisobot/QR/Excel/PDF faqat rahbar (office moduli + requireOfficeDirector)
+          */}
           {has('dashboard') ? navItem('/dashboard') : null}
           {has('products') ? navItem('/products') : null}
           {has('employees') ? navItem('/employees') : null}
-          {has('my_cabinet') && !has('office') ? navItem(cabinetHref) : null}
-          {has('office') ? <>
+          {has('my_cabinet') && !showOfficeMenu ? navItem(cabinetHref) : null}
+          {showOfficeMenu ? <>
             <button type="button" className={`nav-item nav-more ${officeOpen ? 'is-open' : ''} ${inOfficeNav && !officeOpen ? 'is-active' : ''}`} aria-expanded={officeOpen} title={t('nav.office')} onClick={() => { setOfficeOpen(value => !value); setKpiOpen(false); setMoreOpen(false); }} data-testid="button-navigation-office">
               <Fingerprint size={18} strokeWidth={1.9}/>
               <span>{t('nav.office')}</span>
               <ChevronDown size={16} className="nav-more-chevron"/>
             </button>
             {officeOpen && <div className="nav-office-sub">
-              {has('my_cabinet') ? navItem(cabinetHref) : null}
+              {navItem('/office')}
               {navItem('/office/report')}
             </div>}
           </> : null}
@@ -1759,9 +1745,9 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.dashboard', element: <Redirect to="/dashboard"/> },
   { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
-  { path: '/office/tasks', titleKey: 'nav.myCabinet', element: <Redirect to="/office"/> },
+  { path: '/office/tasks', titleKey: 'nav.office', element: <Redirect to="/office"/> },
   { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
-  { path: '/office', titleKey: 'nav.myCabinet', element: <StaffCabinetRoute/> },
+  { path: '/office', titleKey: 'nav.office', element: <StaffCabinetRoute/> },
   { path: '/reports', titleKey: 'nav.reports', element: <ReportsPage/> },
   { path: '/settings', titleKey: 'nav.settings', element: <SettingsPage/> },
   { path: '/audit', titleKey: 'nav.audit', element: <AuditPage/> },

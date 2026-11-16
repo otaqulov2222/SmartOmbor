@@ -24,11 +24,8 @@ import {
 const router: IRouter = Router();
 
 function directorOf(role: string) {
-  return role === "super_admin"
-    || role === "manager"
-    || role === "sales_admin"
-    || role === "warehouse_manager"
-    || role === "warehouse_staff";
+  // Faqat rahbar — ofis nuqtasi / admin matnlari.
+  return role === "super_admin" || role === "manager";
 }
 
 function punchView(row: ReturnType<typeof todayPunch>) {

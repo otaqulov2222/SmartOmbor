@@ -35,8 +35,9 @@ export const ACCESS_MODULES: AccessModule[] = [
   { id: 'inventory', label: 'Inventarizatsiya', paths: ['/inventory'] },
   { id: 'partners', label: 'Hamkor zavodlar', paths: ['/partners'] },
   { id: 'employees', label: 'Xodimlar', paths: ['/employees'] },
-  /** Bitta kabinet: rol bo‘yicha agent/ofis/savdo UI tanlanadi. */
+  /** Shaxsiy: rol bo‘yicha agent UI yoki o‘z davomat belgilashi. */
   { id: 'my_cabinet', label: 'Mening kabinetim', paths: ['/office', '/my-kpi'] },
+  /** Faqat rahbar: jamoa hisoboti, QR, Excel/PDF. */
   { id: 'office', label: 'Davomat hisoboti', paths: ['/office/report'] },
   { id: 'kpi', label: 'KPI', paths: ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'] },
   { id: 'gps', label: 'GPS va marshrut', paths: ['/gps'] },
@@ -57,24 +58,34 @@ const ROLE_DEFAULTS: Record<string, AccessModuleId[]> = {
   super_admin: [...ALL_ACCESS_IDS],
   manager: [...ALL_ACCESS_IDS],
   sales_admin: [
-    'dashboard', 'products', 'partners', 'employees', 'my_cabinet', 'office', 'kpi', 'gps',
+    'dashboard', 'products', 'partners', 'employees', 'my_cabinet', 'kpi', 'gps',
     'analytics', 'reports', 'settings',
   ],
   warehouse_manager: [
     'partners', 'products', 'stock', 'scanner', 'receipts', 'transfers', 'inventory',
-    'my_cabinet', 'office', 'analytics',
+    'my_cabinet', 'analytics',
   ],
   warehouse_staff: [
     'partners', 'products', 'stock', 'scanner', 'receipts', 'transfers', 'inventory',
-    'my_cabinet', 'office',
+    'my_cabinet',
   ],
   agent: ['my_cabinet'],
-  accountant: ['my_cabinet', 'office', 'reports', 'analytics'],
-  analyst: ['my_cabinet', 'office', 'analytics', 'reports', 'dashboard'],
+  accountant: ['my_cabinet', 'reports', 'analytics'],
+  analyst: ['my_cabinet', 'analytics', 'reports', 'dashboard'],
   worker: ['my_cabinet'],
 };
 
-/** Rolga qarab shaxsiy kabinet yo‘li. */
+/**
+ * ACCESS LOCK — ruxsatisiz buzmang:
+ * - my_cabinet = shaxsiy (agent → /my-kpi, boshqalar → /office punch)
+ * - office = faqat rahbar jamoa hisoboti/QR/Excel/PDF
+ * - oddiy rolga «office» bersa ham scrub → my_cabinet, hisobot yopiq
+ */
+export function isOfficeAdmin(role?: string | null) {
+  const key = String(role || '').trim();
+  return key === 'super_admin' || key === 'manager';
+}
+
 export function isAgentRole(role?: string | null) {
   const key = String(role || '').trim();
   return key === 'agent' || /agent|агент/i.test(key);
@@ -86,27 +97,33 @@ export function cabinetHomeForRole(role?: string | null) {
 
 function migrateAccessId(raw: string): AccessModuleId | null {
   const id = raw.trim();
-  // Eski «Agent kabineti» → bitta Mening kabinetim
   if (id === 'my_kpi') return 'my_cabinet';
   if ((ALL_ACCESS_IDS as string[]).includes(id)) return id as AccessModuleId;
   return null;
 }
 
-function withLegacyOffice(list: AccessModuleId[]): AccessModuleId[] {
-  // Eski «office» = punch + hisobot. Endi punch → my_cabinet.
-  if (list.includes('office') && !list.includes('my_cabinet')) {
-    return [...list, 'my_cabinet'];
+/** Oddiy xodimga jamoa hisoboti yopiladi; eski «office» → shaxsiy kabinet saqlanadi. */
+function scrubAdminOnly(list: AccessModuleId[], role?: string | null): AccessModuleId[] {
+  if (isOfficeAdmin(role) || String(role || '') === 'super_admin') {
+    // Rahbar: hisobot ochiq bo‘lsa shaxsiy Davomat ham ochiq qoladi (dropdown ikkala band).
+    if (list.includes('office') && !list.includes('my_cabinet')) return [...list, 'my_cabinet'];
+    return list;
   }
-  return list;
+  const hadOffice = list.includes('office');
+  const next = list.filter((id) => id !== 'office');
+  if (hadOffice && !next.includes('my_cabinet')) next.push('my_cabinet');
+  return next;
 }
 
 export function defaultsForRole(role?: string | null): AccessModuleId[] {
   const key = String(role || '').trim();
-  if (ROLE_DEFAULTS[key]) return withLegacyOffice([...ROLE_DEFAULTS[key]]);
-  if (isAgentRole(key)) return withLegacyOffice([...ROLE_DEFAULTS.agent]);
-  if (/ombor|sklad|склад/i.test(key)) return withLegacyOffice([...ROLE_DEFAULTS.warehouse_staff]);
-  if (/admin|rahbar|menejer|direktor/i.test(key)) return withLegacyOffice([...ROLE_DEFAULTS.manager]);
-  return withLegacyOffice([...ROLE_DEFAULTS.worker]);
+  let list: AccessModuleId[];
+  if (ROLE_DEFAULTS[key]) list = [...ROLE_DEFAULTS[key]];
+  else if (isAgentRole(key)) list = [...ROLE_DEFAULTS.agent];
+  else if (/ombor|sklad|склад/i.test(key)) list = [...ROLE_DEFAULTS.warehouse_staff];
+  else if (/admin|rahbar|menejer|direktor/i.test(key)) list = [...ROLE_DEFAULTS.manager];
+  else list = [...ROLE_DEFAULTS.worker];
+  return scrubAdminOnly(list, role);
 }
 
 export function normalizeAccessList(raw: unknown, role?: string | null): AccessModuleId[] {
@@ -115,7 +132,7 @@ export function normalizeAccessList(raw: unknown, role?: string | null): AccessM
   const picked = raw
     .map((v) => migrateAccessId(String(v || '')))
     .filter((v): v is AccessModuleId => Boolean(v));
-  const unique = withLegacyOffice([...new Set(picked)]);
+  const unique = scrubAdminOnly([...new Set(picked)], role);
   return unique.length ? unique : defaultsForRole(role);
 }
 
@@ -137,6 +154,7 @@ export function pathAllowedByAccess(path: string, role?: string | null, permissi
   if (String(role || '') === 'super_admin') return true;
   const mod = moduleForPath(path);
   if (!mod) return false;
+  if (mod === 'office' && !isOfficeAdmin(role)) return false;
   return effectiveAccess(role, permissions).includes(mod);
 }
 
@@ -151,6 +169,7 @@ export function homeForAccess(role?: string | null, permissions?: string[] | nul
   for (const id of prefer) {
     if (!access.has(id)) continue;
     if (id === 'my_cabinet') return cabinetHomeForRole(role);
+    if (id === 'office' && !isOfficeAdmin(role)) continue;
     const mod = ACCESS_MODULES.find((m) => m.id === id);
     if (mod?.paths[0]) return mod.paths[0];
   }
@@ -158,11 +177,9 @@ export function homeForAccess(role?: string | null, permissions?: string[] | nul
   return first?.paths[0] || '/office';
 }
 
-/** Asosiy menyu tartibi (Davomat/KPI alohida chiziladi). */
 export const NAV_PRIMARY_MODULES: AccessModuleId[] = [
   'dashboard', 'products', 'employees', 'gps', 'partners',
 ];
-/** «Boshqalar» ichida. */
 export const NAV_MORE_MODULES: AccessModuleId[] = [
   'stock', 'scanner', 'receipts', 'transfers', 'inventory',
   'analytics', 'reports', 'settings', 'audit',

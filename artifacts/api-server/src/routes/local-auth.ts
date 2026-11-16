@@ -37,20 +37,20 @@ const ROLE_ACCESS: Record<string, AccessId[]> = {
   super_admin: [...ACCESS_IDS],
   manager: [...ACCESS_IDS],
   sales_admin: [
-    "dashboard", "products", "partners", "employees", "my_cabinet", "office", "kpi", "gps",
+    "dashboard", "products", "partners", "employees", "my_cabinet", "kpi", "gps",
     "analytics", "reports", "settings",
   ],
   warehouse_manager: [
     "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory",
-    "my_cabinet", "office", "analytics",
+    "my_cabinet", "analytics",
   ],
   warehouse_staff: [
     "partners", "products", "stock", "scanner", "receipts", "transfers", "inventory",
-    "my_cabinet", "office",
+    "my_cabinet",
   ],
   agent: ["my_cabinet"],
-  accountant: ["my_cabinet", "office", "reports", "analytics"],
-  analyst: ["my_cabinet", "office", "analytics", "reports", "dashboard"],
+  accountant: ["my_cabinet", "reports", "analytics"],
+  analyst: ["my_cabinet", "analytics", "reports", "dashboard"],
   worker: ["my_cabinet"],
 };
 
@@ -89,19 +89,29 @@ function migrateAccessId(raw: string): AccessId | null {
   return null;
 }
 
-function withLegacyOffice(list: AccessId[]): AccessId[] {
-  // Eski «office» punch+hisobot edi — punch endi my_cabinet.
-  if (list.includes("office") && !list.includes("my_cabinet")) return [...list, "my_cabinet"];
-  return list;
+function isOfficeAdmin(role: string) {
+  return role === "super_admin" || role === "manager";
+}
+
+function scrubAdminOnly(list: AccessId[], role: string): AccessId[] {
+  // Jamoa hisoboti / QR faqat rahbarda; eski office → shaxsiy kabinet.
+  if (isOfficeAdmin(role)) {
+    if (list.includes("office") && !list.includes("my_cabinet")) return [...list, "my_cabinet"];
+    return list;
+  }
+  const hadOffice = list.includes("office");
+  const next = list.filter((id) => id !== "office");
+  if (hadOffice && !next.includes("my_cabinet")) next.push("my_cabinet");
+  return next;
 }
 
 function normalizePermissions(raw: unknown, role: string): AccessId[] {
   if (role === "super_admin") return [...ACCESS_IDS];
-  if (!Array.isArray(raw)) return withLegacyOffice(defaultsForRole(role));
-  const picked = withLegacyOffice([...new Set(
+  if (!Array.isArray(raw)) return scrubAdminOnly(defaultsForRole(role), role);
+  const picked = scrubAdminOnly([...new Set(
     raw.map((v) => migrateAccessId(String(v || ""))).filter((v): v is AccessId => Boolean(v)),
-  )]);
-  return picked.length ? picked : withLegacyOffice(defaultsForRole(role));
+  )], role);
+  return picked.length ? picked : scrubAdminOnly(defaultsForRole(role), role);
 }
 
 function publicAccount(account: Account) {
@@ -459,9 +469,8 @@ export function requireOfficeDirector(req: Request, res: Response): Account | nu
     res.status(401).json({ error: "invalid" });
     return null;
   }
+  // Jamoa davomati / QR / Excel — faqat rahbar.
   if (current.role === "super_admin" || current.role === "manager") return current;
-  const perms = normalizePermissions(current.permissions, current.role);
-  if (perms.includes("office") || perms.includes("employees")) return current;
   res.status(403).json({ error: "forbidden" });
   return null;
 }
