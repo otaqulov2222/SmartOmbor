@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Users } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Check, ChevronDown, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ACCESS_MODULES,
   defaultsForRole,
@@ -74,18 +74,43 @@ function roleInfo(role: string) {
   return { label: role, group: 'office' as const, tone: '' };
 }
 
+function accessSummary(value: AccessModuleId[], locked?: boolean) {
+  if (locked) return 'Barcha bo‘limlar';
+  if (!value.length) return 'Bo‘lim tanlang…';
+  if (value.length === ACCESS_MODULES.length) return 'Barcha bo‘limlar';
+  const labels = value
+    .map((id) => ACCESS_MODULES.find((m) => m.id === id)?.label || id)
+    .slice(0, 2);
+  const rest = value.length - labels.length;
+  return rest > 0 ? `${labels.join(', ')} +${rest}` : labels.join(', ');
+}
+
 function AccessPicker({
   role,
   value,
   onChange,
   locked,
+  compact,
 }: {
   role: string;
   value: AccessModuleId[];
   onChange: (next: AccessModuleId[]) => void;
   locked?: boolean;
+  compact?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const selected = new Set(value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
   const toggle = (id: AccessModuleId) => {
     if (locked) return;
     const next = new Set(selected);
@@ -93,43 +118,48 @@ function AccessPicker({
     else next.add(id);
     onChange(normalizeAccessList([...next], role));
   };
+
   return (
-    <div className="emp-access">
-      <div className="emp-access-head">
-        <b>Bo‘lim ruxsatlari</b>
-        <span className="kpi-muted">Qaysi menyular ochilsin — MoySkladdagi kabi</span>
-      </div>
-      {locked ? (
-        <p className="kpi-muted">Super Admin uchun barcha bo‘limlar ochiq.</p>
-      ) : (
-        <div className="emp-access-actions">
-          <button type="button" className="btn btn-sm" onClick={() => onChange(defaultsForRole(role))}>
-            Rol bo‘yicha default
-          </button>
-          <button type="button" className="btn btn-sm" onClick={() => onChange(ACCESS_MODULES.map((m) => m.id))}>
-            Hammasini ochish
-          </button>
-          <button type="button" className="btn btn-sm" onClick={() => onChange(['office'])}>
-            Faqat davomat
-          </button>
+    <div className={`emp-access-dd${compact ? ' is-compact' : ''}`} ref={rootRef}>
+      <button
+        type="button"
+        className={`emp-access-trigger input${open ? ' is-open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+        disabled={locked}
+        title="Bo‘lim ruxsatlari"
+      >
+        <span>{accessSummary(value, locked)}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open ? (
+        <div className="emp-access-menu" role="listbox" aria-label="Bo‘lim ruxsatlari">
+          {!locked ? (
+            <div className="emp-access-menu-actions">
+              <button type="button" onClick={() => onChange(defaultsForRole(role))}>Rol default</button>
+              <button type="button" onClick={() => onChange(ACCESS_MODULES.map((m) => m.id))}>Hammasi</button>
+              <button type="button" onClick={() => onChange(['office'])}>Faqat davomat</button>
+            </div>
+          ) : (
+            <p className="emp-access-locked">Super Admin — barcha bo‘limlar ochiq</p>
+          )}
+          <div className="emp-access-menu-list">
+            {ACCESS_MODULES.map((m) => {
+              const on = locked || selected.has(m.id);
+              return (
+                <label key={m.id} className={`emp-access-option${on ? ' is-on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={locked}
+                    onChange={() => toggle(m.id)}
+                  />
+                  <span>{m.label}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
-      )}
-      <div className="emp-access-grid">
-        {ACCESS_MODULES.map((m) => {
-          const on = locked || selected.has(m.id);
-          return (
-            <label key={m.id} className={`emp-access-chip${on ? ' is-on' : ''}${locked ? ' is-locked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={on}
-                disabled={locked}
-                onChange={() => toggle(m.id)}
-              />
-              <span>{m.label}</span>
-            </label>
-          );
-        })}
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -307,6 +337,12 @@ export function EmployeesPage() {
               <option value="__custom__">+ Yangi lavozim yozish…</option>
             </select>
           )}
+          <AccessPicker
+            role={resolveRole(form.role)}
+            value={form.permissions}
+            onChange={(permissions) => setForm({ ...form, permissions })}
+            locked={resolveRole(form.role) === 'super_admin'}
+          />
           <button
             type="button"
             className="btn btn-primary"
@@ -316,12 +352,6 @@ export function EmployeesPage() {
             <Plus size={16} /> Qo‘shish
           </button>
         </div>
-        <AccessPicker
-          role={resolveRole(form.role)}
-          value={form.permissions}
-          onChange={(permissions) => setForm({ ...form, permissions })}
-          locked={resolveRole(form.role) === 'super_admin'}
-        />
         {create.error ? <p className="kpi-error">{(create.error as Error).message}</p> : null}
         {update.error ? <p className="kpi-error">{(update.error as Error).message}</p> : null}
         {remove.error ? <p className="kpi-error">{(remove.error as Error).message}</p> : null}
@@ -417,18 +447,15 @@ export function EmployeesPage() {
                   <td data-label="Ruxsatlar">
                     {isEdit && s.login !== 'bordouzadmin' ? (
                       <AccessPicker
+                        compact
                         role={resolveRole(editing.role)}
                         value={normalizeAccessList(editing.permissions, editing.role)}
                         onChange={(permissions) => setEditing({ ...editing, permissions })}
                       />
                     ) : (
-                      <div className="emp-perm-summary">
-                        {perms.slice(0, 4).map((id) => {
-                          const label = ACCESS_MODULES.find((m) => m.id === id)?.label || id;
-                          return <span key={id} className="emp-perm-pill">{label}</span>;
-                        })}
-                        {perms.length > 4 ? <span className="kpi-muted">+{perms.length - 4}</span> : null}
-                      </div>
+                      <span className="emp-perm-text" title={perms.map((id) => ACCESS_MODULES.find((m) => m.id === id)?.label || id).join(', ')}>
+                        {accessSummary(perms, s.login === 'bordouzadmin' || s.role === 'super_admin')}
+                      </span>
                     )}
                   </td>
                   <td data-label="Ko‘rsatkich">
