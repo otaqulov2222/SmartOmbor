@@ -1060,7 +1060,20 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
     const customers = await db.select({ id: kpiCustomersTable.id, name: kpiCustomersTable.name }).from(kpiCustomersTable);
     const aMap = new Map(agents.map((a) => [a.id, a]));
     const cMap = new Map(customers.map((c) => [c.id, c.name]));
-    const orderIds = rows.map((r) => r.id);
+    const isHouseAgent = (login?: string | null, fullName?: string | null) => {
+      const lg = String(login || "").trim().toLowerCase().replace(/\s+/g, "");
+      const nm = String(fullName || "").trim().toLowerCase();
+      return lg === "ofis" || lg === "vanseling" || nm === "ofis" || nm === "van seling" || nm === "vanseling";
+    };
+    // KPI ro‘yxatida Ofis/Van seling ko‘rinmasin (ularga foiz yo‘q).
+    const includeHouse = String(req.query.includeHouse ?? "") === "1";
+    const visible = includeHouse
+      ? rows
+      : rows.filter((r) => {
+          const agent = aMap.get(r.agentId);
+          return !isHouseAgent(agent?.login, agent?.fullName);
+        });
+    const orderIds = visible.map((r) => r.id);
     const calcs = orderIds.length
       ? await db.select().from(kpiCalculationsTable).where(inArray(kpiCalculationsTable.orderId, orderIds))
       : [];
@@ -1070,10 +1083,10 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
       periodEnd: period.to,
       periodLabel: period.label,
       periodPreset: period.preset,
-      rows: rows.map((r) => {
+      rows: visible.map((r) => {
         const agent = aMap.get(r.agentId);
         const k = kMap.get(r.id);
-        const isHouse = agent?.login === "ofis" || agent?.login === "vanseling";
+        const isHouse = isHouseAgent(agent?.login, agent?.fullName);
         return {
           ...r,
           agentName: agent?.fullName || "—",
@@ -1085,13 +1098,13 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
                 id: k.id,
                 orderId: k.orderId,
                 baseAmount: k.baseAmount,
-                stagePercent: k.stagePercent,
-                kpiAmount: k.kpiAmount,
+                stagePercent: isHouse ? "0.00" : k.stagePercent,
+                kpiAmount: isHouse ? "0.00" : k.kpiAmount,
                 status: k.status,
-                stageName: k.stageName,
-                stageDayFrom: k.stageDayFrom,
-                stageDayTo: k.stageDayTo,
-                daysRemaining: k.daysRemaining,
+                stageName: isHouse ? "ofis" : k.stageName,
+                stageDayFrom: isHouse ? 0 : k.stageDayFrom,
+                stageDayTo: isHouse ? 0 : k.stageDayTo,
+                daysRemaining: isHouse ? 0 : k.daysRemaining,
               }
             : null,
         };

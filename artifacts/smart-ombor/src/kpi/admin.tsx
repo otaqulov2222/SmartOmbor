@@ -165,13 +165,22 @@ type Order = {
   } | null;
 };
 
-/** KPI foizi — oddiy matn: «1–7 kun · 2%». */
-function kpiFoizLabel(k: NonNullable<Order['kpi']> | null | undefined): string {
+/** KPI foizi — oddiy matn: «1–7 kun · 2%». Ofis uchun hech qachon foiz yo‘q. */
+function kpiFoizLabel(
+  k: NonNullable<Order['kpi']> | null | undefined,
+  opts?: { isHouseAccount?: boolean; paid?: number },
+): string {
+  if (opts?.isHouseAccount) return '—';
   if (!k) return '—';
+  const stage = String(k.stageName || '').toLowerCase();
+  if (stage === 'ofis' || stage === '0%') {
+    // To‘lov yo‘q / muddat o‘tgan — foiz 0
+    if (!(Number(k.stagePercent || 0) > 0)) return Number(opts?.paid || 0) > 0 ? '15+ kun · 0%' : '—';
+  }
   const pct = Number(k.stagePercent || 0);
   const from = Number(k.stageDayFrom ?? -1);
   const to = Number(k.stageDayTo ?? -1);
-  if (!(pct > 0)) return '15+ kun · 0%';
+  if (!(pct > 0)) return Number(opts?.paid || 0) > 0 ? '15+ kun · 0%' : '—';
   if (from === 0 && to === 0) return 'Shu kun · 3%';
   if (from === 1 && to === 7) return '1–7 kun · 2%';
   if (from === 8 && to === 15) return '8–15 kun · 1%';
@@ -1271,8 +1280,9 @@ function OrdersAndKpiSection({
             {rows.map((o) => {
               const k = o.kpi;
               const paid = Number(o.paidAmount || 0);
-              const foiz = kpiFoizLabel(k);
-              const kpiText = paid > 0 ? uzs(k?.kpiAmount || 0) : '0 so‘m';
+              const house = Boolean(o.isHouseAccount);
+              const foiz = kpiFoizLabel(k, { isHouseAccount: house, paid });
+              const kpiText = house ? '—' : paid > 0 ? uzs(k?.kpiAmount || 0) : '0 so‘m';
               return (
                 <tr key={o.id}>
                   <td data-label="Jo‘natma"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{isoToDmy(o.orderDate)}</div></td>

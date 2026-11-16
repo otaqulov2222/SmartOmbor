@@ -19,6 +19,13 @@ function tashkentYmd(d: Date): string {
   }).format(d);
 }
 
+function foldHouseLogin(login?: string | null) {
+  return String(login || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
 export type StageSnap = {
   name: string;
   sortOrder: number;
@@ -182,10 +189,14 @@ export async function refreshOrderKpi(
     .from(kpiAgentsTable)
     .where(eq(kpiAgentsTable.id, order.agentId))
     .limit(1);
+  const login = foldHouseLogin(agentRow?.login);
+  const fullName = String(agentRow?.fullName || "").trim().toLowerCase();
   const isHouseAccount =
-    agentRow?.login === "ofis" ||
-    agentRow?.login === "vanseling" ||
-    agentRow?.fullName.toLowerCase() === "ofis";
+    login === "ofis" ||
+    login === "vanseling" ||
+    fullName === "ofis" ||
+    fullName === "van seling" ||
+    fullName === "vanseling";
 
   const anchor = order.confirmedAt
     ? new Date(order.confirmedAt)
@@ -196,21 +207,23 @@ export async function refreshOrderKpi(
       : new Date();
   const refDate = Number.isNaN(settledAt.getTime()) ? new Date() : settledAt;
   const dayIndex = Math.max(0, daysBetween(anchor, refDate));
+  // Ofis / Van seling: foiz ham, KPI ham yo‘q — bosqich hech qachon 2%/3% bo‘lmasin.
   const stage = isHouseAccount ? null : resolveStage(snap.stages, dayIndex);
-  const percent = stage ? money(stage.percent) : "0.00";
+  const percent = isHouseAccount ? "0.00" : stage ? money(stage.percent) : "0.00";
   const baseType = snap.baseType || "paid_amount";
   const baseAmount =
     baseType === "order_total" ? money(order.total) : money(order.paidAmount);
   const kpiAmount = isHouseAccount ? "0.00" : moneyPct(baseAmount, percent);
-  const ends = stageEndsAt(anchor, stage);
-  const daysRemaining = stage ? Math.max(0, stage.dayTo - dayIndex) : 0;
+  const ends = isHouseAccount ? null : stageEndsAt(anchor, stage);
+  const daysRemaining = isHouseAccount ? 0 : stage ? Math.max(0, stage.dayTo - dayIndex) : 0;
 
   let status = "pending";
-  if (order.status === "cancelled") status = "cancelled";
+  if (isHouseAccount) status = "confirmed";
+  else if (order.status === "cancelled") status = "cancelled";
   else if (moneyCmp(order.paidAmount, 0) <= 0) status = "pending";
   else if (moneyCmp(order.paidAmount, order.total) >= 0) status = "confirmed";
   else status = "partial";
-  if (!stage && moneyCmp(baseAmount, 0) > 0) status = "expired";
+  if (!isHouseAccount && !stage && moneyCmp(baseAmount, 0) > 0) status = "expired";
 
   const existing = await db
     .select()
@@ -222,12 +235,12 @@ export async function refreshOrderKpi(
     agentId: order.agentId,
     baseType,
     baseAmount,
-    stageName: stage?.name || "0%",
+    stageName: isHouseAccount ? "ofis" : stage?.name || "0%",
     stagePercent: percent,
     kpiAmount,
     status,
-    stageDayFrom: stage?.dayFrom ?? 0,
-    stageDayTo: stage?.dayTo ?? 0,
+    stageDayFrom: isHouseAccount ? 0 : stage?.dayFrom ?? 0,
+    stageDayTo: isHouseAccount ? 0 : stage?.dayTo ?? 0,
     anchorAt: anchor,
     stageEndsAt: ends,
     daysRemaining,

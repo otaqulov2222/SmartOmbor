@@ -558,14 +558,26 @@ async function syncAgentOwnedCounterparties(
 
 export async function ensureKpiBootstrapped() {
   await ensureSeedAgents();
-  // Ensure house accounts (Ofis / Van seling) never carry KPI commission
+  // Ofis / Van seling: foiz ham KPI ham yo‘q (hech qachon 2%/3% qolmasin).
   await db.execute(sql`
     UPDATE kpi_calculations c
-    SET kpi_amount = 0, stage_percent = 0, stage_name = '0%'
+    SET kpi_amount = 0,
+        stage_percent = 0,
+        stage_name = 'ofis',
+        stage_day_from = 0,
+        stage_day_to = 0,
+        days_remaining = 0
     FROM kpi_agents a
     WHERE c.agent_id = a.id
-      AND lower(a.login) IN ('ofis', 'vanseling')
-      AND c.kpi_amount <> 0
+      AND (
+        lower(replace(a.login, ' ', '')) IN ('ofis', 'vanseling')
+        OR lower(trim(a.full_name)) IN ('ofis', 'van seling', 'vanseling')
+      )
+      AND (
+        c.kpi_amount <> 0
+        OR c.stage_percent <> 0
+        OR coalesce(c.stage_name, '') NOT IN ('ofis', '0%')
+      )
   `);
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
