@@ -116,12 +116,16 @@ export function EmployeesPage() {
     onSuccess: () => {
       setEditing(null);
       void cache.invalidateQueries({ queryKey: ['bordo-staff'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-agents'] });
     },
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => kpiFetch(`/local-accounts/${id}`, { method: 'DELETE' }),
-    onSuccess: () => void cache.invalidateQueries({ queryKey: ['bordo-staff'] }),
+    onSuccess: () => {
+      void cache.invalidateQueries({ queryKey: ['bordo-staff'] });
+      void cache.invalidateQueries({ queryKey: ['kpi-agents'] });
+    },
   });
 
   const copyCredentials = async (s: Staff) => {

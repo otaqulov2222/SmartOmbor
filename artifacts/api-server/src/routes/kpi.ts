@@ -467,8 +467,14 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
   try {
     await ensureKpiBootstrapped();
     const period = parsePeriod(req.query.from, req.query.to, req.query.preset);
+    const includeInactive = String(req.query.includeInactive ?? "") === "1";
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
-    const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
+    const agents = allAgents.filter(
+      (a) =>
+        a.login !== "ofis"
+        && a.login !== "vanseling"
+        && (includeInactive || a.status === "active"),
+    );
     // Cache'dan darhol; MS skani fonda (UI millisekundda).
     const settled = await getAgentsMsSettlementSummaries(
       agents.map((a) => ({ login: a.login, fullName: a.fullName })),
@@ -628,7 +634,12 @@ router.get("/kpi/customers", requireKpiAdmin(), async (req, res, next) => {
     await ensureKpiBootstrapped();
     const q = String(req.query.q ?? "").trim();
     const rows = await db.select().from(kpiCustomersTable)
-      .where(q ? or(ilike(kpiCustomersTable.name, `%${q}%`), ilike(kpiCustomersTable.phone, `%${q}%`)) : undefined)
+      .where(
+        and(
+          sql`${kpiCustomersTable.status} not in ('archived', 'deleted')`,
+          q ? or(ilike(kpiCustomersTable.name, `%${q}%`), ilike(kpiCustomersTable.phone, `%${q}%`)) : undefined,
+        ),
+      )
       .orderBy(desc(kpiCustomersTable.createdAt))
       .limit(200);
     const out = [];
@@ -896,13 +907,39 @@ router.delete("/kpi/customers/:id", requireKpiAdmin(), async (req, res, next) =>
       .from(kpiOrdersTable)
       .where(eq(kpiOrdersTable.customerId, id));
     if ((orderHit?.n ?? 0) > 0) {
-      res.status(409).json({
-        error: `Bu mijozda ${orderHit.n} ta savdo bor — o‘chirib bo‘lmaydi. Agentni olib tashlang yoki statusni o‘zgartiring.`,
+      // Savdosi bor — hard delete o‘rniga arxiv (MS sync qayta yaratmasin).
+      await db
+        .update(kpiCustomersTable)
+        .set({ status: "archived" })
+        .where(eq(kpiCustomersTable.id, id));
+      await recordAudit({
+        action: "kpi.customer.archived",
+        entityType: "kpi_customer",
+        entityId: id,
+        actorName: actor.name,
+        details: cust.name,
       });
+      res.json({ ok: true, id, name: cust.name, archived: true });
       return;
     }
     await db.delete(kpiVisitsTable).where(eq(kpiVisitsTable.customerId, id));
     await db.delete(kpiCustomerAssignmentsTable).where(eq(kpiCustomerAssignmentsTable.customerId, id));
+    // MS dan kelgan mijoz — soft delete, sync qayta yaratmasin.
+    if (String(cust.contractNumber || "").startsWith("ms:")) {
+      await db
+        .update(kpiCustomersTable)
+        .set({ status: "archived" })
+        .where(eq(kpiCustomersTable.id, id));
+      await recordAudit({
+        action: "kpi.customer.archived",
+        entityType: "kpi_customer",
+        entityId: id,
+        actorName: actor.name,
+        details: cust.name,
+      });
+      res.json({ ok: true, id, name: cust.name, archived: true });
+      return;
+    }
     await db.delete(kpiCustomersTable).where(eq(kpiCustomersTable.id, id));
     await recordAudit({
       action: "kpi.customer.deleted",
@@ -2051,7 +2088,9 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
     const agentFilter = String(req.query.agentId ?? "").trim();
 
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
-    const agents = allAgents.filter((a) => a.login !== "ofis" && a.login !== "vanseling");
+    const agents = allAgents.filter(
+      (a) => a.login !== "ofis" && a.login !== "vanseling" && a.status === "active",
+    );
     const assigns = await db
       .select()
       .from(kpiCustomerAssignmentsTable)

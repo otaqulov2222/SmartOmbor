@@ -128,9 +128,22 @@ let lastSyncAt = 0;
 let lastSyncKey = "";
 let seededKnown = false;
 
+async function loadRemovedStaffLogins(): Promise<Set<string>> {
+  try {
+    const res = await db.execute(sql`select document->'removedLogins' as r from partner_store where id = 'accounts'`);
+    const rows = (res as { rows?: Array<{ r?: unknown }> }).rows || [];
+    const raw = rows[0]?.r;
+    if (!Array.isArray(raw)) return new Set();
+    return new Set(raw.map((v) => String(v).toLowerCase().trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Instant (<100ms): ensures known MoySklad agents exist in DB so UI is never blank. */
 export async function ensureSeedAgents(cache = new Map<string, string>()) {
   const existing = await db.select().from(kpiAgentsTable);
+  const removed = await loadRemovedStaffLogins();
   for (const a of existing) {
     cache.set(a.fullName.toLowerCase(), a.id);
     cache.set(a.login.toLowerCase(), a.id);
@@ -138,6 +151,7 @@ export async function ensureSeedAgents(cache = new Map<string, string>()) {
   if (seededKnown && existing.length >= KNOWN_AGENTS.length) return cache;
   const pw = hashPassword("1234");
   for (const [fullName, login] of KNOWN_AGENTS) {
+    if (removed.has(login.toLowerCase())) continue;
     if (cache.has(fullName.toLowerCase()) || cache.has(login)) continue;
     const [row] = await db
       .insert(kpiAgentsTable)
@@ -199,6 +213,21 @@ async function ensureAgentByName(
   const hit = cache.get(key) || cache.get(login);
   if (hit) return hit;
 
+  const [found] = await db
+    .select()
+    .from(kpiAgentsTable)
+    .where(eq(kpiAgentsTable.login, login))
+    .limit(1);
+  if (found) {
+    cache.set(key, found.id);
+    cache.set(login, found.id);
+    return found.id;
+  }
+
+  // Xodimlar bo‘limidan o‘chirilgan loginni MS sync qayta yaratmasin.
+  const removed = await loadRemovedStaffLogins();
+  if (removed.has(login.toLowerCase())) return null;
+
   const [created] = await db
     .insert(kpiAgentsTable)
     .values({
@@ -215,16 +244,6 @@ async function ensureAgentByName(
     cache.set(key, created.id);
     cache.set(login, created.id);
     return created.id;
-  }
-  const [found] = await db
-    .select()
-    .from(kpiAgentsTable)
-    .where(eq(kpiAgentsTable.login, login))
-    .limit(1);
-  if (found) {
-    cache.set(key, found.id);
-    cache.set(login, found.id);
-    return found.id;
   }
   return null;
 }
@@ -268,11 +287,15 @@ async function ensureMsAssignment(customerId: string, agentId: string) {
 async function upsertMsCustomer(
   cp: MsCounterparty,
   agentId: string | null,
-  customerByMsId: Map<string, { id: string; agentId: string | null }>,
+  customerByMsId: Map<string, { id: string; agentId: string | null; status?: string }>,
 ) {
   if (!cp.id || !cp.name) return null;
   const tags = cp.tags || [];
   let cust = customerByMsId.get(cp.id);
+  if (cust && (cust.status === "archived" || cust.status === "deleted")) {
+    // Qo‘lda arxivlangan mijozni MS sync qayta faollashtirmasin.
+    return null;
+  }
   if (!cust) {
     const [created] = await db
       .insert(kpiCustomersTable)
@@ -289,10 +312,10 @@ async function upsertMsCustomer(
         createdBy: "moysklad",
       })
       .returning();
-    cust = { id: created.id, agentId };
+    cust = { id: created.id, agentId, status: created.status };
     customerByMsId.set(cp.id, cust);
   } else if (agentId && cust.agentId !== agentId) {
-    cust = { id: cust.id, agentId };
+    cust = { id: cust.id, agentId, status: cust.status };
     customerByMsId.set(cp.id, cust);
     await db
       .update(kpiCustomersTable)
@@ -316,7 +339,7 @@ async function ingestDemand(
   d: MsDemand,
   ctx: {
     agentCache: Map<string, string>;
-    customerByMsId: Map<string, { id: string; agentId: string | null }>;
+    customerByMsId: Map<string, { id: string; agentId: string | null; status?: string }>;
     fallbackAgentId: string;
     orderByNumber: Map<string, OrderCacheRow>;
     policyId: string;
@@ -448,11 +471,15 @@ async function runSync(range: { from: string; to: string }) {
     if (ch.name) await ensureAgentByName(agentCache, ch.name);
   }
 
-  const customerByMsId = new Map<string, { id: string; agentId: string | null }>();
+  const customerByMsId = new Map<string, { id: string; agentId: string | null; status?: string }>();
   const localCustomers = await db.select().from(kpiCustomersTable);
   for (const c of localCustomers) {
     if (c.contractNumber.startsWith("ms:")) {
-      customerByMsId.set(c.contractNumber.slice(3), { id: c.id, agentId: c.createdByAgentId });
+      customerByMsId.set(c.contractNumber.slice(3), {
+        id: c.id,
+        agentId: c.createdByAgentId,
+        status: c.status,
+      });
     }
   }
 
@@ -507,7 +534,7 @@ async function runSync(range: { from: string; to: string }) {
 /** MS teg = agent guruh (bu akkauntda counterpartyfolder yo‘q). */
 async function syncAgentOwnedCounterparties(
   agentCache: Map<string, string>,
-  customerByMsId: Map<string, { id: string; agentId: string | null }>,
+  customerByMsId: Map<string, { id: string; agentId: string | null; status?: string }>,
 ) {
   const tagByAgent = new Map<string, string>();
   const TAG_TRIES: Array<[string, string[]]> = [

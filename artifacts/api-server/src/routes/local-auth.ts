@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
@@ -9,13 +9,33 @@ const router: IRouter = Router();
 const FILE = dataFile("accounts.json");
 const KNOWN_ROLES = ["super_admin", "manager", "sales_admin", "agent", "warehouse_manager", "warehouse_staff", "analyst", "accountant", "worker"] as const;
 
+const ROLE_LABELS: Record<string, string> = {
+  "rahbar / super admin": "super_admin",
+  "rahbar": "super_admin",
+  "super admin": "super_admin",
+  "menejer": "manager",
+  "savdo rahbari": "sales_admin",
+  "savdo agenti": "agent",
+  "agent": "agent",
+  "ombor mudiri": "warehouse_manager",
+  "ombor xodimi (sklad)": "warehouse_staff",
+  "ombor xodimi": "warehouse_staff",
+  "sklad": "warehouse_staff",
+  "bugalter": "accountant",
+  "tahlilchi": "analyst",
+  "ofis xodimi": "worker",
+};
+
 type Account = { id: string; name: string; login: string; password: string; role: string; phone?: string };
 
 function normalizeRole(value: string) {
   const role = value.trim().replace(/\s+/g, " ").slice(0, 48);
   if (role.length < 2) return "";
   const known = KNOWN_ROLES.find((item) => item === role);
-  return known || role;
+  if (known) return known;
+  const mapped = ROLE_LABELS[role.toLowerCase()];
+  if (mapped) return mapped;
+  return role;
 }
 type Store = {
   secret: string;
@@ -23,6 +43,7 @@ type Store = {
   sessions: Record<string, string>;
   /** O‘chirilgan loginlar — SEED_AGENTS ularni qayta yaratmasin. */
   removedLogins?: string[];
+  updatedAt?: number;
 };
 
 const sessions = new Map<string, string>();
@@ -34,18 +55,106 @@ function same(left: string, right: string) {
   return timingSafeEqual(a, b);
 }
 
-function write(store: Store) {
+function normalizeStore(raw: Partial<Store> | null | undefined): Store | null {
+  if (!raw?.secret || !Array.isArray(raw.accounts)) return null;
+  return {
+    secret: raw.secret,
+    accounts: raw.accounts,
+    sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {},
+    removedLogins: Array.isArray(raw.removedLogins)
+      ? [...new Set(raw.removedLogins.map((l) => String(l).toLowerCase().trim()).filter(Boolean))]
+      : [],
+    updatedAt: Number(raw.updatedAt) || 0,
+  };
+}
+
+/** Disk + DB farqida o‘chirishlar yo‘qolmasin: removedLogins birlashtiriladi. */
+function mergeAccountStores(primary: Store, secondary: Store | null): Store {
+  const removed = new Set<string>([
+    ...(primary.removedLogins || []),
+    ...(secondary?.removedLogins || []),
+  ]);
+  const byLogin = new Map<string, Account>();
+  for (const a of secondary?.accounts || []) byLogin.set(a.login.toLowerCase(), a);
+  for (const a of primary.accounts) byLogin.set(a.login.toLowerCase(), a);
+  for (const login of removed) {
+    if (login === "bordouzadmin") continue;
+    byLogin.delete(login);
+  }
+  return {
+    secret: primary.secret || secondary?.secret || randomBytes(24).toString("base64url"),
+    accounts: [...byLogin.values()],
+    sessions: { ...(secondary?.sessions || {}), ...primary.sessions },
+    removedLogins: [...removed],
+    updatedAt: Math.max(primary.updatedAt || 0, secondary?.updatedAt || 0, Date.now()),
+  };
+}
+
+function writeFileOnly(store: Store) {
   memory = store;
   mkdirSync(path.dirname(FILE), { recursive: true });
   const tmp = `${FILE}.tmp`;
   writeFileSync(tmp, JSON.stringify(store));
   renameSync(tmp, FILE);
-  void pool
-    .query(
-      "insert into partner_store (id, document, updated_at) values ('accounts', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
-      [JSON.stringify(store)],
-    )
-    .catch(() => undefined);
+}
+
+async function persistDb(store: Store) {
+  await pool.query(
+    "insert into partner_store (id, document, updated_at) values ('accounts', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+    [JSON.stringify(store)],
+  );
+}
+
+function write(store: Store) {
+  store.updatedAt = Date.now();
+  writeFileOnly(store);
+  void persistDb(store).catch(() => undefined);
+}
+
+async function writeReliable(store: Store) {
+  store.updatedAt = Date.now();
+  writeFileOnly(store);
+  try {
+    await persistDb(store);
+  } catch {
+    /* disk allaqachon yozilgan — keyingi hydrate merge qiladi */
+  }
+}
+
+async function deactivateKpiAgent(login: string) {
+  const key = login.trim().toLowerCase();
+  if (!key || key === "bordouzadmin" || key === "ofis" || key === "vanseling") return;
+  try {
+    await pool.query(
+      `update kpi_agents
+       set status = 'inactive',
+           notes = case
+             when notes is null or notes = '' then 'removed-from-staff'
+             when notes like '%removed-from-staff%' then notes
+             else notes || ' | removed-from-staff'
+           end
+       where lower(login) = $1 and status <> 'inactive'`,
+      [key],
+    );
+  } catch {
+    /* KPI jadvali bo‘lmasa ham xodim o‘chishi kerak */
+  }
+}
+
+async function reactivateKpiAgent(login: string) {
+  const key = login.trim().toLowerCase();
+  if (!key) return;
+  try {
+    await pool.query(
+      `update kpi_agents
+       set status = 'active',
+           notes = replace(replace(coalesce(notes, ''), ' | removed-from-staff', ''), 'removed-from-staff', '')
+       where lower(login) = $1 and status = 'inactive'`,
+      [key],
+    );
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function hydrateLocalAccounts() {
@@ -57,32 +166,41 @@ export async function hydrateLocalAccounts() {
         updated_at timestamptz not null default now()
       )
     `);
-    const res = await pool.query<{ document: Partial<Store> }>(
-      "select document from partner_store where id = 'accounts'",
+    const res = await pool.query<{ document: Partial<Store>; updated_at: Date }>(
+      "select document, updated_at from partner_store where id = 'accounts'",
     );
-    const remote = res.rows[0]?.document;
-    if (remote && remote.secret && Array.isArray(remote.accounts) && remote.accounts.length > 0) {
-      memory = {
-        secret: remote.secret,
-        accounts: remote.accounts,
-        sessions: remote.sessions && typeof remote.sessions === "object" ? remote.sessions : {},
-        removedLogins: Array.isArray(remote.removedLogins)
-          ? remote.removedLogins.map((l) => String(l).toLowerCase())
-          : [],
-      };
-      ensureAdmin(memory);
-      for (const [token, login] of Object.entries(memory.sessions)) sessions.set(token, login);
-      write(memory);
-      return;
+    const remoteRaw = res.rows[0]?.document;
+    const remoteUpdated = res.rows[0]?.updated_at ? new Date(res.rows[0].updated_at).getTime() : 0;
+    const remote = normalizeStore(remoteRaw);
+    if (remote) remote.updatedAt = Math.max(remote.updatedAt || 0, remoteUpdated);
+
+    let disk: Store | null = null;
+    try {
+      disk = normalizeStore(JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>);
+      if (disk) {
+        const mtime = statSync(FILE).mtimeMs;
+        disk.updatedAt = Math.max(disk.updatedAt || 0, mtime);
+      }
+    } catch {
+      disk = null;
     }
-    const current = read();
-    if (ensureAdmin(current)) write(current);
-    else {
-      await pool.query(
-        "insert into partner_store (id, document, updated_at) values ('accounts', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
-        [JSON.stringify(current)],
-      );
+
+    if (remote && disk) {
+      // Yangiroq manba asosiy; removedLogins ikkalasidan birlashadi.
+      const primary = (disk.updatedAt || 0) >= (remote.updatedAt || 0) ? disk : remote;
+      const secondary = primary === disk ? remote : disk;
+      memory = mergeAccountStores(primary, secondary);
+    } else if (remote) {
+      memory = remote;
+    } else if (disk) {
+      memory = disk;
+    } else {
+      memory = readDisk();
     }
+
+    ensureAdmin(memory);
+    for (const [token, login] of Object.entries(memory.sessions)) sessions.set(token, login);
+    await writeReliable(memory);
   } catch {
     /* ignore db init error */
   }
@@ -98,17 +216,8 @@ export function verifyLocalAgentCredentials(login: string, password: string): Ac
 
 function readDisk(): Store {
   try {
-    const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
-    if (parsed.secret && Array.isArray(parsed.accounts)) {
-      return {
-        secret: parsed.secret,
-        accounts: parsed.accounts,
-        sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {},
-        removedLogins: Array.isArray(parsed.removedLogins)
-          ? parsed.removedLogins.map((l) => String(l).toLowerCase())
-          : [],
-      };
-    }
+    const parsed = normalizeStore(JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>);
+    if (parsed) return parsed;
   } catch {
     /* first run */
   }
@@ -117,6 +226,7 @@ function readDisk(): Store {
     accounts: [{ id: "admin", name: "Administrator", login: "bordouzadmin", password: "2026@admin", role: "super_admin" }],
     sessions: {},
     removedLogins: [],
+    updatedAt: Date.now(),
   };
   write(store);
   return store;
@@ -151,6 +261,12 @@ function ensureAdmin(store: Store): boolean {
     changed = true;
   }
   const removed = new Set(store.removedLogins.map((l) => l.toLowerCase()));
+  const before = store.accounts.length;
+  store.accounts = store.accounts.filter(
+    (a) => a.login.toLowerCase() === "bordouzadmin" || !removed.has(a.login.toLowerCase()),
+  );
+  if (store.accounts.length !== before) changed = true;
+
   const admin = store.accounts.find((account) => account.login === "bordouzadmin");
   if (admin) {
     // Parolni majburan qayta yozmaymiz — admin o‘zgartirgan bo‘lsa saqlanadi.
@@ -299,7 +415,7 @@ router.get("/local-accounts", (req, res) => {
   res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
-router.post("/local-accounts", (req, res) => {
+router.post("/local-accounts", async (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   const login = String(req.body?.login ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
@@ -307,37 +423,38 @@ router.post("/local-accounts", (req, res) => {
   const phone = String(req.body?.phone ?? "").trim();
   const role = normalizeRole(String(req.body?.role ?? ""));
   if (!login || password.length < 4 || !role) {
-    res.status(400).json({ error: "invalid" });
+    res.status(400).json({ error: "Login, parol (min 4) va lavozim majburiy." });
     return;
   }
   const store = read();
   if (store.accounts.some((account) => account.login.toLowerCase() === login)) {
-    res.status(409).json({ error: "exists" });
+    res.status(409).json({ error: "Bu login band." });
     return;
   }
   clearRemovedLogin(store, login);
   store.accounts.push({ id: randomUUID(), name, login, password, role, phone });
-  write(store);
+  await writeReliable(store);
+  await reactivateKpiAgent(login);
   res.status(201).json(store.accounts.map(({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone }) => ({ id, name: accountName, login: accountLogin, password: accountPassword, role: accountRole, phone: accountPhone || "" })));
 });
 
-router.patch("/local-accounts/:id", (req, res) => {
+router.patch("/local-accounts/:id", async (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   const store = read();
   const target = store.accounts.find((account) => account.id === req.params.id);
   if (!target) {
-    res.status(404).json({ error: "not_found" });
+    res.status(404).json({ error: "Xodim topilmadi." });
     return;
   }
   if (target.login === "bordouzadmin") {
     if (req.body?.name) target.name = String(req.body.name).trim() || target.name;
-    write(store);
-    res.json(store.accounts);
+    await writeReliable(store);
+    res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
     return;
   }
   const nextLogin = req.body?.login ? String(req.body.login).trim().toLowerCase() : target.login;
   if (nextLogin !== target.login && store.accounts.some((a) => a.id !== target.id && a.login.toLowerCase() === nextLogin)) {
-    res.status(409).json({ error: "exists" });
+    res.status(409).json({ error: "Bu login band." });
     return;
   }
   const oldLogin = target.login;
@@ -352,23 +469,24 @@ router.patch("/local-accounts/:id", (req, res) => {
     target.password = String(req.body.password);
     forgetLogin(oldLogin);
   }
-  write(store);
+  await writeReliable(store);
   res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
-router.delete("/local-accounts/:id", (req, res) => {
+router.delete("/local-accounts/:id", async (req, res) => {
   const current = requireOfficeDirector(req, res);
   if (!current) return;
   const store = read();
   const target = store.accounts.find((account) => account.id === req.params.id);
   if (!target || target.id === current.id || target.login === "bordouzadmin") {
-    res.status(400).json({ error: "invalid" });
+    res.status(400).json({ error: "Bu xodimni o‘chirib bo‘lmaydi." });
     return;
   }
   markRemovedLogin(store, target.login);
   store.accounts = store.accounts.filter((account) => account.id !== target.id);
-  write(store);
+  await writeReliable(store);
   forgetLogin(target.login);
+  await deactivateKpiAgent(target.login);
   res.json(store.accounts.map(({ id, name, login, password, role, phone }) => ({ id, name, login, password, role, phone: phone || "" })));
 });
 
