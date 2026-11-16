@@ -339,9 +339,9 @@ function dmyToIso(raw: string) {
 }
 
 function DateDmyInput({
-  value, onChange, label,
+  value, onChange, ariaLabel,
 }: {
-  value: string; onChange: (iso: string) => void; label: string;
+  value: string; onChange: (iso: string) => void; ariaLabel: string;
 }) {
   const [text, setText] = useState(() => isoToDmy(value));
   const pickerRef = useRef<HTMLInputElement | null>(null);
@@ -359,8 +359,7 @@ function DateDmyInput({
     }
   };
   return (
-    <label className="kpi-date-field">
-      <span>{label}</span>
+    <div className="kpi-date-field">
       <div className="kpi-date-combo">
         <input
           type="text"
@@ -369,6 +368,7 @@ function DateDmyInput({
           placeholder="DD/MM/YYYY"
           lang="uz"
           autoComplete="off"
+          aria-label={ariaLabel}
           value={text}
           onChange={(e) => {
             const next = e.target.value;
@@ -386,7 +386,7 @@ function DateDmyInput({
             }
           }}
         />
-        <button type="button" className="kpi-date-cal" aria-label="Kalendardan tanlash" onClick={openPicker}>
+        <button type="button" className="kpi-date-cal" aria-label={`${ariaLabel} — kalendar`} onClick={openPicker}>
           <CalendarRange size={15} />
         </button>
         <input
@@ -405,7 +405,7 @@ function DateDmyInput({
           aria-hidden
         />
       </div>
-    </label>
+    </div>
   );
 }
 
@@ -458,9 +458,9 @@ function PeriodBar({
           </div>
         </div>
         <div className="kpi-period-bar">
-          <DateDmyInput label="Dan" value={from} onChange={onFrom} />
+          <DateDmyInput ariaLabel="Boshlanish sanasi" value={from} onChange={onFrom} />
           <span className="kpi-period-dash" aria-hidden>—</span>
-          <DateDmyInput label="Gacha" value={to} onChange={onTo} />
+          <DateDmyInput ariaLabel="Tugash sanasi" value={to} onChange={onTo} />
           <button type="button" className="btn btn-primary kpi-sync-btn" disabled={syncing} onClick={onSync}>
             <RefreshCw size={15} className={syncing ? 'kpi-spin' : undefined} />
             {syncing ? 'Yangilanmoqda…' : 'MS yangilash'}
@@ -545,17 +545,12 @@ export function KpiDashboardPage() {
     setFrom(range.from);
     setTo(range.to);
   };
-  const presetLabel = PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus';
   return (
     <div className="kpi-page kpi-dash" data-testid="page-kpi-dashboard">
       <header className="kpi-head kpi-dash-head">
         <div className="kpi-dash-title">
           <div className="kpi-dash-title-row">
             <h1>KPI boshqaruv</h1>
-            <span className="kpi-period-badge">
-              <CalendarRange size={13} />
-              {presetLabel} · {isoToDmy(from)} — {isoToDmy(to)}
-            </span>
           </div>
         </div>
         <div className="kpi-actions">
@@ -574,10 +569,10 @@ export function KpiDashboardPage() {
       {msWarming ? <p className="kpi-status-banner">Tez yuklanmoqda…</p> : null}
       {d ? (
         <div className="kpi-grid kpi-grid-4">
-          <Card label="Agentlar" value={d.agentsActive} hint="Faol savdo agentlari" tone="blue" icon={<Users size={16} />} />
-          <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} hint="To‘lov tasdiqlangan komissiya" tone="ok" icon={<Banknote size={16} />} />
-          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} hint="Hali tasdiqlanmagan" tone="warn" icon={<Wallet size={16} />} />
-          <Card label="KPI jami" value={uzs(d.kpiAccrued)} hint="Tanlangan davr bo‘yicha jami" tone="purple" icon={<Gauge size={16} />} />
+          <Card label="Agentlar" value={d.agentsActive} tone="blue" icon={<Users size={16} />} />
+          <Card label="KPI tasdiqlangan" value={uzs(d.kpiConfirmed)} tone="ok" icon={<Banknote size={16} />} />
+          <Card label="KPI kutilmoqda" value={uzs(d.kpiPending)} tone="warn" icon={<Wallet size={16} />} />
+          <Card label="KPI jami" value={uzs(d.kpiAccrued)} tone="purple" icon={<Gauge size={16} />} />
         </div>
       ) : null}
       <section className="kpi-panel kpi-agents-panel">
@@ -729,21 +724,13 @@ export function KpiAgentsPage() {
     setFrom(range.from);
     setTo(range.to);
   };
-  const presetLabel = PERIOD_PRESETS.find((p) => p.id === preset)?.label || 'Maxsus';
   return (
     <div className="kpi-page kpi-dash" data-testid="page-kpi-agents">
       <header className="kpi-head kpi-dash-head">
         <div className="kpi-dash-title">
           <div className="kpi-dash-title-row">
             <h1>Agentlar va mijozlar</h1>
-            <span className="kpi-period-badge">
-              <CalendarRange size={13} />
-              {presetLabel} · {isoToDmy(from)} — {isoToDmy(to)}
-            </span>
           </div>
-          <p className="kpi-muted" style={{ margin: '.35rem 0 0' }}>
-            KPI, kirim va chiqim tanlangan davr bo‘yicha hisoblanadi (3 bosqich: 3% / 2% / 1%).
-          </p>
         </div>
         <div className="kpi-actions">
           <div className="kpi-seg">
@@ -763,7 +750,7 @@ export function KpiAgentsPage() {
         onSync={() => sync.mutate()}
       />
       {sub === 'agents' ? (
-        <AgentsSection from={from} to={to} preset={preset} periodLabel={presetLabel} />
+        <AgentsSection from={from} to={to} preset={preset} />
       ) : (
         <CustomersSection />
       )}
@@ -774,9 +761,9 @@ export function KpiAgentsPage() {
 export const KpiCustomersPage = KpiAgentsPage;
 
 function AgentsSection({
-  from, to, preset, periodLabel,
+  from, to, preset,
 }: {
-  from: string; to: string; preset: PeriodPreset; periodLabel: string;
+  from: string; to: string; preset: PeriodPreset;
 }) {
   const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}`;
   const list = useQuery({
@@ -824,28 +811,24 @@ function AgentsSection({
         <Card
           label="Agentlar"
           value={`${totals.ready}/${totals.all || rows.length}`}
-          hint={`${periodLabel} · ${isoToDmy(from)} — ${isoToDmy(to)}`}
           tone="blue"
           icon={<Users size={16} />}
         />
         <Card
-          label="Kirim (davr)"
+          label="Kirim"
           value={msWarming && totals.kirim === 0 ? '…' : uzs(totals.kirim)}
-          hint="MS Приход jami"
           tone="ok"
           icon={<Banknote size={16} />}
         />
         <Card
-          label="Chiqim (davr)"
+          label="Chiqim"
           value={msWarming && totals.chiqim === 0 ? '…' : uzs(totals.chiqim)}
-          hint="MS Расход jami"
           tone="blue"
           icon={<Wallet size={16} />}
         />
         <Card
           label="KPI jami"
           value={uzs(totals.kpi)}
-          hint="3 bosqich foizi · tanlangan muddat"
           tone="purple"
           icon={<Gauge size={16} />}
         />
