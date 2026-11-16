@@ -68,7 +68,12 @@ router.post("/office/face", (req, res) => {
   const accuracy = Number(req.body?.accuracy);
   const dist = officeDistance(lat, lng);
   if (!insideOffice(lat, lng, accuracy)) {
-    res.status(403).json({ error: "radius", meters: Math.round(Number.isFinite(dist) ? dist : 0) });
+    const badGeo = !Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(accuracy) || accuracy <= 0;
+    res.status(badGeo ? 400 : 403).json({
+      error: badGeo ? "geo" : "radius",
+      meters: Math.round(Number.isFinite(dist) ? dist : 0),
+      accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null,
+    });
     return;
   }
   try {
@@ -88,6 +93,9 @@ router.post("/office/punch", (req, res) => {
   if (!user) return;
   const kind = String(req.body?.kind ?? "") === "out" ? "out" : "in";
   const method = String(req.body?.method ?? "") === "qr" ? "qr" : "face";
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  const accuracy = Number(req.body?.accuracy);
   try {
     const faceHashes = Array.isArray(req.body?.faceHashes)
       ? req.body.faceHashes.map((item: unknown) => String(item ?? ""))
@@ -96,9 +104,9 @@ router.post("/office/punch", (req, res) => {
       accountId: user.id,
       kind,
       method,
-      lat: Number(req.body?.lat),
-      lng: Number(req.body?.lng),
-      accuracy: Number(req.body?.accuracy),
+      lat,
+      lng,
+      accuracy,
       faceHash: String(req.body?.faceHash ?? ""),
       faceHashes,
       qrToken: String(req.body?.qrToken ?? ""),
@@ -107,8 +115,12 @@ router.post("/office/punch", (req, res) => {
   } catch (error) {
     const code = error instanceof Error ? error.message : "rejected";
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
-    const dist = officeDistance(Number(req.body?.lat), Number(req.body?.lng));
-    res.status(status || 400).json({ error: code, meters: Math.round(Number.isFinite(dist) ? dist : 0) });
+    const dist = officeDistance(lat, lng);
+    res.status(status || 400).json({
+      error: code,
+      meters: Math.round(Number.isFinite(dist) ? dist : 0),
+      accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null,
+    });
   }
 });
 

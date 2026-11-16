@@ -112,6 +112,7 @@ export function OfficeReportPage() {
   const [to, setTo] = useState(today);
   const [data, setData] = useState<Tabel | null>(null);
   const [qr, setQr] = useState('');
+  const [officeGeo, setOfficeGeo] = useState('41.219353, 69.272828 · 100 m');
   const [load, setLoad] = useState(true);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
@@ -173,6 +174,13 @@ export function OfficeReportPage() {
     void fetch('/api/office/qr', { headers: officeHeaders() }).then(async response => {
       if (response.ok) setQr((await response.json() as { token: string }).token);
     });
+    void fetch('/api/office/me', { headers: officeHeaders() }).then(async response => {
+      if (!response.ok) return;
+      const body = await response.json() as { office?: { lat: number; lng: number; radiusM: number } };
+      if (body.office) {
+        setOfficeGeo(`${body.office.lat}, ${body.office.lng} · ${body.office.radiusM} m`);
+      }
+    }).catch(() => undefined);
   }, []);
   useEffect(() => {
     if (mode !== 'day' || day !== today) return;
@@ -240,7 +248,7 @@ export function OfficeReportPage() {
       office: t('office.officeName'),
       title: t('office.qrPaper'),
       hint: t('office.qrPaperHint'),
-      geo: '41.258556, 69.150964 · 100 m',
+      geo: officeGeo,
     });
   };
 

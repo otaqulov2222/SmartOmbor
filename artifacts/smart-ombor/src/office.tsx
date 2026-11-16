@@ -296,12 +296,16 @@ export function OfficePage() {
             : nearOffice && !gpsAccurate
               ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
               : t('office.distFar', { m: Math.round(meters || 0) });
-  const canPunch = Boolean(inZone && gps && !busy);
+  const alreadyIn = Boolean(me?.today?.inAt);
+  const alreadyOut = Boolean(me?.today?.outAt);
+  const nextKind: 'in' | 'out' = alreadyIn && !alreadyOut ? 'out' : 'in';
+  const canIn = Boolean(inZone && gps && !busy && !alreadyIn && !alreadyOut);
+  const canOut = Boolean(inZone && gps && !busy && alreadyIn && !alreadyOut);
+  const canPunch = nextKind === 'in' ? canIn : canOut;
   const worked = me?.today?.inAt
     ? (me.today.outAt ? me.today.workedMs : Date.now() - Date.parse(me.today.inAt))
     : 0;
   const day = heading(me?.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()), t('date.weekdaysLong'), t('date.months'));
-  const nextKind: 'in' | 'out' = me?.today?.inAt && !me.today.outAt ? 'out' : 'in';
   const week = weekBounds(me?.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()));
   const ranges: Array<{ id: 'day' | 'week' | 'month'; key: TKey }> = [
     { id: 'day', key: 'office.day' },
@@ -378,9 +382,14 @@ export function OfficePage() {
         setNote(t('office.distFar', { m: Math.round(payload.meters || meters || 0) }));
         return false;
       }
+      if (payload.error === 'geo') {
+        setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) }));
+        return false;
+      }
       const map: Record<string, TKey> = {
         radius: 'office.far', face: 'office.faceBad', enroll: 'office.needFace', qr: 'office.qrBad',
         'already-in': 'office.alreadyIn', 'already-out': 'office.alreadyOut', 'need-in': 'office.needIn',
+        'too-soon': 'office.tooSoon', busy: 'office.busy', method: 'office.fail', kind: 'office.fail',
       };
       setNote(t(map[payload.error || ''] || 'office.fail'));
       return false;
@@ -456,6 +465,9 @@ export function OfficePage() {
     if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
     if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
     if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
+    if (kind === 'in' && (alreadyIn || alreadyOut)) { setNote(t(alreadyOut ? 'office.alreadyOut' : 'office.alreadyIn')); return; }
+    if (kind === 'out' && !alreadyIn) { setNote(t('office.needIn')); return; }
+    if (kind === 'out' && alreadyOut) { setNote(t('office.alreadyOut')); return; }
     punchKind.current = kind;
     setMethod(used);
     setNote('');
@@ -499,6 +511,7 @@ export function OfficePage() {
   };
 
   const goPunch = async () => {
+    if (alreadyOut) { setNote(t('office.alreadyOut')); return; }
     if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
     if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
     if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
@@ -577,7 +590,7 @@ export function OfficePage() {
       </div>
       <div ref={markRef} id="office-mark" className="office-block">
         <div className="office-pair">
-          <button type="button" className="office-go is-in" disabled={!canPunch} onClick={() => void openStage('in', method)}>
+          <button type="button" className="office-go is-in" disabled={!canIn} onClick={() => void openStage('in', method)}>
             <span>
               <b>{t('office.in')} <Clock size={13}/></b>
               <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
@@ -585,7 +598,7 @@ export function OfficePage() {
             </span>
             <LogIn size={18} className="office-go-arrow"/>
           </button>
-          <button type="button" className="office-go is-out" disabled={!canPunch} onClick={() => void openStage('out', method)}>
+          <button type="button" className="office-go is-out" disabled={!canOut} onClick={() => void openStage('out', method)}>
             <span>
               <b>{t('office.out')} <Clock size={13}/></b>
               <em>{me?.today?.outAt ? time(me.today.outAt) : '—'}</em>
@@ -619,25 +632,29 @@ export function OfficePage() {
             <b>QR Scanner</b><small>{t('office.qrHint')}</small>
           </button>
         </div>
-        <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy} onClick={() => void goPunch()}>
-          <b>→ {!canPunch
-            ? t('office.locked')
-            : ctaNeedCam
-              ? t('office.camAsk')
-              : method === 'face' && !me?.face
-                ? t('office.enrollSave')
-                : t('office.continue')}</b>
-          <small>{!canPunch
-            ? (gpsState === 'denied' || !gps
-              ? t('office.lockedGps')
-              : nearOffice && !gpsAccurate
-                ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
-                : t('office.distFar', { m: Math.round(meters || 0) }))
-            : ctaNeedCam
-              ? t('office.camBody')
-              : method === 'face'
-                ? (me?.face ? t('office.faceGo') : t('office.faceEnroll'))
-                : t('office.qrHint')}</small>
+        <button type="button" className={`office-cam ${canPunch ? '' : 'is-locked'}`} disabled={busy || alreadyOut} onClick={() => void goPunch()}>
+          <b>→ {alreadyOut
+            ? t('office.alreadyOut')
+            : !canPunch
+              ? t('office.locked')
+              : ctaNeedCam
+                ? t('office.camAsk')
+                : method === 'face' && !me?.face
+                  ? t('office.enrollSave')
+                  : t('office.continue')}</b>
+          <small>{alreadyOut
+            ? t('office.doneDay')
+            : !canPunch
+              ? (gpsState === 'denied' || !gps
+                ? t('office.lockedGps')
+                : nearOffice && !gpsAccurate
+                  ? t('office.gpsBad', { m: Math.round(gps?.accuracy || 0) })
+                  : t('office.distFar', { m: Math.round(meters || 0) }))
+              : ctaNeedCam
+                ? t('office.camBody')
+                : method === 'face'
+                  ? (me?.face ? t('office.faceGo') : t('office.faceEnroll'))
+                  : t('office.qrHint')}</small>
         </button>
       </div>
       <div ref={historyRef} id="office-history" className="office-card office-block">

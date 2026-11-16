@@ -4,11 +4,16 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 
-export const OFFICE_LAT = 41.258556;
-export const OFFICE_LNG = 69.150964;
-export const OFFICE_RADIUS_M = 100;
+/** Test / asosiy ofis (Toshkent). Env bilan almashtirish mumkin. */
+export const OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.219353;
+export const OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.272828;
+export const OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
 /** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
-export const OFFICE_ACCURACY_M = 500;
+export const OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
+/** Keldim → Ketdim orasidagi minimal vaqt (tasodifiy ikki marta bosish). */
+const MIN_SHIFT_MS = 60_000;
+/** Bir xodim uchun parallel punch so‘rovlarini bloklash. */
+const punchLocks = new Set<string>();
 
 export type PunchMethod = "face" | "qr";
 export type PunchKind = "in" | "out";
@@ -193,12 +198,20 @@ export function officeDistance(lat: number, lng: number) {
   return metersBetween(lat, lng, OFFICE_LAT, OFFICE_LNG);
 }
 
-export function insideOffice(lat: number, lng: number, accuracy?: number) {
+export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  // Null Island / aniq 0,0 — spoof yoki bo‘sh payload.
+  if (lat === 0 && lng === 0) return false;
   const acc = Number(accuracy);
   // Real GPS always reports accuracy > 0. Missing/0 means spoofed or stale client payload.
   if (!Number.isFinite(acc) || acc <= 0 || acc > OFFICE_ACCURACY_M) return false;
+  return true;
+}
+
+export function insideOffice(lat: number, lng: number, accuracy?: number) {
+  if (!geoPayloadOk(lat, lng, accuracy)) return false;
+  const acc = Number(accuracy);
   const dist = officeDistance(lat, lng);
   // Nuqta radius ichida — ofisda. Accuracy doirasini radiusga “sig‘dirish” binoda 40–80 m
   // masofani ham blok qilardi (masalan 44 m + accuracy/2).
@@ -312,59 +325,71 @@ export function punch(input: {
   faceHashes?: string[];
   qrToken?: string;
 }) {
+  const accountId = String(input.accountId || "").trim();
+  if (!accountId) throw Object.assign(new Error("auth"), { status: 401 });
+  if (input.kind !== "in" && input.kind !== "out") {
+    throw Object.assign(new Error("kind"), { status: 400 });
+  }
+  if (input.method !== "face" && input.method !== "qr") {
+    throw Object.assign(new Error("method"), { status: 400 });
+  }
+  if (!geoPayloadOk(input.lat, input.lng, input.accuracy)) {
+    throw Object.assign(new Error("geo"), { status: 400 });
+  }
   if (!insideOffice(input.lat, input.lng, input.accuracy)) {
     throw Object.assign(new Error("radius"), { status: 403 });
   }
-  if (input.method === "face") {
-    if (!faceEnrolled(input.accountId)) throw Object.assign(new Error("enroll"), { status: 409 });
-    const probes = [
-      ...(Array.isArray(input.faceHashes) ? input.faceHashes : []),
-      String(input.faceHash || ""),
-    ];
-    if (!faceMatches(input.accountId, probes)) throw Object.assign(new Error("face"), { status: 403 });
-  } else if (input.method === "qr") {
-    if (!qrTokenOk(String(input.qrToken || ""))) throw Object.assign(new Error("qr"), { status: 403 });
-  } else {
-    throw Object.assign(new Error("method"), { status: 400 });
+  if (punchLocks.has(accountId)) {
+    throw Object.assign(new Error("busy"), { status: 429 });
   }
-  const store = load();
-  const day = tashkentParts().date;
-  const now = new Date().toISOString();
-  let row = store.punches.find((item) => item.accountId === input.accountId && item.date === day);
-  if (!row) {
-    row = {
-      id: randomUUID(),
-      accountId: input.accountId,
-      date: day,
-      inAt: null,
-      outAt: null,
-      inMethod: null,
-      outMethod: null,
-      inLat: null,
-      inLng: null,
-      outLat: null,
-      outLng: null,
-      note: "",
-      excuse: "",
-    };
-    store.punches.push(row);
+  punchLocks.add(accountId);
+  try {
+    if (input.method === "face") {
+      if (!faceEnrolled(accountId)) throw Object.assign(new Error("enroll"), { status: 409 });
+      const probes = [
+        ...(Array.isArray(input.faceHashes) ? input.faceHashes : []),
+        String(input.faceHash || ""),
+      ];
+      if (!faceMatches(accountId, probes)) throw Object.assign(new Error("face"), { status: 403 });
+    } else if (!qrTokenOk(String(input.qrToken || ""))) {
+      throw Object.assign(new Error("qr"), { status: 403 });
+    }
+
+    const store = load();
+    const day = tashkentParts().date;
+    const nowIso = new Date().toISOString();
+    let row = store.punches.find((item) => item.accountId === accountId && item.date === day);
+    if (!row) {
+      row = emptyPunch(accountId, day);
+      store.punches.push(row);
+    }
+
+    if (input.kind === "in") {
+      if (row.inAt) throw Object.assign(new Error("already-in"), { status: 409 });
+      if (row.outAt) throw Object.assign(new Error("already-out"), { status: 409 });
+      row.inAt = nowIso;
+      row.inMethod = input.method;
+      row.inLat = input.lat;
+      row.inLng = input.lng;
+      // Ofisga keldi — dam/kasallik belgisini yechamiz (real punch ustun).
+      if (row.excuse) row.excuse = "";
+    } else {
+      if (!row.inAt) throw Object.assign(new Error("need-in"), { status: 409 });
+      if (row.outAt) throw Object.assign(new Error("already-out"), { status: 409 });
+      const inMs = Date.parse(row.inAt);
+      if (Number.isFinite(inMs) && Date.now() - inMs < MIN_SHIFT_MS) {
+        throw Object.assign(new Error("too-soon"), { status: 409 });
+      }
+      row.outAt = nowIso;
+      row.outMethod = input.method;
+      row.outLat = input.lat;
+      row.outLng = input.lng;
+    }
+    save(store);
+    return row;
+  } finally {
+    punchLocks.delete(accountId);
   }
-  if (input.kind === "in") {
-    if (row.inAt) throw Object.assign(new Error("already-in"), { status: 409 });
-    row.inAt = now;
-    row.inMethod = input.method;
-    row.inLat = input.lat;
-    row.inLng = input.lng;
-  } else {
-    if (!row.inAt) throw Object.assign(new Error("need-in"), { status: 409 });
-    if (row.outAt) throw Object.assign(new Error("already-out"), { status: 409 });
-    row.outAt = now;
-    row.outMethod = input.method;
-    row.outLat = input.lat;
-    row.outLng = input.lng;
-  }
-  save(store);
-  return row;
 }
 
 export function punchesFor(accountId: string, from: string, to: string) {
