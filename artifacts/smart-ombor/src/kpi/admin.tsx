@@ -861,7 +861,6 @@ function AgentsSection({
               <th className="is-num">Chiqim</th>
               <th className="is-num">Reja %</th>
               <th className="is-num">KPI</th>
-              <th>Davr</th>
             </tr>
           </thead>
           <tbody>
@@ -879,22 +878,17 @@ function AgentsSection({
                   <td data-label="Chiqim" className="is-num">{pending ? '…' : uzs(a.salesTotal)}</td>
                   <td data-label="Reja %" className="is-num">{a.planPct != null ? `${a.planPct}%` : '—'}</td>
                   <td data-label="KPI" className="is-num"><b className="is-ok">{uzs(a.kpiTotal)}</b></td>
-                  <td data-label="Davr">
-                    <span className="kpi-period-badge" style={{ fontSize: '.78rem' }}>
-                      {isoToDmy(a.periodStart || from)} — {isoToDmy(a.periodEnd || to)}
-                    </span>
-                  </td>
                 </tr>
               );
             })}
             {!sorted.length && !list.isLoading ? (
               <tr>
-                <td colSpan={8} className="kpi-muted">Agentlar topilmadi.</td>
+                <td colSpan={7} className="kpi-muted">Agentlar topilmadi.</td>
               </tr>
             ) : null}
             {list.isLoading ? (
               <tr>
-                <td colSpan={8} className="kpi-muted">Yuklanmoqda…</td>
+                <td colSpan={7} className="kpi-muted">Yuklanmoqda…</td>
               </tr>
             ) : null}
           </tbody>
@@ -907,7 +901,6 @@ function AgentsSection({
                 <td className="is-num"><b>{uzs(totals.chiqim)}</b></td>
                 <td />
                 <td className="is-num"><b className="is-ok">{uzs(totals.kpi)}</b></td>
-                <td />
               </tr>
             </tfoot>
           ) : null}
