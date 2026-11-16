@@ -350,7 +350,6 @@ function useMsSync(from?: string, to?: string, preset?: PeriodPreset) {
   });
 }
 
-const PERIOD_PRIMARY: PeriodPreset[] = ['today', 'week', 'month', 'days30', 'quarter'];
 const PERIOD_SECONDARY: PeriodPreset[] = ['yesterday', 'last_week', 'last_month', 'days7', 'year', 'custom'];
 
 /** ISO yyyy-mm-dd ↔ ko‘rinish: dd/mm/yyyy (UZ standart). */
@@ -453,8 +452,6 @@ function PeriodBar({
   onSync: () => void; syncing: boolean;
   compact?: boolean;
 }) {
-  const primary = PERIOD_PRESETS.filter((p) => PERIOD_PRIMARY.includes(p.id));
-  const secondary = PERIOD_PRESETS.filter((p) => PERIOD_SECONDARY.includes(p.id));
   return (
     <div className={`kpi-period-wrap${compact ? ' is-compact' : ''}`}>
       <div className="kpi-period-toolbar">
@@ -463,28 +460,14 @@ function PeriodBar({
             <CalendarRange size={15} />
             <span>Davr</span>
           </div>
-          <div className="kpi-period-presets" role="tablist" aria-label="Asosiy davr">
-            {primary.map((p) => (
+          <div className="kpi-period-rail" role="tablist" aria-label="Davr tanlash">
+            {PERIOD_PRESETS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 role="tab"
                 aria-selected={preset === p.id}
-                className={preset === p.id ? 'is-on' : ''}
-                onClick={() => onPreset(p.id)}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div className="kpi-period-presets is-secondary" role="tablist" aria-label="Boshqa davr">
-            {secondary.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                role="tab"
-                aria-selected={preset === p.id}
-                className={preset === p.id ? 'is-on' : ''}
+                className={`kpi-period-chip${preset === p.id ? ' is-on' : ''}${PERIOD_SECONDARY.includes(p.id) ? ' is-soft' : ''}`}
                 onClick={() => onPreset(p.id)}
               >
                 {p.label}
@@ -493,9 +476,11 @@ function PeriodBar({
           </div>
         </div>
         <div className="kpi-period-bar">
-          <DateDmyInput ariaLabel="Boshlanish sanasi" value={from} onChange={onFrom} />
-          <span className="kpi-period-dash" aria-hidden>—</span>
-          <DateDmyInput ariaLabel="Tugash sanasi" value={to} onChange={onTo} />
+          <div className="kpi-period-range">
+            <DateDmyInput ariaLabel="Boshlanish sanasi" value={from} onChange={onFrom} />
+            <span className="kpi-period-dash" aria-hidden>—</span>
+            <DateDmyInput ariaLabel="Tugash sanasi" value={to} onChange={onTo} />
+          </div>
           <button type="button" className="btn btn-primary kpi-sync-btn" disabled={syncing} onClick={onSync}>
             <RefreshCw size={15} className={syncing ? 'kpi-spin' : undefined} />
             {syncing ? 'Yangilanmoqda…' : 'MS yangilash'}

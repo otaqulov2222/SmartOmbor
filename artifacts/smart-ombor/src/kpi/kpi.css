@@ -26,79 +26,117 @@
   font-size: .84rem; font-weight: 600;
 }
 .kpi-period-wrap {
-  display: grid; gap: .7rem; width: 100%; min-width: 0;
-  background: #fff; border: 1px solid #e4e8ee; border-radius: 16px;
-  padding: .85rem 1rem; box-shadow: 0 6px 18px rgba(15, 27, 45, .03);
+  display: grid; gap: .85rem; width: 100%; min-width: 0;
+  background:
+    linear-gradient(180deg, #f8fbff 0%, #ffffff 42%),
+    #fff;
+  border: 1px solid #dbe4f0;
+  border-radius: 18px;
+  padding: 1rem 1.1rem;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .8) inset,
+    0 10px 28px rgba(15, 40, 80, .06);
 }
-.kpi-period-wrap.is-compact { padding: .7rem .85rem; }
+.kpi-period-wrap.is-compact { padding: .8rem .9rem; }
 .kpi-period-toolbar {
-  display: flex; flex-wrap: wrap; gap: .85rem 1rem; align-items: end; justify-content: space-between;
+  display: flex; flex-wrap: wrap; gap: .9rem 1.1rem; align-items: end; justify-content: space-between;
 }
 .kpi-period-left {
-  display: grid; gap: .45rem; min-width: min(100%, 28rem); flex: 1 1 18rem;
+  display: grid; gap: .55rem; min-width: min(100%, 36rem); flex: 1 1 22rem;
 }
 .kpi-period-label {
-  display: inline-flex; align-items: center; gap: .35rem;
-  color: #64748b; font-size: .74rem; font-weight: 750; text-transform: uppercase; letter-spacing: .04em;
+  display: inline-flex; align-items: center; gap: .4rem;
+  color: #334155; font-size: .72rem; font-weight: 780; text-transform: uppercase; letter-spacing: .08em;
 }
-.kpi-period-presets {
-  display: flex; flex-wrap: wrap; gap: .28rem;
+.kpi-period-label svg { color: #1d4ed8; }
+.kpi-period-rail {
+  display: flex; flex-wrap: wrap; gap: .2rem;
+  padding: .28rem;
+  background: #eef3f9;
+  border: 1px solid #d8e2ef;
+  border-radius: 14px;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .04);
 }
-.kpi-period-presets.is-secondary button {
-  background: transparent; border-color: transparent; color: #64748b; font-weight: 600;
-  padding: .26rem .55rem; font-size: .76rem;
+.kpi-period-chip {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  border-radius: 10px;
+  padding: .48rem .78rem;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease, transform .16s ease;
 }
-.kpi-period-presets.is-secondary button:hover {
-  background: #f1f5f9; border-color: #e2e8f0; color: #334155;
+.kpi-period-chip.is-soft {
+  color: #64748b;
+  font-weight: 650;
 }
-.kpi-period-presets.is-secondary button.is-on {
-  background: #e2e8f0; border-color: #cbd5e1; color: #0f172a;
+.kpi-period-chip:hover {
+  background: rgba(255, 255, 255, .72);
+  color: #1e3a8a;
 }
-.kpi-period-presets button {
-  border: 1px solid #e2e8f0; background: #f8fafc; color: #475569;
-  border-radius: 999px; padding: .36rem .72rem; font-size: .8rem; font-weight: 650; cursor: pointer;
-  transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+.kpi-period-chip.is-on {
+  background: #0f3f9a;
+  color: #fff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .18) inset,
+    0 6px 14px rgba(15, 63, 154, .28);
+  transform: translateY(-1px);
 }
-.kpi-period-presets button:hover { border-color: #93c5fd; color: #1d4ed8; background: #eff6ff; }
-.kpi-period-presets button.is-on {
-  background: #1d4ed8; border-color: #1d4ed8; color: #fff;
-  box-shadow: 0 4px 10px rgba(29, 78, 216, .22);
+.kpi-period-chip.is-on.is-soft {
+  background: #1d4ed8;
 }
 .kpi-period-bar {
-  display: flex; flex-wrap: wrap; gap: .55rem; align-items: end; flex: 0 1 auto;
+  display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; flex: 0 1 auto;
+}
+.kpi-period-range {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .28rem;
+  background: #fff;
+  border: 1px solid #cfd9e6;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
 }
 .kpi-period-bar label,
-.kpi-date-field { display: grid; gap: .22rem; font-size: .74rem; font-weight: 700; color: #64748b; }
+.kpi-date-field { display: grid; gap: 0; font-size: .74rem; font-weight: 700; color: #64748b; }
 .kpi-date-combo {
   position: relative;
   display: flex; align-items: center; gap: 0;
-  min-width: 11.5rem;
+  min-width: 10.8rem;
 }
 .kpi-period-bar input[type="date"],
 .kpi-period-bar input.kpi-date-dmy {
-  border: 1px solid #cbd5e1; border-radius: 10px; padding: .48rem 2.2rem .48rem .6rem;
-  font-size: .9rem; color: #0f172a; background: #fff; width: 100%; min-width: 0;
-  font-variant-numeric: tabular-nums;
+  border: 0; border-radius: 10px; padding: .52rem 2.15rem .52rem .7rem;
+  font-size: .9rem; color: #0f172a; background: #f8fafc; width: 100%; min-width: 0;
+  font-variant-numeric: tabular-nums; font-weight: 650;
 }
 .kpi-period-bar input[type="date"]:focus,
 .kpi-period-bar input.kpi-date-dmy:focus {
-  outline: none; border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59, 130, 246, .15);
+  outline: none; background: #eff6ff; box-shadow: 0 0 0 2px rgba(37, 99, 235, .18);
 }
 .kpi-date-cal {
-  position: absolute; right: .2rem; top: 50%; transform: translateY(-50%);
-  width: 2rem; height: 2rem; border: 0; border-radius: 8px;
+  position: absolute; right: .18rem; top: 50%; transform: translateY(-50%);
+  width: 1.9rem; height: 1.9rem; border: 0; border-radius: 8px;
   background: transparent; color: #64748b; cursor: pointer;
   display: grid; place-items: center;
 }
-.kpi-date-cal:hover { color: #1d4ed8; background: #eff6ff; }
+.kpi-date-cal:hover { color: #1d4ed8; background: #e0ecff; }
 .kpi-date-native {
   position: absolute; inset: 0; opacity: 0; pointer-events: none;
   width: 100%; height: 100%; border: 0; padding: 0; margin: 0;
 }
 .kpi-period-dash {
-  align-self: center; margin-bottom: .15rem; color: #94a3b8; font-weight: 700;
+  color: #94a3b8; font-weight: 800; padding: 0 .1rem;
 }
-.kpi-sync-btn { min-height: 2.4rem; }
+.kpi-sync-btn {
+  min-height: 2.55rem;
+  border-radius: 12px !important;
+  padding-inline: 1rem !important;
+  font-weight: 750 !important;
+  box-shadow: 0 6px 14px rgba(15, 63, 154, .18);
+}
 .kpi-spin { animation: kpi-spin .8s linear infinite; }
 @keyframes kpi-spin { to { transform: rotate(360deg); } }
 .kpi-card-hint {
@@ -867,10 +905,14 @@
   .kpi-card span { font-size: .72rem; }
   .kpi-period-toolbar { flex-direction: column; align-items: stretch; }
   .kpi-period-bar { width: 100%; }
-  .kpi-period-bar label { flex: 1 1 auto; min-width: 0; }
+  .kpi-period-range { width: 100%; justify-content: space-between; }
+  .kpi-period-bar label,
+  .kpi-date-field { flex: 1 1 auto; min-width: 0; }
   .kpi-period-bar input[type="date"],
   .kpi-period-bar input.kpi-date-dmy { width: 100%; min-width: 0; }
+  .kpi-date-combo { min-width: 0; width: 100%; }
   .kpi-sync-btn { width: 100%; justify-content: center; }
+  .kpi-period-chip { flex: 1 1 auto; text-align: center; }
   .kpi-dash-title-row { align-items: flex-start; }
   .kpi-period-badge { white-space: normal; line-height: 1.3; }
   .kpi-agents-panel { padding: .85rem; }
