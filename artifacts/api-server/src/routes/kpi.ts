@@ -1089,6 +1089,8 @@ router.get("/kpi/orders", requireKpiAdmin(), async (req, res, next) => {
                 kpiAmount: k.kpiAmount,
                 status: k.status,
                 stageName: k.stageName,
+                stageDayFrom: k.stageDayFrom,
+                stageDayTo: k.stageDayTo,
                 daysRemaining: k.daysRemaining,
               }
             : null,

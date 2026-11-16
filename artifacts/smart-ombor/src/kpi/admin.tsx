@@ -160,9 +160,24 @@ type Order = {
   isHouseAccount?: boolean;
   kpi?: {
     id: string; orderId: string; baseAmount: string; stagePercent: string; kpiAmount: string;
-    status: string; stageName: string; daysRemaining: number | null;
+    status: string; stageName: string; stageDayFrom?: number; stageDayTo?: number;
+    daysRemaining: number | null;
   } | null;
 };
+
+/** KPI foizi — oddiy matn: «1–7 kun · 2%». */
+function kpiFoizLabel(k: NonNullable<Order['kpi']> | null | undefined): string {
+  if (!k) return '—';
+  const pct = Number(k.stagePercent || 0);
+  const from = Number(k.stageDayFrom ?? -1);
+  const to = Number(k.stageDayTo ?? -1);
+  if (!(pct > 0)) return '15+ kun · 0%';
+  if (from === 0 && to === 0) return 'Shu kun · 3%';
+  if (from === 1 && to === 7) return '1–7 kun · 2%';
+  if (from === 8 && to === 15) return '8–15 kun · 1%';
+  if (from >= 0 && to >= from) return `${from}–${to} kun · ${pct}%`;
+  return `${pct}%`;
+}
 type OrdersPayload = {
   rows: Order[];
   periodStart?: string;
@@ -1198,7 +1213,6 @@ function OrdersAndKpiSection({
   from: string; to: string; preset: PeriodPreset;
 }) {
   const [agentFilter, setAgentFilter] = useState('');
-  const [hideHouse, setHideHouse] = useState(true);
   const qs = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&preset=${encodeURIComponent(preset)}${agentFilter ? `&agentId=${encodeURIComponent(agentFilter)}` : ''}`;
   const agents = useQuery({
     queryKey: ['kpi-agents', from, to, preset],
@@ -1208,10 +1222,11 @@ function OrdersAndKpiSection({
     queryKey: ['kpi-orders', from, to, preset, agentFilter],
     queryFn: () => kpiFetch<OrdersPayload>(`/kpi/orders${qs}`),
   });
-  const rows = useMemo(() => {
-    const list = orders.data?.rows || [];
-    return hideHouse ? list.filter((o) => !o.isHouseAccount) : list;
-  }, [orders.data, hideHouse]);
+  // Ofis/Van seling KPI olmaydi — ro‘yxatda ko‘rsatilmaydi.
+  const rows = useMemo(
+    () => (orders.data?.rows || []).filter((o) => !o.isHouseAccount),
+    [orders.data],
+  );
   const totals = useMemo(() => {
     let savdo = 0;
     let tolangan = 0;
@@ -1237,10 +1252,6 @@ function OrdersAndKpiSection({
           <option value="">Barcha agentlar</option>
           {(agents.data || []).map((a) => <option key={a.id} value={a.id}>{a.fullName}</option>)}
         </select>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.9rem' }}>
-          <input type="checkbox" checked={hideHouse} onChange={(e) => setHideHouse(e.target.checked)} />
-          Ofis / Van seling yashirish
-        </label>
       </div>
       <div className="kpi-table-wrap">
         <table className="kpi-table">
@@ -1251,7 +1262,7 @@ function OrdersAndKpiSection({
               <th>Agent</th>
               <th className="is-num">Savdo</th>
               <th className="is-num">To‘langan</th>
-              <th>Bosqich</th>
+              <th>Foiz</th>
               <th className="is-num">KPI</th>
               <th>Holat</th>
             </tr>
@@ -1260,22 +1271,8 @@ function OrdersAndKpiSection({
             {rows.map((o) => {
               const k = o.kpi;
               const paid = Number(o.paidAmount || 0);
-              const house = Boolean(o.isHouseAccount);
-              let bosqich = '—';
-              let kpiText = '—';
-              if (house) {
-                bosqich = 'Ofis';
-                kpiText = '—';
-              } else if (k) {
-                const pct = Number(k.stagePercent || 0);
-                if (paid <= 0) {
-                  bosqich = pct > 0 ? `To‘lansa: ${pct}%` : '—';
-                  kpiText = '0 so‘m';
-                } else {
-                  bosqich = `${k.stageName} (${pct}%)`;
-                  kpiText = uzs(k.kpiAmount);
-                }
-              }
+              const foiz = kpiFoizLabel(k);
+              const kpiText = paid > 0 ? uzs(k?.kpiAmount || 0) : '0 so‘m';
               return (
                 <tr key={o.id}>
                   <td data-label="Jo‘natma"><b>{o.number.replace(/^MS-/, '')}</b><div className="kpi-muted">{isoToDmy(o.orderDate)}</div></td>
@@ -1283,7 +1280,7 @@ function OrdersAndKpiSection({
                   <td data-label="Agent"><b>{o.agentName || '—'}</b></td>
                   <td data-label="Savdo" className="is-num">{uzs(o.total)}</td>
                   <td data-label="To‘langan" className="is-num">{uzs(o.paidAmount)}</td>
-                  <td data-label="Bosqich">{bosqich}</td>
+                  <td data-label="Foiz">{foiz}</td>
                   <td data-label="KPI" className="is-num"><b className="is-ok">{kpiText}</b></td>
                   <td data-label="Holat"><span className={`kpi-chip ${o.status}`}>{kpiStatusLabel(o.status)}</span></td>
                 </tr>
