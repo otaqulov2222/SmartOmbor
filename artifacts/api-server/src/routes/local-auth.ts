@@ -574,10 +574,9 @@ router.patch("/local-accounts/:id", async (req, res) => {
   }
   if (req.body?.permissions != null) {
     target.permissions = normalizePermissions(req.body.permissions, target.role);
-  } else if (req.body?.role) {
-    // Rol o‘zgarsa va permissions yuborilmasa — yangi rol defaultlari.
-    target.permissions = defaultsForRole(target.role);
   }
+  // Rol o‘zgarganda ruxsatlarni avtomatik reset qilmaymiz —
+  // ular alohida «Ruxsatlar» orqali boshqariladi.
   if (req.body?.password && String(req.body.password).length >= 4) {
     target.password = String(req.body.password);
     forgetLogin(oldLogin);

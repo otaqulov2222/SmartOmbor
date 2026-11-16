@@ -209,8 +209,12 @@ export function EmployeesPage() {
       kpiFetch(`/local-accounts/${row.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          ...row,
+          name: row.name,
+          phone: row.phone,
+          login: row.login,
+          password: row.password,
           role: resolveRole(row.role),
+          // Tahrirlash ruxsatlarni o‘zgartirmaydi — mavjudini saqlaymiz.
           permissions: normalizeAccessList(row.permissions, resolveRole(row.role)),
         }),
       }),
@@ -218,6 +222,19 @@ export function EmployeesPage() {
       setEditing(null);
       void cache.invalidateQueries({ queryKey: ['bordo-staff'] });
       void cache.invalidateQueries({ queryKey: ['kpi-agents'] });
+    },
+  });
+
+  const updatePerms = useMutation({
+    mutationFn: (row: { id: string; role: string; permissions: AccessModuleId[] }) =>
+      kpiFetch(`/local-accounts/${row.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissions: normalizeAccessList(row.permissions, resolveRole(row.role)),
+        }),
+      }),
+    onSuccess: () => {
+      void cache.invalidateQueries({ queryKey: ['bordo-staff'] });
     },
   });
 
@@ -381,14 +398,7 @@ export function EmployeesPage() {
                       <select
                         className="input"
                         value={ROLE_PRESETS.some((r) => r.value === editing.role) || extraRoles.includes(editing.role) ? editing.role : (editing.role || 'worker')}
-                        onChange={(e) => {
-                          const role = e.target.value;
-                          setEditing({
-                            ...editing,
-                            role,
-                            permissions: defaultsForRole(role),
-                          });
-                        }}
+                        onChange={(e) => setEditing({ ...editing, role: e.target.value })}
                       >
                         {ROLE_PRESETS.map((r) => (
                           <option key={r.value} value={r.value}>{r.label}</option>
@@ -426,27 +436,16 @@ export function EmployeesPage() {
                     )}
                   </td>
                   <td data-label="Ruxsatlar">
-                    {isEdit && s.login !== 'bordouzadmin' ? (
-                      <AccessPicker
-                        compact
-                        role={resolveRole(editing.role)}
-                        value={normalizeAccessList(editing.permissions, editing.role)}
-                        onChange={(permissions) => setEditing({ ...editing, permissions })}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="emp-access-btn is-view"
-                        onClick={() => setEditing({
-                          ...s,
-                          permissions: normalizeAccessList(s.permissions, s.role),
-                        })}
-                        title="Ruxsatlarni ko‘rish / tahrirlash"
-                      >
-                        <span>Ruxsatlar</span>
-                        <ChevronDown size={15} />
-                      </button>
-                    )}
+                    <AccessPicker
+                      compact
+                      locked={s.login === 'bordouzadmin' || s.role === 'super_admin'}
+                      role={resolveRole(s.role)}
+                      value={normalizeAccessList(s.permissions, s.role)}
+                      onChange={(permissions) => {
+                        if (s.login === 'bordouzadmin') return;
+                        updatePerms.mutate({ id: s.id, role: s.role, permissions });
+                      }}
+                    />
                   </td>
                   <td data-label="Ko‘rsatkich">
                     {ag ? (
@@ -481,7 +480,7 @@ export function EmployeesPage() {
                             ...s,
                             permissions: normalizeAccessList(s.permissions, s.role),
                           })}
-                          title="Tahrirlash"
+                          title="Tahrirlash (ism, rol, login, parol)"
                         >
                           <Pencil size={14} />
                         </button>
