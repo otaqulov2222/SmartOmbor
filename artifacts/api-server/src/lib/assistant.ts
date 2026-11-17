@@ -7,7 +7,7 @@ import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
 import { packSizeOf, ensurePachka, productPackSize, pieceCount, receiptParts } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
-import { money, moysklad, moyskladAll, moyskladConfigured } from "./moysklad";
+import { idFromHref, money, moysklad, moyskladAll, moyskladConfigured } from "./moysklad";
 import { peekCatalog } from "./catalog";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 
@@ -227,6 +227,20 @@ const TOOLS = [
         properties: {
           days: { type: "number", description: "Default 15, max 365" },
           limit: { type: "number", description: "Default 15, max 40" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "unsold_products",
+      description: "Belgilangan kun ichida sotilmagan (qoldiq bor, savdo 0) tovarlar.",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "Default 20, max 365" },
+          limit: { type: "number", description: "Default 20, max 50" },
         },
       },
     },
@@ -795,6 +809,73 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     }
   }
 
+  if (name === "unsold_products") {
+    const days = Math.min(365, Math.max(1, Math.round(Number(args.days) || 20)));
+    const limit = Math.min(50, Math.max(5, Math.round(Number(args.limit) || 20)));
+    const to = tashkentParts().date;
+    const toDate = new Date(`${to}T12:00:00+05:00`);
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - (days - 1));
+    const from = tashkentParts(fromDate).date;
+    const catalog = peekCatalog();
+    const stocked = [...(catalog?.products || [])].filter((p) => Number(p.stock || 0) > 0 || Number(p.available || 0) > 0);
+
+    const soldIds = new Set<string>();
+    let source = "katalog";
+    if (moyskladConfigured()) {
+      try {
+        const profit = await moyskladAll<{
+          assortment?: { meta?: { href?: string } };
+          sellQuantity?: number;
+        }>(
+          `/report/profit/byproduct?momentFrom=${encodeURIComponent(`${from} 00:00:00`)}&momentTo=${encodeURIComponent(`${to} 23:59:59`)}`,
+        );
+        for (const row of profit.rows) {
+          if (Number(row.sellQuantity || 0) <= 0) continue;
+          const id = idFromHref(row.assortment?.meta?.href);
+          if (id) soldIds.add(id);
+        }
+        source = "moysklad+katalog";
+      } catch {
+        source = "katalog_fallback";
+      }
+    }
+
+    const items = stocked
+      .filter((p) => {
+        if (source.startsWith("moysklad")) return !soldIds.has(p.id);
+        const sold = days <= 7 ? Number(p.sales7 || 0) : Number(p.sales30 || 0);
+        return sold <= 0;
+      })
+      .map((p) => ({
+        name: p.name,
+        code: p.code,
+        article: p.article,
+        stock: Number(p.stock || 0),
+        available: Number(p.available || 0),
+        sales7: Number(p.sales7 || 0),
+        sales30: Number(p.sales30 || 0),
+      }))
+      .sort((a, b) => b.stock - a.stock || b.available - a.available)
+      .slice(0, limit);
+
+    return {
+      ok: true,
+      days,
+      from,
+      to,
+      source,
+      total: items.length,
+      stockedTotal: stocked.length,
+      items,
+      note: !catalog
+        ? "Katalog hali yuklanmagan."
+        : source === "katalog_fallback"
+          ? "MoySklad savdosi o‘qilmadi — katalog savdosidan."
+          : null,
+    };
+  }
+
   return { error: `unknown_tool:${name}` };
 }
 
@@ -1136,7 +1217,16 @@ function parseDaysWindow(lower: string, fallback = 15) {
   return fallback;
 }
 
+function isUnsoldIntent(lower: string) {
+  if (/sotilmay|sotilmayotgan|sotuvsiz|harakatsiz|yotib\s*qol|non.?mov|не\s*прод|без\s*продаж|неликвид|idle\s*stock/.test(lower)) {
+    return true;
+  }
+  if (/sotilmagan|sotilmay\s*turgan/.test(lower) && /tovar|mahsulot|товар/.test(lower)) return true;
+  return false;
+}
+
 function isTopSoldIntent(lower: string) {
+  if (isUnsoldIntent(lower)) return false;
   if (/(eng\s*ko['‘`]?p|top|reyting|лидер).{0,40}(sot|savdo|tovar|продаж)/.test(lower)) return true;
   if (/(sotilgan|продаж).{0,40}(tovar|mahsulot|товар)/.test(lower)) return true;
   if (/(ko['‘`]?p\s*sotil|best.?sell|хит\s*продаж)/.test(lower)) return true;
@@ -1174,6 +1264,30 @@ function formatTopSoldReply(data: Record<string, unknown>) {
     ...lines,
     `Jami (ro‘yxat): ${formatQty(Number(data.totalQty) || 0)} dona.`,
   ].join("\n") + note;
+}
+
+function formatUnsoldReply(data: Record<string, unknown>) {
+  const days = Number(data.days) || 20;
+  const from = String(data.from || "");
+  const to = String(data.to || "");
+  const items = Array.isArray(data.items) ? data.items as Array<Record<string, unknown>> : [];
+  if (data.note && !items.length && String(data.note).includes("yuklanmagan")) {
+    return "Katalog hali tayyor emas. Bir ozdan keyin qayta so‘rang.";
+  }
+  if (!items.length) {
+    return `Oxirgi ${days} kun (${from} — ${to}) ichida qoldiq bor, lekin sotilmagan tovar topilmadi.`;
+  }
+  const lines = items.slice(0, 25).map((row, i) => {
+    const code = row.code ? ` · ${row.code}` : "";
+    const stock = formatQty(Number(row.stock || row.available || 0));
+    return `${i + 1}) ${row.name}${code}: qoldiq ${stock}`;
+  });
+  const extra = data.note ? `\n${data.note}` : "";
+  return [
+    `Oxirgi ${days} kun (${from} — ${to}) — sotilmagan (qoldiq bor):`,
+    ...lines,
+    `Ko‘rsatildi: ${items.length} ta.`,
+  ].join("\n") + extra;
 }
 
 function clockLabel(iso: string | null | undefined) {
@@ -1370,7 +1484,17 @@ async function tryFastLocalTask(
     };
   }
 
-  // 5) Eng ko‘p sotilgan tovarlar
+  // 5) Sotilmagan / harakatsiz tovarlar
+  if (isUnsoldIntent(lower)) {
+    const days = parseDaysWindow(lower, 20);
+    const data = await run("unsold_products", { days, limit: 20 }) as Record<string, unknown> | null;
+    if (!data) {
+      return { reply: "Sotilmagan tovarlar ro‘yxatini olib bo‘lmadi.", model: "local-fast", tools, files };
+    }
+    return { reply: formatUnsoldReply(data), model: "local-fast", tools, files };
+  }
+
+  // 5b) Eng ko‘p sotilgan tovarlar
   if (isTopSoldIntent(lower)) {
     const days = parseDaysWindow(lower, 15);
     const data = await run("top_sold_products", { days, limit: 15 }) as Record<string, unknown> | null;
