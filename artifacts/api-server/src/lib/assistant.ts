@@ -12,7 +12,15 @@ import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 
-type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content: string; tool_call_id?: string; name?: string; tool_calls?: ToolCall[] };
+type ChatMsg = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_call_id?: string;
+  name?: string;
+  tool_calls?: ToolCall[];
+  /** gpt-oss models sometimes put text here when content is empty */
+  reasoning?: string;
+};
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 
 export type AssistantFile = {
@@ -45,11 +53,19 @@ QATIY:
 - Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity
 - Ofis GPS: 41.258556, 69.150964 · 150 m
 
+KPI bo‘limi (foydalanuvchi so‘rasa shu bilan tushuntiring):
+- Boshqaruv: umumiy KPI dashboard — agentlar, jami KPI, MS yangilash, agentni ochib guruh/mijozlar.
+- Agentlar va hamkorlar: agent bo‘yicha jami (mijozlar, kirim, chiqim, KPI). Mijozlar tabi — mijoz biriktirish.
+- Savdo va to‘lov: har bir jo‘natma bo‘yicha savdo, to‘langan, foiz, KPI, holat. «3 bosqich qoidalari» — shu kun 3%, 1–7 kun 2%, 8–15 kun 1% (asos: to‘langan summa).
+- Xodimlar bo‘limi login/parol uchun; KPI raqamlari KPI ichida.
+- Agent portal: agent o‘z kabineti (alohida).
+
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
 - Fayl (PDF/Excel/CSV) → export_report. Base64 yozmang.
 - Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
-- «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.`;
+- «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
+- Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.`;
 
 const TOOLS = [
   {
@@ -628,38 +644,86 @@ function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; for
   return { kind: "davomat", format };
 }
 
+function pickMessageText(msg: ChatMsg | undefined | null): string {
+  if (!msg) return "";
+  const content = String(msg.content || "").trim();
+  if (content) return content;
+  // Ba’zi modellarda javob reasoning ichida qoladi — oxirgi qismini olamiz.
+  const reasoning = String(msg.reasoning || "").trim();
+  if (!reasoning) return "";
+  const parts = reasoning.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const last = parts[parts.length - 1] || reasoning;
+  // Inglizcha o‘ylash matnini emas, oxirgi blokni qaytaramiz (ko‘pincha yakun).
+  return last.slice(0, 4000);
+}
+
 async function groqChat(messages: ChatMsg[], tools = true) {
   const key = groqKey();
   if (!key) throw Object.assign(new Error("assistant_unconfigured"), { status: 503 });
   const body: Record<string, unknown> = {
     model: MODEL,
     temperature: 0.25,
-    max_completion_tokens: 1800,
+    // gpt-oss reasoning tokenlarni ham yeydi — yetarli joy qoldiramiz
+    max_completion_tokens: 4096,
     messages,
   };
+  if (/gpt-oss/i.test(MODEL)) {
+    body.reasoning_effort = "low";
+  }
   if (tools) {
     body.tools = TOOLS;
     body.tool_choice = "auto";
   }
-  const response = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  let json: { choices?: Array<{ message?: ChatMsg }>; error?: { message?: string } };
-  try {
-    json = JSON.parse(text) as typeof json;
-  } catch {
-    throw Object.assign(new Error("groq_bad_json"), { status: 502, detail: text.slice(0, 200) });
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 55_000);
+    try {
+      const response = await fetch(GROQ_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      const text = await response.text();
+      let json: {
+        choices?: Array<{ message?: ChatMsg & { reasoning?: string } }>;
+        error?: { message?: string };
+      };
+      try {
+        json = JSON.parse(text) as typeof json;
+      } catch {
+        throw Object.assign(new Error("groq_bad_json"), { status: 502, detail: text.slice(0, 200) });
+      }
+      if (!response.ok) {
+        throw Object.assign(new Error(json.error?.message || "groq_error"), {
+          status: response.status === 401 ? 503 : 502,
+        });
+      }
+      const msg = json.choices?.[0]?.message;
+      if (msg && !String(msg.content || "").trim() && msg.reasoning) {
+        msg.content = pickMessageText(msg);
+      }
+      return msg;
+    } catch (error) {
+      lastErr = error;
+      const msg = error instanceof Error ? error.message : String(error);
+      const retryable = /fetch failed|aborted|ETIMEDOUT|ECONNRESET|ENOTFOUND|network|timeout/i.test(msg)
+        || (typeof error === "object" && error && "cause" in error);
+      if (!retryable || attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  if (!response.ok) {
-    throw Object.assign(new Error(json.error?.message || "groq_error"), { status: response.status === 401 ? 503 : 502 });
-  }
-  return json.choices?.[0]?.message;
+  const detail = lastErr instanceof Error
+    ? `${lastErr.message}${lastErr.cause ? ` (${String((lastErr.cause as { code?: string }).code || lastErr.cause)})` : ""}`
+    : String(lastErr);
+  throw Object.assign(new Error("groq_unreachable"), { status: 502, detail });
 }
 
 export async function runAssistantChat(input: {
@@ -754,7 +818,7 @@ export async function runAssistantChat(input: {
     if (!reply) break;
     const calls = reply.tool_calls || [];
     if (!calls.length) {
-      const text = sanitizeAssistantReply(String(reply.content || "").trim());
+      const text = sanitizeAssistantReply(pickMessageText(reply));
       if (!weak(text) || !toolTrace.some((x) => x.ok)) {
         const finalText = text
           || (files.length ? `PDF tayyor: ${files[0].name}. Pastdagi Yuklab olish tugmasini bosing.` : "Javob bo‘sh qaytdi.");
@@ -799,14 +863,14 @@ export async function runAssistantChat(input: {
   }
 
   const fallback = await groqChat(messages, false);
-  let text = sanitizeAssistantReply(String(fallback?.content || "").trim());
+  let text = sanitizeAssistantReply(pickMessageText(fallback));
   if (weak(text) && toolTrace.some((x) => x.ok)) {
     messages.push({
       role: "user",
       content: "Qayta: tool natijasidagi raqam/sana/statusni ochiq yozing. Base64/kod blokini yozmang.",
     });
     const again = await groqChat(messages, false);
-    text = sanitizeAssistantReply(String(again?.content || "").trim() || text);
+    text = sanitizeAssistantReply(pickMessageText(again) || text);
   }
   // Fayl so‘ralgan bo‘lsa — yo‘q bo‘lsa majburiy yasaymiz
   if (exportWanted && !files.length) {

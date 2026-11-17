@@ -140,8 +140,14 @@ router.post("/assistant/chat", async (req: Request, res: Response) => {
       ? Number((error as { status: number }).status)
       : 500;
     const code = error instanceof Error ? error.message : "assistant_failed";
-    logger.warn({ err: code, user: user.login }, "assistant chat failed");
-    res.status(status || 500).json({ error: code });
+    const detail = typeof error === "object" && error && "detail" in error
+      ? String((error as { detail?: string }).detail || "")
+      : "";
+    logger.warn({ err: code, detail: detail || undefined, user: user.login }, "assistant chat failed");
+    const friendly = code === "groq_unreachable" || code === "fetch failed"
+      ? "yordamchi_tarmoq"
+      : code;
+    res.status(status || 500).json({ error: friendly, detail: detail || undefined });
   }
 });
 

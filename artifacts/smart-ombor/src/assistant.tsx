@@ -412,7 +412,8 @@ export function AssistantWidget() {
       if (!response.ok) {
         const fail = body.error === 'unconfigured' ? t('assistant.unconfigured')
           : body.error === 'rate_limit' ? t('assistant.rate')
-            : t('assistant.failed');
+            : body.error === 'yordamchi_tarmoq' ? t('assistant.network')
+              : t('assistant.failed');
         setError(fail);
         setMessages((current) => [...current, { role: 'assistant', content: fail, at: Date.now() }]);
         return;
