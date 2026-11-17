@@ -157,6 +157,7 @@ export function AssistantWidget() {
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const forceNewRef = useRef(false);
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
@@ -185,6 +186,7 @@ export function AssistantWidget() {
       };
       const sid = body.session?.id || id;
       const msgs = Array.isArray(body.session?.messages) ? body.session!.messages! : [];
+      forceNewRef.current = false;
       setActiveId(sid);
       activeIdRef.current = sid;
       setActiveTitle(body.session?.title || '');
@@ -243,6 +245,7 @@ export function AssistantWidget() {
   };
 
   const startNewChat = () => {
+    forceNewRef.current = true;
     setActiveId(null);
     activeIdRef.current = null;
     setActiveTitle('');
@@ -286,11 +289,12 @@ export function AssistantWidget() {
     setMessages((current) => [...current, { role: 'user', content: message, at: now }]);
     setBusy(true);
     const sessionId = activeIdRef.current;
+    const forceNew = forceNewRef.current && !sessionId;
     try {
       const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify({ message, history, sessionId }),
+        body: JSON.stringify({ message, history, sessionId, forceNew }),
       });
       const body = await response.json() as {
         reply?: string;
@@ -308,6 +312,7 @@ export function AssistantWidget() {
         setMessages((current) => [...current, { role: 'assistant', content: fail, at: Date.now() }]);
         return;
       }
+      forceNewRef.current = false;
       const sid = body.sessionId || body.session?.id || sessionId;
       if (sid) {
         setActiveId(sid);
@@ -315,7 +320,7 @@ export function AssistantWidget() {
       }
       if (body.session?.title) setActiveTitle(body.session.title);
       if (Array.isArray(body.sessions)) setSessions(body.sessions);
-      // Serverdagi to‘liq thread — ChatGPT kabi davom etish uchun manba
+      // Serverdagi to‘liq thread — ChatGPT kabi bitta chat ichida
       if (Array.isArray(body.session?.messages) && body.session!.messages!.length) {
         setMessages(body.session!.messages!);
       } else {

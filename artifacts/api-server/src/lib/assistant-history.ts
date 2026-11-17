@@ -174,15 +174,51 @@ export function createAssistantSession(login: string): ChatSession {
   return session;
 }
 
+export function mergeAssistantSessions(login: string): SessionSummary[] {
+  const store = load();
+  const now = Date.now();
+  const { key, sessions } = ensureUser(store, login);
+  if (sessions.length <= 1) {
+    store.byUser[key] = { sessions };
+    save(store);
+    return sessions.map(toSummary);
+  }
+  const ordered = [...sessions].sort((a, b) => a.createdAt - b.createdAt);
+  const first = ordered[0];
+  const mergedMsgs = ordered
+    .flatMap((s) => s.messages || [])
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
+    .sort((a, b) => Number(a.at || 0) - Number(b.at || 0))
+    .slice(-MAX_MESSAGES);
+  const firstUser = mergedMsgs.find((m) => m.role === "user");
+  const merged: ChatSession = {
+    id: first.id,
+    title: titleFrom(firstUser?.content || first.title || "Chat"),
+    createdAt: first.createdAt || mergedMsgs[0]?.at || now,
+    updatedAt: mergedMsgs[mergedMsgs.length - 1]?.at || now,
+    messages: mergedMsgs,
+  };
+  const next = pruneSessions([merged], now);
+  store.byUser[key] = { sessions: next };
+  save(store);
+  return next.map(toSummary);
+}
+
 export function appendToSession(
   login: string,
   sessionId: string | null | undefined,
   items: Array<{ role: "user" | "assistant"; content: string; tools?: Array<{ name: string; ok: boolean }> }>,
+  opts?: { forceNew?: boolean },
 ): { session: ChatSession; sessions: SessionSummary[] } {
   const store = load();
   const now = Date.now();
   const { key, sessions } = ensureUser(store, login);
+  const forceNew = Boolean(opts?.forceNew);
   let session = sessionId ? sessions.find((s) => s.id === sessionId) : undefined;
+  // ChatGPT usuli: sessionId yo‘q bo‘lsa ham oxirgi chatga yozamiz — yangi faqat forceNew
+  if (!session && !forceNew && sessions.length > 0) {
+    session = sessions[0];
+  }
   if (!session) {
     session = {
       id: newId(),

@@ -9,6 +9,7 @@ import {
   getAssistantSession,
   historyRetentionDays,
   listAssistantSessions,
+  mergeAssistantSessions,
 } from "../lib/assistant-history";
 import { logger } from "../lib/logger";
 
@@ -43,6 +44,15 @@ router.get("/assistant/sessions", (req, res) => {
   res.json({
     retentionDays: historyRetentionDays(),
     sessions: listAssistantSessions(user.login),
+  });
+});
+
+router.post("/assistant/sessions/merge", (req, res) => {
+  const user = requireOfficeDirector(req, res);
+  if (!user) return;
+  res.json({
+    retentionDays: historyRetentionDays(),
+    sessions: mergeAssistantSessions(user.login),
   });
 });
 
@@ -93,14 +103,20 @@ router.post("/assistant/chat", async (req: Request, res: Response) => {
     const message = String(req.body?.message ?? "");
     const history = Array.isArray(req.body?.history) ? req.body.history : [];
     const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
+    const forceNew = Boolean(req.body?.forceNew);
     const result = await runAssistantChat({
       message,
       history,
     });
-    const saved = appendToSession(user.login, sessionId, [
-      { role: "user", content: message },
-      { role: "assistant", content: result.reply, tools: result.tools },
-    ]);
+    const saved = appendToSession(
+      user.login,
+      sessionId,
+      [
+        { role: "user", content: message },
+        { role: "assistant", content: result.reply, tools: result.tools },
+      ],
+      { forceNew },
+    );
     res.json({
       ...result,
       sessionId: saved.session.id,
