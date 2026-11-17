@@ -43,7 +43,7 @@ TIL (QATIY):
 QATIY:
 - Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
 - Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity
-- Ofis GPS: 41.219353, 69.272828 · 100 m
+- Ofis GPS: 41.258556, 69.150964 · 150 m
 
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.

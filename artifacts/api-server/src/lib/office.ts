@@ -4,9 +4,9 @@ import path from "node:path";
 import { pool } from "@workspace/db";
 import { dataFile } from "./data-dir";
 
-const DEFAULT_OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.219353;
-const DEFAULT_OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.272828;
-const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
+const DEFAULT_OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.258556;
+const DEFAULT_OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.150964;
+const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 150);
 /** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
 const DEFAULT_OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
 /** Keldim → Ketdim orasidagi minimal vaqt (tasodifiy ikki marta bosish). */
@@ -195,12 +195,26 @@ function save(store: Store) {
   const tmp = `${FILE}.tmp`;
   writeFileSync(tmp, JSON.stringify(store));
   renameSync(tmp, FILE);
+  // Postgres sync — restart/hydrate eski site ni qayta yozib yubormasligi uchun
   void pool
     .query(
       "insert into partner_store (id, document, updated_at) values ('office', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
       [JSON.stringify(store)],
     )
-    .catch(() => undefined);
+    .catch((err) => {
+      console.error("[office] partner_store save failed", err instanceof Error ? err.message : err);
+    });
+}
+
+/** Site o‘zgarishini Postgresga darhol yozish (restart oldidan). */
+export async function flushOfficeStore() {
+  const store = load();
+  mkdirSync(path.dirname(FILE), { recursive: true });
+  writeFileSync(FILE, JSON.stringify(store));
+  await pool.query(
+    "insert into partner_store (id, document, updated_at) values ('office', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
+    [JSON.stringify(store)],
+  );
 }
 
 function activeAccountIdsFromDisk() {

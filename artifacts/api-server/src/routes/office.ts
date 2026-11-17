@@ -6,6 +6,7 @@ import {
   faceEnrolled,
   faceMatchDistance,
   fiksaOf,
+  flushOfficeStore,
   insideOffice,
   officeDistance,
   officeSite,
@@ -58,7 +59,7 @@ router.get("/office/me", (req, res) => {
   });
 });
 
-router.post("/office/site", (req, res) => {
+router.post("/office/site", async (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   try {
     const site = setOfficeSite({
@@ -70,6 +71,7 @@ router.post("/office/site", (req, res) => {
       start: req.body?.start != null ? String(req.body.start) : undefined,
       end: req.body?.end != null ? String(req.body.end) : undefined,
     });
+    await flushOfficeStore();
     res.json({ office: site });
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
