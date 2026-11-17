@@ -322,7 +322,6 @@ export function OfficeReportPage() {
     setReload(value => value + 1);
   };
 
-  const waitingNames = !ranged ? data?.items.filter(row => row.status === 'out_missing').map(row => row.name) ?? [] : [];
   const filters: Array<[Filter, string]> = [
     ['all', t('common.all')],
     ['came', t('office.statCame')],
@@ -357,7 +356,6 @@ export function OfficeReportPage() {
         <button type="button" className="btn btn-primary" disabled={!data?.items.length} onClick={() => void exportSheet('pdf')}><FileText size={16}/> {t('office.pdf')}</button>
       </div>
     </div>
-    {waitingNames.length > 0 && <div className="tabel-banner">{t('office.waitingBanner', { names: waitingNames.slice(0, 3).join(', ') })}</div>}
     <div className="tabel-day">
       {mode !== 'range' && <div className="tabel-day-nav">
         <button type="button" className="icon-btn" onClick={() => step(-1)} aria-label={t('common.prevPage')}><ChevronLeft size={18}/></button>
