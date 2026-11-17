@@ -31,11 +31,14 @@ export function assistantConfigured() {
 }
 
 const SYSTEM = `Siz — Smart Ombor (Bordo) nazorat agentisiz.
-Asosiy kuch: shu loyiha — ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
-Umumiy savollarga qisqa javob mumkin, lekin loyiha so‘rovlari ustuvor va aniq tool orqali.
+Asosiy kuch: ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
 
-Til: foydalanuvchi tili. Format: qisqa xulosa + aniq faktlar (ism, raqam, sana). Ortiqcha ** / uzun kod / UUID jadval YO‘Q.
-Parol/token/.env ko‘rsatmang. Account UUID o‘rniga ism/login yozing.
+TIL (QATIY):
+- Foydalanuvchi o‘zbekcha yozsa — FAQAT o‘zbekcha javob.
+- Inglizcha so‘z/status YO‘Q: posted, accepted, lines, status, ok, error, true/false, recent_logs, shipment, supply.
+- O‘rniga: yozilgan, qabul qilingan, tovar qatorlari, holat, tayyor, xato, ha/yo‘q, oxirgi jurnal, yuk xati, kirim.
+- Markdown keng jadval YO‘Q (tor oynada buziladi). Faqat qisqa xulosa + bullet ro‘yxat.
+- UUID / uzun id ko‘rsatmang. Ortiqcha ** kam. Parol/token/.env yo‘q.
 
 QATIY:
 - Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
@@ -44,8 +47,8 @@ QATIY:
 
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
-- Fayl (PDF/Excel/CSV/yuklab olish) → export_report. Base64, JVBERi0, PK.., kod blokini JAVOBGA YOZMANg.
-- Fayl tayyor bo‘lsa: qisqa xulosa (Umumiy/Kelgan/Kelmagan) + «Yuklab olish tugmasini bosing».
+- Fayl (PDF/Excel/CSV) → export_report. Base64 yozmang.
+- Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.`;
 
 const TOOLS = [
@@ -478,21 +481,68 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
   return { error: `unknown_tool:${name}` };
 }
 
+function localizeStatus(value: unknown): unknown {
+  if (typeof value === "boolean") return value ? "ha" : "yo‘q";
+  if (typeof value !== "string") return value;
+  const v = value.trim().toLowerCase();
+  const map: Record<string, string> = {
+    posted: "yozilgan",
+    accepted: "qabul qilingan",
+    pending: "kutilmoqda",
+    draft: "qoralama",
+    done: "tayyor",
+    success: "muvaffaqiyatli",
+    failed: "xato",
+    error: "xato",
+    ok: "tayyor",
+    true: "ha",
+    false: "yo‘q",
+    applicable: "tasdiqlangan",
+  };
+  return map[v] || value;
+}
+
+function localizeToolValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(localizeToolValue);
+  if (!value || typeof value !== "object") return localizeStatus(value);
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "base64") continue;
+    const k = key === "lines" ? "tovarQatorlari"
+      : key === "posted" ? "moySkladgaYozilgan"
+        : key === "status" ? "holat"
+          : key === "moyskladId" ? "moySkladId"
+            : key === "moyskladNumber" ? "moySkladRaqami"
+              : key === "recentJobs" ? "oxirgiVazifalar"
+                : key === "moyskladError" ? "moySkladXato"
+                  : key === "latestLocalPosted" ? "oxirgiYozilganYuk"
+                    : key === "latestLocalAny" ? "oxirgiYuk"
+                      : key === "localShipments" ? "mahalliyYuklar"
+                        : key === "moyskladSupplies" ? "moySkladKirimlar"
+                          : key === "moyskladLatest" ? "moySkladOxirgi"
+                            : key;
+    out[k] = key === "posted" || key === "applicable" || key === "status"
+      ? localizeStatus(raw)
+      : localizeToolValue(raw);
+  }
+  return out;
+}
+
 function toolPayloadForModel(result: unknown): string {
-  if (!result || typeof result !== "object") return JSON.stringify(result ?? null).slice(0, 12000);
-  const clone = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+  if (!result || typeof result !== "object") return JSON.stringify(localizeStatus(result) ?? null).slice(0, 12000);
+  const clone = localizeToolValue(JSON.parse(JSON.stringify(result))) as Record<string, unknown>;
   const file = clone.file;
   if (file && typeof file === "object") {
     const f = file as Record<string, unknown>;
     clone.file = {
-      id: f.id,
-      name: f.name,
-      mime: f.mime,
-      attached: true,
-      bytes: typeof f.base64 === "string" ? Math.round((String(f.base64).length * 3) / 4) : 0,
-      note: "Fayl UI da Yuklab olish tugmasi sifatida chiqadi. Base64 yozmang.",
+      nom: f.name,
+      turi: f.mime,
+      biriktirilgan: true,
+      bayt: typeof f.base64 === "string" ? Math.round((String(f.base64).length * 3) / 4) : 0,
+      eslatma: "Fayl UI da Yuklab olish tugmasi. Base64 yozmang. Inglizcha so‘z ishlatmang.",
     };
   }
+  clone.tilEslatma = "Javobni faqat o‘zbekcha yozing: posted→yozilgan, accepted→qabul qilingan, lines→tovar qatorlari.";
   return JSON.stringify(clone).slice(0, 12000);
 }
 
@@ -509,6 +559,36 @@ function extractFiles(result: unknown, into: AssistantFile[]) {
   });
 }
 
+function localizeUzbekReply(text: string): string {
+  let out = String(text || "");
+  const pairs: Array<[RegExp, string]> = [
+    [/\brecent[_ ]?logs?\b/gi, "oxirgi jurnal"],
+    [/\blocalShipments?\b/gi, "mahalliy yuklar"],
+    [/\bmoyskladLatest\b/gi, "MoySklad oxirgi kirim"],
+    [/\bmoyskladSupplies\b/gi, "MoySklad kirimlar"],
+    [/\blatestLocalPosted\b/gi, "oxirgi yozilgan yuk"],
+    [/\blatestLocalAny\b/gi, "oxirgi yuk"],
+    [/\bposted\b/gi, "yozilgan"],
+    [/\baccepted\b/gi, "qabul qilingan"],
+    [/\bpending\b/gi, "kutilmoqda"],
+    [/\bdraft\b/gi, "qoralama"],
+    [/\bstatus\b/gi, "holat"],
+    [/\blines\b/gi, "tovar qatorlari"],
+    [/\bshipment\b/gi, "yuk xati"],
+    [/\bsupply\b/gi, "kirim"],
+    [/\berror\b/gi, "xato"],
+    [/\bfailed\b/gi, "xato"],
+    [/\bsuccess(ful)?\b/gi, "muvaffaqiyatli"],
+    [/\btrue\b/gi, "ha"],
+    [/\bfalse\b/gi, "yo‘q"],
+    [/\bok\b/gi, "tayyor"],
+    [/\bnull\b/gi, "yo‘q"],
+    [/\bundefined\b/gi, "yo‘q"],
+  ];
+  for (const [re, to] of pairs) out = out.replace(re, to);
+  return out;
+}
+
 function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
   out = out.replace(/```[\s\S]*?```/g, (block) => {
@@ -519,12 +599,16 @@ function sanitizeAssistantReply(text: string): string {
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "");
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
-  // UUID-og‘ir markdown jadvallarni olib tashlash
+  // Tor UI da buziladigan keng markdown jadvallarni olib tashlash
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    const first = table.split("\n").find((l) => l.includes("|")) || "";
+    const cols = first.split("|").map((c) => c.trim()).filter(Boolean).length;
     const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
-    return uuidHits >= 1 ? "" : table;
+    if (uuidHits >= 1 || cols >= 4) return "";
+    return table;
   });
   out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "xodim");
+  out = localizeUzbekReply(out);
   out = out.replace(/\n{3,}/g, "\n\n").trim();
   return out;
 }

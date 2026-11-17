@@ -74,6 +74,26 @@ const SUGGEST: Array<{ key: TKey; Icon: typeof Package }> = [
   { key: 'assistant.suggest.error', Icon: AlertTriangle },
 ];
 
+function localizeUz(text: string) {
+  let out = String(text || '');
+  const pairs: Array<[RegExp, string]> = [
+    [/\brecent[_ ]?logs?\b/gi, 'oxirgi jurnal'],
+    [/\bposted\b/gi, 'yozilgan'],
+    [/\baccepted\b/gi, 'qabul qilingan'],
+    [/\bpending\b/gi, 'kutilmoqda'],
+    [/\bdraft\b/gi, 'qoralama'],
+    [/\bstatus\b/gi, 'holat'],
+    [/\blines\b/gi, 'tovar qatorlari'],
+    [/\bshipment\b/gi, 'yuk xati'],
+    [/\bsupply\b/gi, 'kirim'],
+    [/\berror\b/gi, 'xato'],
+    [/\bfailed\b/gi, 'xato'],
+    [/\bsuccess(ful)?\b/gi, 'muvaffaqiyatli'],
+  ];
+  for (const [re, to] of pairs) out = out.replace(re, to);
+  return out;
+}
+
 function stripJunk(text: string) {
   let out = String(text || '');
   out = out.replace(/```[\s\S]*?```/g, (block) => {
@@ -85,10 +105,14 @@ function stripJunk(text: string) {
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, '');
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    const first = table.split('\n').find((l) => l.includes('|')) || '';
+    const cols = first.split('|').map((c) => c.trim()).filter(Boolean).length;
     const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
-    return uuidHits >= 1 ? '' : table;
+    if (uuidHits >= 1 || cols >= 4) return '';
+    return table;
   });
   out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'xodim');
+  out = localizeUz(out);
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -128,9 +152,18 @@ function renderRich(text: string): ReactNode[] {
         const cells = trimmed.split('|').map((c) => c.trim()).filter(Boolean);
         if (cells.every((c) => /^[-:]+$/.test(c))) return;
         if (cells.some((c) => /[0-9a-f]{8}-[0-9a-f]{4}-/i.test(c))) return;
+        // Tor chatda 4+ ustun buziladi — ro‘yxat qilib ko‘rsatamiz
+        if (cells.length >= 4) {
+          nodes.push(
+            <span key={`li-${key++}`} className="assistant-li">
+              {inlineBold(cells.filter(Boolean).join(' · '))}
+            </span>,
+          );
+          return;
+        }
         nodes.push(
           <span key={`row-${key++}`} className="assistant-row">
-            {cells.map((cell, i) => <em key={i}>{inlineBold(cell)}</em>)}
+            {cells.map((cell, i) => <em key={i}>{inlineBold(localizeUz(cell))}</em>)}
           </span>,
         );
         return;

@@ -158,12 +158,27 @@ export function listAssistantSessions(login: string): SessionSummary[] {
 }
 
 function scrubMsgContent(content: string) {
-  return String(content || "")
+  let out = String(content || "")
     .replace(/```[\s\S]*?```/g, (block) => (/JVBERi0|UEsDB|base64/i.test(block) || block.length > 500 ? "" : block))
     .replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "")
-    .replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
+  out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    const first = table.split("\n").find((l) => l.includes("|")) || "";
+    const cols = first.split("|").map((c) => c.trim()).filter(Boolean).length;
+    return cols >= 4 ? "" : table;
+  });
+  const pairs: Array<[RegExp, string]> = [
+    [/\brecent[_ ]?logs?\b/gi, "oxirgi jurnal"],
+    [/\bposted\b/gi, "yozilgan"],
+    [/\baccepted\b/gi, "qabul qilingan"],
+    [/\bpending\b/gi, "kutilmoqda"],
+    [/\bstatus\b/gi, "holat"],
+    [/\blines\b/gi, "tovar qatorlari"],
+    [/\bshipment\b/gi, "yuk xati"],
+    [/\bsupply\b/gi, "kirim"],
+  ];
+  for (const [re, to] of pairs) out = out.replace(re, to);
+  return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function getAssistantSession(login: string, sessionId: string): ChatSession | null {
