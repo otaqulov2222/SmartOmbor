@@ -9,7 +9,7 @@ import {
   normalizeAccessList,
   type AccessModuleId,
 } from '@/access';
-import { kpiFetch, uzs } from '@/kpi/api';
+import { kpiFetch } from '@/kpi/api';
 import './kpi.css';
 
 type Staff = {
@@ -20,16 +20,6 @@ type Staff = {
   role: string;
   phone: string;
   permissions?: AccessModuleId[];
-};
-
-type AgentRow = {
-  id: string;
-  fullName: string;
-  login: string;
-  customers: number;
-  salesTotal: string;
-  kpiTotal: string;
-  salesPlan: string;
 };
 
 const ROLE_META: Record<string, { label: string; group: 'admin' | 'warehouse' | 'agent' | 'office'; tone: string }> = {
@@ -216,10 +206,6 @@ export function EmployeesPage() {
     queryKey: ['bordo-staff'],
     queryFn: () => kpiFetch<Staff[]>('/local-accounts'),
   });
-  const agents = useQuery({
-    queryKey: ['kpi-agents'],
-    queryFn: () => kpiFetch<AgentRow[]>('/kpi/agents'),
-  });
 
   const extraRoles = useMemo(() => {
     const known = new Set(ROLE_PRESETS.map((r) => r.value));
@@ -312,7 +298,6 @@ export function EmployeesPage() {
     window.setTimeout(() => setCopiedId((prev) => (prev === s.id ? null : prev)), 2000);
   };
 
-  const agentByLogin = new Map((agents.data || []).map((a) => [a.login.toLowerCase(), a]));
   const rows = (staff.data || []).filter((s) => {
     if (filter === 'all') return true;
     return roleInfo(s.role).group === filter;
@@ -415,14 +400,12 @@ export function EmployeesPage() {
               <th>Login</th>
               <th>Parol</th>
               <th>Ruxsatlar</th>
-              <th>Ko‘rsatkich</th>
               <th className="emp-th-actions">Amallar</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((s) => {
               const info = roleInfo(s.role);
-              const ag = agentByLogin.get(s.login.toLowerCase());
               const isEdit = editing?.id === s.id;
               const isCopied = copiedId === s.id;
               return (
@@ -496,16 +479,6 @@ export function EmployeesPage() {
                         updatePerms.mutate({ id: s.id, role: s.role, permissions });
                       }}
                     />
-                  </td>
-                  <td data-label="Ko‘rsatkich">
-                    {ag ? (
-                      <div>
-                        <div><b>{ag.customers} mijoz</b> · {uzs(ag.salesTotal)}</div>
-                        <div className="kpi-muted">KPI: <b className="is-ok">{uzs(ag.kpiTotal)}</b></div>
-                      </div>
-                    ) : (
-                      <span className="kpi-muted">—</span>
-                    )}
                   </td>
                   <td className="emp-td-actions" data-label="">
                     {isEdit ? (
