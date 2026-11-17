@@ -108,17 +108,21 @@ router.post("/assistant/chat", async (req: Request, res: Response) => {
       message,
       history,
     });
+    const files = Array.isArray(result.files) ? result.files : [];
     const saved = appendToSession(
       user.login,
       sessionId,
       [
         { role: "user", content: message },
-        { role: "assistant", content: result.reply, tools: result.tools },
+        { role: "assistant", content: result.reply, tools: result.tools, files },
       ],
       { forceNew },
     );
     res.json({
-      ...result,
+      reply: result.reply,
+      model: result.model,
+      tools: result.tools,
+      files,
       sessionId: saved.session.id,
       session: {
         id: saved.session.id,

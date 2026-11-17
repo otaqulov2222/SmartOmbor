@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import {
-  AlertTriangle, LayoutList, LoaderCircle, Menu, Package, PanelLeftClose,
+  AlertTriangle, Download, FileText, LayoutList, LoaderCircle, Menu, Package, PanelLeftClose,
   Plus, Search, SendHorizontal, Trash2, Users, X,
 } from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
@@ -32,12 +32,20 @@ function AgentMark({ open, className }: { open?: boolean; className?: string }) 
   );
 }
 
+type ChatFile = {
+  id: string;
+  name: string;
+  mime: string;
+  base64: string;
+};
+
 type Msg = {
   id?: string;
   role: 'user' | 'assistant';
   content: string;
   at?: number;
   tools?: Array<{ name: string; ok: boolean }>;
+  files?: ChatFile[];
 };
 type SessionMeta = {
   id: string;
@@ -66,33 +74,84 @@ const SUGGEST: Array<{ key: TKey; Icon: typeof Package }> = [
   { key: 'assistant.suggest.error', Icon: AlertTriangle },
 ];
 
+function stripJunk(text: string) {
+  return String(text || '')
+    .replace(/```(?:text|pdf|base64|plaintext)?\s*JVBERi0[\s\S]*?```/gi, '')
+    .replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, '')
+    .replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '')
+    .replace(/data:application\/pdf;base64,[A-Za-z0-9+/=]+/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function renderRich(text: string): ReactNode[] {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const cleaned = stripJunk(text);
   const nodes: ReactNode[] = [];
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      nodes.push(<span key={`br-${index}`} className="assistant-br" />);
-      return;
+  const blocks = cleaned.split(/(```[\s\S]*?```)/g);
+  let key = 0;
+  for (const block of blocks) {
+    if (!block) continue;
+    if (block.startsWith('```')) {
+      const inner = block.replace(/^```[a-z0-9]*\n?/i, '').replace(/```$/, '').trim();
+      if (/^JVBERi0/i.test(inner) || inner.length > 400) {
+        nodes.push(
+          <span key={`code-skip-${key++}`} className="assistant-code-skip">
+            Uzun kod yashirildi — fayl bo‘lsa Yuklab olishdan foydalaning.
+          </span>,
+        );
+        continue;
+      }
+      nodes.push(<code key={`code-${key++}`} className="assistant-code">{inner}</code>);
+      continue;
     }
-    if (/^\|.*\|$/.test(trimmed)) {
-      const cells = trimmed.split('|').map((c) => c.trim()).filter(Boolean);
-      if (cells.every((c) => /^[-:]+$/.test(c))) return;
-      nodes.push(
-        <span key={`row-${index}`} className="assistant-row">
-          {cells.map((cell, i) => <em key={i}>{inlineBold(cell)}</em>)}
-        </span>,
-      );
-      return;
-    }
-    const bullet = trimmed.match(/^[-*•]\s+(.+)$/);
-    if (bullet) {
-      nodes.push(<span key={`li-${index}`} className="assistant-li">{inlineBold(bullet[1])}</span>);
-      return;
-    }
-    nodes.push(<span key={`p-${index}`} className="assistant-p">{inlineBold(trimmed.replace(/^\*\*(.+)\*\*$/, '$1'))}</span>);
-  });
+    const lines = block.replace(/\r\n/g, '\n').split('\n');
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        nodes.push(<span key={`br-${key++}`} className="assistant-br" />);
+        return;
+      }
+      const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+      if (heading) {
+        nodes.push(<strong key={`h-${key++}`} className="assistant-h">{inlineBold(heading[1])}</strong>);
+        return;
+      }
+      if (/^\|.*\|$/.test(trimmed)) {
+        const cells = trimmed.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.every((c) => /^[-:]+$/.test(c))) return;
+        nodes.push(
+          <span key={`row-${key++}`} className="assistant-row">
+            {cells.map((cell, i) => <em key={i}>{inlineBold(cell)}</em>)}
+          </span>,
+        );
+        return;
+      }
+      const bullet = trimmed.match(/^[-*•]\s+(.+)$/);
+      if (bullet) {
+        nodes.push(<span key={`li-${key++}`} className="assistant-li">{inlineBold(bullet[1])}</span>);
+        return;
+      }
+      nodes.push(<span key={`p-${key++}`} className="assistant-p">{inlineBold(trimmed.replace(/^\*\*(.+)\*\*$/, '$1'))}</span>);
+    });
+  }
   return nodes;
+}
+
+function downloadChatFile(file: ChatFile) {
+  try {
+    const bin = atob(file.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: file.mime || 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name || 'smart-ombor.pdf';
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch {
+    /* ignore */
+  }
 }
 
 function inlineBold(text: string): ReactNode {
@@ -185,7 +244,10 @@ export function AssistantWidget() {
         session?: { id: string; title?: string; messages?: Msg[] };
       };
       const sid = body.session?.id || id;
-      const msgs = Array.isArray(body.session?.messages) ? body.session!.messages! : [];
+      const msgs = (Array.isArray(body.session?.messages) ? body.session!.messages! : []).map((m) => ({
+        ...m,
+        content: m.role === 'assistant' ? stripJunk(m.content) : m.content,
+      }));
       forceNewRef.current = false;
       setActiveId(sid);
       activeIdRef.current = sid;
@@ -300,6 +362,7 @@ export function AssistantWidget() {
         reply?: string;
         error?: string;
         tools?: Array<{ name: string; ok: boolean }>;
+        files?: ChatFile[];
         sessionId?: string;
         session?: SessionMeta & { messages?: Msg[]; title?: string };
         sessions?: SessionMeta[];
@@ -322,12 +385,16 @@ export function AssistantWidget() {
       if (Array.isArray(body.sessions)) setSessions(body.sessions);
       // Serverdagi to‘liq thread — ChatGPT kabi bitta chat ichida
       if (Array.isArray(body.session?.messages) && body.session!.messages!.length) {
-        setMessages(body.session!.messages!);
+        setMessages(body.session!.messages!.map((m) => ({
+          ...m,
+          content: m.role === 'assistant' ? stripJunk(m.content) : m.content,
+        })));
       } else {
         setMessages((current) => [...current, {
           role: 'assistant',
-          content: body.reply || t('assistant.failed'),
+          content: stripJunk(body.reply || t('assistant.failed')),
           tools: body.tools,
+          files: Array.isArray(body.files) ? body.files : undefined,
           at: Date.now(),
         }]);
       }
@@ -479,6 +546,25 @@ export function AssistantWidget() {
                         <span className="assistant-tools">{msg.tools.filter((x) => x.ok).length}/{msg.tools.length} {t('assistant.checked')}</span>
                       )}
                       <div className="assistant-body">{renderRich(msg.content)}</div>
+                      {msg.files && msg.files.length > 0 && (
+                        <div className="assistant-files">
+                          {msg.files.map((file) => (
+                            <button
+                              key={file.id || file.name}
+                              type="button"
+                              className="assistant-file"
+                              onClick={() => downloadChatFile(file)}
+                            >
+                              <span className="assistant-file-ico"><FileText size={16} /></span>
+                              <span className="assistant-file-copy">
+                                <b>{file.name}</b>
+                                <small>{t('assistant.download')}</small>
+                              </span>
+                              <Download size={15} />
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {msg.role === 'user' && (
                       <span className="assistant-avatar is-user" aria-hidden="true">{initials(auth?.name)}</span>

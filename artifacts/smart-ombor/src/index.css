@@ -1521,8 +1521,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .assistant-suggest button:hover:not(:disabled) { background: #eef3ff; border-color: #c5d2ff; }
 .assistant-suggest button:disabled { opacity: .55; }
 .assistant-thread {
-  flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: .7rem;
-  padding: .55rem .85rem 1rem;
+  flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: .85rem;
+  padding: .7rem .9rem 1.1rem;
   background:
     radial-gradient(ellipse at top, #f4f7ff 0%, transparent 55%),
     #eef2f7;
@@ -1544,9 +1544,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .assistant-avatar.is-user { background: #0f172a; color: #fff; }
 .assistant-avatar-svg { width: 1rem; height: 1rem; display: block; }
 .assistant-bubble {
-  max-width: min(78%, 19.5rem); padding: .65rem .8rem;
-  border-radius: 1rem; position: relative;
+  max-width: min(88%, 24rem); padding: .72rem .85rem;
+  border-radius: 1.05rem; position: relative;
   box-shadow: 0 1px 2px rgb(15 23 42 / .05);
+  overflow-wrap: anywhere; word-break: break-word; min-width: 0;
 }
 .assistant-bubble.is-user {
   background: linear-gradient(145deg, #3b63f0, #2f54eb); color: #fff;
@@ -1562,9 +1563,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   border-radius: 999px; padding: .12rem .45rem;
 }
 .assistant-bubble.is-user .assistant-tools { background: rgb(255 255 255 / .18); color: #fff; }
-.assistant-body { display: flex; flex-direction: column; gap: .28rem; font-size: .88rem; line-height: 1.45; }
+.assistant-body { display: flex; flex-direction: column; gap: .34rem; font-size: .9rem; line-height: 1.5; min-width: 0; }
 .assistant-bubble.is-user .assistant-body { color: #f8fafc; }
-.assistant-p, .assistant-li, .assistant-row { display: block; }
+.assistant-p, .assistant-li, .assistant-row, .assistant-h { display: block; max-width: 100%; }
+.assistant-h { font-size: .92rem; margin-top: .1rem; }
 .assistant-li { padding-left: .7rem; position: relative; }
 .assistant-li::before { content: ''; position: absolute; left: 0; top: .55em; width: .28rem; height: .28rem; border-radius: 999px; background: #2f54eb; }
 .assistant-bubble.is-user .assistant-li::before { background: #bfdbfe; }
@@ -1573,6 +1575,32 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .assistant-br { height: .25rem; }
 .assistant-body strong { font-weight: 750; color: #1e293b; }
 .assistant-bubble.is-user .assistant-body strong { color: #fff; }
+.assistant-code {
+  display: block; max-width: 100%; overflow: auto; white-space: pre-wrap;
+  background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: .55rem;
+  padding: .45rem .55rem; font-size: .72rem; line-height: 1.35; color: #334155;
+}
+.assistant-code-skip {
+  display: block; font-size: .74rem; color: #64748b; background: #f8fafc;
+  border: 1px dashed #cbd5e1; border-radius: .55rem; padding: .4rem .55rem;
+}
+.assistant-files { display: grid; gap: .4rem; margin-top: .55rem; }
+.assistant-file {
+  display: flex; align-items: center; gap: .55rem; width: 100%;
+  border: 1px solid #d7dff2; background: #f7f9ff; border-radius: .8rem;
+  padding: .55rem .65rem; color: #1e3a8a; text-align: left;
+}
+.assistant-file:hover { background: #eef3ff; border-color: #b8c7ff; }
+.assistant-file-ico {
+  width: 2rem; height: 2rem; border-radius: .55rem; flex: none;
+  display: grid; place-items: center; background: #2f54eb; color: #fff;
+}
+.assistant-file-copy { flex: 1; min-width: 0; display: grid; gap: .05rem; }
+.assistant-file-copy b {
+  font-size: .8rem; font-weight: 700; color: #0f172a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.assistant-file-copy small { font-size: .68rem; color: #64748b; font-weight: 600; }
 .assistant-busy {
   display: inline-flex; align-items: center; gap: .45rem;
   color: #1d39c4; font-size: .78rem; font-weight: 600;
@@ -1610,5 +1638,5 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     position: absolute; inset: 0 auto 0 0; z-index: 3; width: min(78%, 240px);
     box-shadow: 10px 0 30px rgb(15 23 42 / .12);
   }
-  .assistant-bubble { max-width: min(82%, 100%); }
+  .assistant-bubble { max-width: min(92%, 100%); }
 }

@@ -1,17 +1,26 @@
 import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
 import { packSizeOf, ensurePachka, productPackSize } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { moysklad, moyskladConfigured } from "./moysklad";
+import { buildDavomatPdf } from "./assistant-pdf";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 
 type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content: string; tool_call_id?: string; name?: string; tool_calls?: ToolCall[] };
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+
+export type AssistantFile = {
+  id: string;
+  name: string;
+  mime: string;
+  base64: string;
+};
 
 function groqKey() {
   return String(process.env.GROQ_API_KEY || process.env.GROQ_KEY || "").trim();
@@ -21,22 +30,25 @@ export function assistantConfigured() {
   return Boolean(groqKey());
 }
 
-const SYSTEM = `Siz — Smart Ombor to‘liq sun’iy intellekt nazorat agentisiz (Bordo).
-Til: foydalanuvchi qaysi tilda yozsa (o‘zbekcha yoki ruscha) — shu tilda bemalol, tabiiy muloqot qiling.
-Format: qisqa xulosa + aniq faktlar. Markdown jadval / ortiqcha ** kam. Parol/token/.env ko‘rsatmang.
+const SYSTEM = `Siz — Smart Ombor (Bordo) nazorat agentisiz.
+Asosiy kuch: shu loyiha — ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
+Umumiy savollarga qisqa javob berishingiz mumkin, lekin Smart Ombor so‘rovlari ustuvor.
 
-QATIY shartnoma:
+Til: foydalanuvchi tili (o‘zbekcha/ruscha). Format: qisqa xulosa + aniq faktlar. Ortiqcha ** / uzun kod bloki yo‘q. Parol/token/.env ko‘rsatmang.
+
+QATIY:
 - Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
-- Davomat dropdown: Davomat + Davomat hisobot; oddiy xodim faqat Mening kabinetim
-- Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity (juft teng bo‘lsa ham)
+- Davomat dropdown: Davomat + Davomat hisobot
+- Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity
 - Ofis GPS: 41.219353, 69.272828 · 100 m
 
-Majburiy:
-- Yuk / kirim / MoySklad supply / pachka / davomat / xato so‘ralganda AVVAL mos tool chaqiring.
-- «Oxirgi kirim / so‘nggi yuk / MoySkladga yozilgan oxirgi» → latest_kirim.
-- Tool natijasi bo‘lsa — undan aniq javob bering (raqam, sana, status, MS id). «tekshira olmadim» demang.
-- Faqat tool xato qaytarsa yoki bo‘sh bo‘lsa — sababini ayting.
-- Admin aniq “tuzat/yoz/исправь/запиши” desa fix_product_pachka.`;
+Tool:
+- Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
+- «Oxirgi kirim / MoySklad» → latest_kirim.
+- PDF / hisobot fayl so‘ralsa → davomat_pdf. Base64, JVBERi0, kod bloki yoki «PDF-fayl» matnini JAVOBGA YOZMANg.
+- PDF tool muvaffaqiyatli bo‘lsa: qisqa xulosa + «Yuklab olish tugmasini bosing» deng.
+- Tool natijasidan aniq raqam/sana/status. «tekshira olmadim» demang.
+- Admin “tuzat/yoz” desa fix_product_pachka.`;
 
 const TOOLS = [
   {
@@ -96,6 +108,19 @@ const TOOLS = [
       name: "office_today",
       description: "Bugungi davomat board: kelgan/kelmagan/kechikkan qisqacha.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "davomat_pdf",
+      description: "Bugungi (yoki berilgan) davomat hisobotini haqiqiy PDF fayl qilib tayyorlash. PDF/hisobot/yuklab olish so‘ralganda chaqiring.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD, bo‘sh bo‘lsa bugun" },
+        },
+      },
     },
   },
   {
@@ -294,6 +319,56 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     };
   }
 
+  if (name === "davomat_pdf") {
+    const people = listLocalPeople();
+    const byId = new Map(people.map((p) => [p.id, p]));
+    const now = tashkentParts();
+    const date = String(args.date || now.date || "").trim() || now.date;
+    const board = todayBoard();
+    const rows = board.map((row) => {
+      const ms = workedMs(row);
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      return {
+        name: byId.get(row.accountId)?.name || row.accountId,
+        role: byId.get(row.accountId)?.role || "",
+        inAt: row.inAt || null,
+        outAt: row.outAt || null,
+        status: row.inAt ? "Kelgan" : "Kelmagan",
+        workedLabel: row.inAt ? `${h}s ${m}daq ${s}son` : "—",
+      };
+    });
+    const present = rows.filter((r) => r.inAt).length;
+    const pdf = await buildDavomatPdf({
+      date,
+      total: people.length,
+      present,
+      absent: Math.max(0, people.length - present),
+      rows,
+    });
+    if (!pdf) {
+      return { ok: false, error: "pdf_build_failed", date, total: people.length, present };
+    }
+    const fileName = `davomat-${date}.pdf`;
+    return {
+      ok: true,
+      date,
+      title: `Davomat hisobot – PDF (${date})`,
+      total: people.length,
+      present,
+      absent: Math.max(0, people.length - present),
+      rows: rows.slice(0, 40),
+      file: {
+        id: randomBytes(6).toString("hex"),
+        name: fileName,
+        mime: "application/pdf",
+        base64: pdf.toString("base64"),
+      },
+      uiHint: "PDF tayyor. Javobda base64 yozmang — foydalanuvchiga Yuklab olish tugmasi chiqadi.",
+    };
+  }
+
   if (name === "list_staff") {
     return {
       items: listLocalPeople().map((p) => ({
@@ -421,6 +496,47 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
   return { error: `unknown_tool:${name}` };
 }
 
+function toolPayloadForModel(result: unknown): string {
+  if (!result || typeof result !== "object") return JSON.stringify(result ?? null).slice(0, 12000);
+  const clone = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+  const file = clone.file;
+  if (file && typeof file === "object") {
+    const f = file as Record<string, unknown>;
+    clone.file = {
+      id: f.id,
+      name: f.name,
+      mime: f.mime,
+      attached: true,
+      bytes: typeof f.base64 === "string" ? Math.round((String(f.base64).length * 3) / 4) : 0,
+      note: "Fayl UI da Yuklab olish tugmasi sifatida chiqadi. Base64 yozmang.",
+    };
+  }
+  return JSON.stringify(clone).slice(0, 12000);
+}
+
+function extractFiles(result: unknown, into: AssistantFile[]) {
+  if (!result || typeof result !== "object") return;
+  const file = (result as { file?: AssistantFile }).file;
+  if (!file?.base64 || !file.name) return;
+  if (file.base64.length > 2_500_000) return;
+  into.push({
+    id: file.id || randomBytes(6).toString("hex"),
+    name: String(file.name).slice(0, 120),
+    mime: String(file.mime || "application/pdf"),
+    base64: file.base64,
+  });
+}
+
+function sanitizeAssistantReply(text: string): string {
+  let out = String(text || "");
+  out = out.replace(/```(?:text|pdf|base64|plaintext)?\s*JVBERi0[\s\S]*?```/gi, "");
+  out = out.replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, "");
+  out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "");
+  out = out.replace(/data:application\/pdf;base64,[A-Za-z0-9+/=]+/gi, "");
+  out = out.replace(/\n{3,}/g, "\n\n").trim();
+  return out;
+}
+
 async function groqChat(messages: ChatMsg[], tools = true) {
   const key = groqKey();
   if (!key) throw Object.assign(new Error("assistant_unconfigured"), { status: 503 });
@@ -474,6 +590,7 @@ export async function runAssistantChat(input: {
   ];
 
   const toolTrace: Array<{ name: string; ok: boolean }> = [];
+  const files: AssistantFile[] = [];
 
   // Prefetch: yuk / kirim / pachka / davomat — model kutmasin.
   const shipmentMatch = message.match(/\b(\d{3,5}-\d{2,4})\b/);
@@ -482,13 +599,15 @@ export async function runAssistantChat(input: {
     || (/oxirgi|so['‘`]?nggi|последн|eng oxir/.test(lower) && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад/.test(lower));
   const wantsPachka = /pachka|пачк|packs?\.?quantity/.test(lower)
     && !wantsKirim;
-  const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто/.test(lower);
+  const wantsPdf = /pdf|пдф|yuklab|скач|hisobot.*fayl|файл.*отч|отч[её]т.*pdf/.test(lower);
+  const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
   const wantsErrors = /xato|ошибк|error|journal|log/.test(lower)
     && !wantsKirim;
 
   const pushPrefetch = async (name: string, args: Record<string, unknown>, id: string) => {
     try {
       const pre = await runTool(name, args);
+      extractFiles(pre, files);
       toolTrace.push({ name, ok: true });
       messages.push({
         role: "assistant",
@@ -503,7 +622,7 @@ export async function runAssistantChat(input: {
         role: "tool",
         tool_call_id: id,
         name,
-        content: JSON.stringify(pre).slice(0, 12000),
+        content: toolPayloadForModel(pre),
       });
     } catch (error) {
       toolTrace.push({ name, ok: false });
@@ -522,7 +641,11 @@ export async function runAssistantChat(input: {
   } else if (wantsPachka) {
     await pushPrefetch("diagnose_pachka", {}, "prefetch_pachka_rule");
   }
-  if (wantsOffice) await pushPrefetch("office_today", {}, "prefetch_office");
+  if (wantsPdf) {
+    await pushPrefetch("davomat_pdf", {}, "prefetch_davomat_pdf");
+  } else if (wantsOffice) {
+    await pushPrefetch("office_today", {}, "prefetch_office");
+  }
   if (wantsErrors) await pushPrefetch("recent_logs", { minutes: 120 }, "prefetch_logs");
 
   const weak = (text: string) => {
@@ -540,13 +663,15 @@ export async function runAssistantChat(input: {
     if (!reply) break;
     const calls = reply.tool_calls || [];
     if (!calls.length) {
-      const text = String(reply.content || "").trim();
+      const text = sanitizeAssistantReply(String(reply.content || "").trim());
       if (!weak(text) || !toolTrace.some((x) => x.ok)) {
-        return { reply: text || "Javob bo‘sh qaytdi.", model: MODEL, tools: toolTrace };
+        const finalText = text
+          || (files.length ? `PDF tayyor: ${files[0].name}. Pastdagi Yuklab olish tugmasini bosing.` : "Javob bo‘sh qaytdi.");
+        return { reply: finalText, model: MODEL, tools: toolTrace, files };
       }
       messages.push({
         role: "user",
-        content: "Tool natijasi bor. Undan aniq fakt bilan javob bering. «tekshira olmadim» demang.",
+        content: "Tool natijasi bor. Undan aniq fakt bilan javob bering. Base64 yozmang. «tekshira olmadim» demang.",
       });
       break;
     }
@@ -566,6 +691,7 @@ export async function runAssistantChat(input: {
       let ok = true;
       try {
         result = await runTool(call.function.name, args);
+        extractFiles(result, files);
       } catch (error) {
         ok = false;
         result = { error: error instanceof Error ? error.message : String(error) };
@@ -576,24 +702,46 @@ export async function runAssistantChat(input: {
         role: "tool",
         tool_call_id: call.id,
         name: call.function.name,
-        content: JSON.stringify(result).slice(0, 12000),
+        content: toolPayloadForModel(result),
       });
     }
   }
 
   const fallback = await groqChat(messages, false);
-  let text = String(fallback?.content || "").trim();
+  let text = sanitizeAssistantReply(String(fallback?.content || "").trim());
   if (weak(text) && toolTrace.some((x) => x.ok)) {
     messages.push({
       role: "user",
-      content: "Qayta: tool natijasidagi raqam/sana/statusni ochiq yozing.",
+      content: "Qayta: tool natijasidagi raqam/sana/statusni ochiq yozing. Base64/kod blokini yozmang.",
     });
     const again = await groqChat(messages, false);
-    text = String(again?.content || "").trim() || text;
+    text = sanitizeAssistantReply(String(again?.content || "").trim() || text);
+  }
+  // PDF so‘ralgan bo‘lsa — fayl bo‘lmasa majburiy yasaymiz (model toolni o‘tkazib yubormasin)
+  if (wantsPdf && !files.length) {
+    try {
+      const forced = await runTool("davomat_pdf", {});
+      extractFiles(forced, files);
+      toolTrace.push({ name: "davomat_pdf", ok: Boolean((forced as { ok?: boolean })?.ok) });
+    } catch (error) {
+      toolTrace.push({ name: "davomat_pdf", ok: false });
+      logger.warn({ err: error instanceof Error ? error.message : error }, "assistant forced pdf failed");
+    }
+  }
+
+  if (files.length) {
+    text = sanitizeAssistantReply(text);
+    if (!text || /base64|JVBERi0|kod bloki/i.test(text) || text.length < 12) {
+      const f = files[0];
+      text = `Davomat PDF tayyor (${f.name}). Pastdagi **Yuklab olish** tugmasini bosing.`;
+    } else if (!/yuklab|скач|download|tugma/i.test(text)) {
+      text = `${text}\n\nPDF fayl tayyor — **Yuklab olish** tugmasini bosing.`;
+    }
   }
   return {
     reply: text || "Tool natijasi bo‘yicha yakuniy javob olinmadi.",
     model: MODEL,
     tools: toolTrace,
+    files,
   };
 }

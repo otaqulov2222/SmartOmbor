@@ -7,12 +7,20 @@ const MAX_SESSIONS = 80;
 const MAX_MESSAGES = 200;
 const FILE = "assistant-history.json";
 
+export type HistoryFile = {
+  id: string;
+  name: string;
+  mime: string;
+  base64: string;
+};
+
 export type HistoryMsg = {
   id: string;
   role: "user" | "assistant";
   content: string;
   at: number;
   tools?: Array<{ name: string; ok: boolean }>;
+  files?: HistoryFile[];
 };
 
 export type ChatSession = {
@@ -207,7 +215,12 @@ export function mergeAssistantSessions(login: string): SessionSummary[] {
 export function appendToSession(
   login: string,
   sessionId: string | null | undefined,
-  items: Array<{ role: "user" | "assistant"; content: string; tools?: Array<{ name: string; ok: boolean }> }>,
+  items: Array<{
+    role: "user" | "assistant";
+    content: string;
+    tools?: Array<{ name: string; ok: boolean }>;
+    files?: HistoryFile[];
+  }>,
   opts?: { forceNew?: boolean },
 ): { session: ChatSession; sessions: SessionSummary[] } {
   const store = load();
@@ -238,6 +251,17 @@ export function appendToSession(
       content: String(m.content).slice(0, 8000),
       at: now + i,
       tools: Array.isArray(m.tools) ? m.tools.slice(0, 20) : undefined,
+      files: Array.isArray(m.files)
+        ? m.files
+          .filter((f) => f?.base64 && f?.name && String(f.base64).length < 2_500_000)
+          .slice(0, 3)
+          .map((f) => ({
+            id: String(f.id || `${now}-f`),
+            name: String(f.name).slice(0, 120),
+            mime: String(f.mime || "application/pdf"),
+            base64: String(f.base64),
+          }))
+        : undefined,
     }));
 
   session.messages = [...(session.messages || []), ...stamped].slice(-MAX_MESSAGES);
