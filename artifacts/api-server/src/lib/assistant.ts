@@ -715,11 +715,18 @@ function localGuideReply(lower: string): string | null {
   return null;
 }
 
+type AssistantResult = {
+  reply: string;
+  model: string;
+  tools: Array<{ name: string; ok: boolean }>;
+  files: AssistantFile[];
+};
+
 function offlineAssistantReply(input: {
   message: string;
   files: AssistantFile[];
   tools: Array<{ name: string; ok: boolean }>;
-}): { reply: string; model: string; tools: Array<{ name: string; ok: boolean }>; files: AssistantFile[] } {
+}): AssistantResult {
   const lower = input.message.toLowerCase();
   if (input.files.length) {
     const f = input.files[0];
@@ -751,6 +758,218 @@ function offlineAssistantReply(input: {
   };
 }
 
+function workedLabel(ms: number) {
+  const totalMin = Math.max(0, Math.floor(Number(ms || 0) / 60_000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h > 0) return `${h} soat ${m} daq`;
+  return `${m} daq`;
+}
+
+function clockLabel(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return new Intl.DateTimeFormat("uz-UZ", {
+    timeZone: "Asia/Tashkent",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
+
+/** Buyruq/vazifa — Groq kutmasdan tool + mahalliy matn (tez va barqaror). */
+async function tryFastLocalTask(message: string): Promise<AssistantResult | null> {
+  const lower = message.toLowerCase();
+  const tools: Array<{ name: string; ok: boolean }> = [];
+  const files: AssistantFile[] = [];
+
+  const run = async (name: string, args: Record<string, unknown> = {}) => {
+    try {
+      const result = await runTool(name, args);
+      extractFiles(result, files);
+      tools.push({ name, ok: true });
+      return result;
+    } catch (error) {
+      tools.push({ name, ok: false });
+      logger.warn({ tool: name, err: error instanceof Error ? error.message : error }, "fast-local tool failed");
+      return null;
+    }
+  };
+
+  // 1) Fayl buyruqlari
+  const exportWanted = detectExport(lower);
+  if (exportWanted) {
+    await run("export_report", exportWanted);
+    if (files.length) {
+      const f = files[0];
+      const kindLabel = exportWanted.kind === "kirim" ? "Kirim"
+        : exportWanted.kind === "staff" ? "Xodimlar"
+          : "Davomat";
+      return {
+        reply: `${kindLabel} hisoboti tayyor (${f.name}). Pastdagi Yuklab olish tugmasini bosing.`,
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+    return {
+      reply: "Hisobotni tayyorlab bo‘lmadi. Bir ozdan keyin qayta urinib ko‘ring.",
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 2) Yuk raqami / pachka diagnostikasi
+  const shipmentMatch = message.match(/\b(\d{3,5}-\d{2,4})\b/);
+  if (shipmentMatch) {
+    const number = shipmentMatch[1];
+    const found = await run("find_shipment", { number }) as Record<string, unknown> | null;
+    if (!found || !found.found) {
+      return {
+        reply: `Yuk xati topilmadi: ${number}. Raqamni tekshirib qayta yozing.`,
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+    const lines = Array.isArray(found.lines) ? found.lines as Array<Record<string, unknown>> : [];
+    const withPachka = lines.filter((l) => Number(l.pachka) > 1 || Number(l.packSizeOf) > 1);
+    const bullets = withPachka.slice(0, 8).map((l) => {
+      const code = String(l.productCode || "tovar");
+      const pachka = Number(l.pachka) || Number(l.packSizeOf) || 0;
+      const pairs = Number(l.pairs) || 0;
+      const write = l.willWriteToMs ? "MS ga yoziladi" : "MS ga yozilmaydi";
+      return `• ${code}: pachka ${pachka}, juft ${pairs} — ${write}`;
+    });
+    if (/pachka|пачк/.test(lower)) {
+      await run("diagnose_pachka", { shipment_number: number });
+    }
+    return {
+      reply: [
+        `Yuk xati ${found.number}: holat — ${localizeStatus(found.status)}, sana ${found.date || "—"}.`,
+        found.moyskladNumber ? `MoySklad: ${found.moyskladNumber}` : "MoySkladga hali yozilmagan yoki raqam yo‘q.",
+        `Tovar qatorlari: ${lines.length}.`,
+        bullets.length ? "Pachka qatorlari:\n" + bullets.join("\n") : "Pachka (>1) qatorlari yo‘q.",
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 3) Oxirgi kirim / yuk
+  const wantsKirim = /kirim|supply|приход|oxirgi yuk|so['‘`]?nggi yuk|oxirgi.*moy|moy\s*sklad.*yuk|yuk.*moy\s*sklad|последн.*(приход|наклад|поставк)/.test(lower)
+    || (/oxirgi|so['‘`]?nggi|последн|eng oxir/.test(lower) && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад/.test(lower));
+  if (wantsKirim) {
+    const data = await run("latest_kirim", { limit: 6 }) as Record<string, unknown> | null;
+    if (!data) {
+      return { reply: "Kirim ma’lumotini olib bo‘lmadi.", model: "local-fast", tools, files };
+    }
+    const local = Array.isArray(data.localShipments) ? data.localShipments as Array<Record<string, unknown>> : [];
+    const ms = Array.isArray(data.moyskladSupplies) ? data.moyskladSupplies as Array<Record<string, unknown>> : [];
+    const lines = [
+      "Oxirgi kirim/yuklar:",
+      ...local.slice(0, 5).map((s) => {
+        const posted = s.moySkladgaYozilgan ?? s.posted;
+        const holat = posted === true || posted === "ha" || posted === "yozilgan" ? "MS ga yozilgan" : "mahalliy";
+        return `• ${s.number} · ${s.date || "—"} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
+      }),
+    ];
+    if (ms.length) {
+      lines.push("MoySklad oxirgi supply:");
+      for (const row of ms.slice(0, 3)) {
+        lines.push(`• ${row.number || row.id} · ${row.moment || "—"} · ${row.agent || "—"}`);
+      }
+    }
+    if (data.moyskladError || data.moySkladXato) {
+      lines.push(`MS eslatma: ${data.moyskladError || data.moySkladXato}`);
+    }
+    return { reply: lines.join("\n"), model: "local-fast", tools, files };
+  }
+
+  // 4) Bugungi davomat holati (tushuntirish emas — raqam)
+  const wantsBoard = /bugun kim|kelganlar|kelmagan|bugungi davomat|davomat holat|kim keldi|kim kelmagan|сегодня кто|кто приш/.test(lower)
+    || (/davomat/.test(lower) && /(bugun|holat|ro.?yxat|kim|stat)/.test(lower));
+  if (wantsBoard) {
+    const board = await run("office_today", {}) as Record<string, unknown> | null;
+    if (!board) {
+      return { reply: "Davomat board olinmadi.", model: "local-fast", tools, files };
+    }
+    const rows = Array.isArray(board.rows) ? board.rows as Array<Record<string, unknown>> : [];
+    const present = rows.filter((r) => r.inAt);
+    const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
+    const lines = [
+      `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}.`,
+      ...present.slice(0, 12).map((r) => {
+        const name = String(r.name || "xodim");
+        const inn = clockLabel(String(r.inAt || ""));
+        const out = r.outAt ? clockLabel(String(r.outAt)) : "ketmagan";
+        return `• ${name}: ${inn} → ${out} (${workedLabel(Number(r.workedMs || 0))})`;
+      }),
+    ];
+    return { reply: lines.join("\n"), model: "local-fast", tools, files };
+  }
+
+  // 5) Xodimlar ro‘yxati
+  if (/xodimlar ro.?yxat|kimlar bor|staff list|loginlar|barcha xodim/.test(lower)) {
+    const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
+    const items = data?.items || [];
+    return {
+      reply: [
+        `Xodimlar: ${items.length} ta.`,
+        ...items.slice(0, 25).map((p) => `• ${p.name} — ${p.login} (${p.role})`),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 6) Tizim holati
+  if (/tizim holat|system overview|umumiy holat|server holat|yordamchi holat/.test(lower)) {
+    const data = await run("system_overview", {}) as Record<string, unknown> | null;
+    if (!data) return { reply: "Tizim holati olinmadi.", model: "local-fast", tools, files };
+    const office = (data.office || {}) as Record<string, unknown>;
+    const recent = Array.isArray(data.recentShipments) ? data.recentShipments as Array<Record<string, unknown>> : [];
+    return {
+      reply: [
+        `Vaqt: ${data.date || "—"} ${data.clock || ""}`.trim(),
+        `Ofis GPS: ${office.lat}, ${office.lng} · ${office.radiusM} m`,
+        `Xodimlar: ${data.staff}`,
+        `Yordamchi: ${(data.configured ? "ulangan" : "sozlanmagan")}`,
+        recent.length ? "Oxirgi yuklar:\n" + recent.slice(0, 5).map((s) => `• ${s.number} · ${s.date} · ${localizeStatus(s.status)}`).join("\n") : "",
+      ].filter(Boolean).join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 7) Supply jobs
+  if (/supply.?job|yuk vazifa|kirim vazifa|pending supply/.test(lower)) {
+    const data = await run("supply_jobs", {}) as { count?: number; items?: Array<Record<string, unknown>> } | null;
+    const items = data?.items || [];
+    return {
+      reply: [
+        `Oxirgi yuk vazifalari: ${data?.count ?? items.length}`,
+        ...items.slice(0, 8).map((j) => `• ${j.shipmentNumber || j.id} — ${localizeStatus(j.status)}`),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 8) Sof tushuntirish (KPI/Davomat/…)
+  const guided = localGuideReply(lower);
+  if (guided) {
+    return { reply: guided, model: "local-guide", tools, files };
+  }
+
+  return null;
+}
+
 async function groqChat(messages: ChatMsg[], tools = true) {
   const key = groqKey();
   if (!key) throw Object.assign(new Error("assistant_unconfigured"), { status: 503 });
@@ -770,9 +989,9 @@ async function groqChat(messages: ChatMsg[], tools = true) {
   }
 
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 55_000);
+    const timer = setTimeout(() => ac.abort(), 28_000);
     try {
       const response = await fetch(GROQ_URL, {
         method: "POST",
@@ -808,8 +1027,8 @@ async function groqChat(messages: ChatMsg[], tools = true) {
       const msg = error instanceof Error ? error.message : String(error);
       const retryable = /fetch failed|aborted|ETIMEDOUT|ECONNRESET|ENOTFOUND|network|timeout/i.test(msg)
         || (typeof error === "object" && error && "cause" in error);
-      if (!retryable || attempt === 3) break;
-      await new Promise((r) => setTimeout(r, 400 * attempt));
+      if (!retryable || attempt === 2) break;
+      await new Promise((r) => setTimeout(r, 350 * attempt));
     } finally {
       clearTimeout(timer);
     }
@@ -826,6 +1045,10 @@ export async function runAssistantChat(input: {
 }) {
   const message = String(input.message || "").trim().slice(0, 4000);
   if (message.length < 1) throw Object.assign(new Error("empty"), { status: 400 });
+
+  // Avvalo tez mahalliy yo‘l: buyruq/vazifa/tushuntirish — Groq kutmaydi.
+  const fast = await tryFastLocalTask(message);
+  if (fast) return fast;
 
   const history = (input.history || [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
@@ -852,12 +1075,6 @@ export async function runAssistantChat(input: {
   const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
   const wantsErrors = /xato|ошибк|error|journal|log/.test(lower)
     && !wantsKirim;
-  const needsLiveData = Boolean(exportWanted || wantsKirim || wantsPachka || wantsOffice || wantsErrors || shipmentMatch);
-  // Sof tushuntirish — Groq kutmasdan mahalliy javob (tarmoq xatosi bo‘lmasin).
-  const guideOnly = localGuideReply(lower);
-  if (guideOnly && !needsLiveData) {
-    return { reply: guideOnly, model: "local-guide", tools: toolTrace, files };
-  }
 
   const pushPrefetch = async (name: string, args: Record<string, unknown>, id: string) => {
     try {
@@ -927,7 +1144,7 @@ export async function runAssistantChat(input: {
   };
 
   try {
-    for (let round = 0; round < 6; round += 1) {
+    for (let round = 0; round < 3; round += 1) {
       const reply = await groqChat(messages, true);
       if (!reply) break;
       const calls = reply.tool_calls || [];
