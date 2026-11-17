@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import {
-  AlertTriangle, Download, FileText, LoaderCircle, Menu, Package, PanelLeftClose,
-  Plus, Search, SendHorizontal, Trash2, Users, X,
+  Download, FileText, LoaderCircle, Menu, PanelLeftClose,
+  Plus, Search, SendHorizontal, Trash2, X,
 } from 'lucide-react';
-import { useI18n, type TKey } from '@/i18n';
+import { useI18n } from '@/i18n';
 import { isOfficeAdmin } from '@/access';
 
 function AgentMark({ open, className }: { open?: boolean; className?: string }) {
@@ -66,13 +66,6 @@ function readSession(): AuthSession | null {
     return null;
   }
 }
-
-const SUGGEST: Array<{ key: TKey; Icon: typeof Package }> = [
-  { key: 'assistant.suggest.pachka', Icon: Package },
-  { key: 'assistant.suggest.office', Icon: Users },
-  { key: 'assistant.suggest.pdf', Icon: FileText },
-  { key: 'assistant.suggest.error', Icon: AlertTriangle },
-];
 
 function localizeUz(text: string) {
   let out = String(text || '');
@@ -574,14 +567,6 @@ export function AssistantWidget() {
               <div className="assistant-empty">
                 <span className="assistant-mark lg"><AgentMark className="assistant-mark-svg" /></span>
                 <h3>{t('assistant.hello')}</h3>
-                <div className="assistant-suggest">
-                  {SUGGEST.map(({ key, Icon }) => (
-                    <button key={key} type="button" disabled={busy || ready === false} onClick={() => void send(t(key))}>
-                      <Icon size={14} strokeWidth={2.2} />
-                      {t(key)}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
 
