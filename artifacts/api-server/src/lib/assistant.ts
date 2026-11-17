@@ -7,7 +7,8 @@ import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
 import { packSizeOf, ensurePachka, productPackSize, pieceCount, receiptParts } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
-import { moysklad, moyskladConfigured } from "./moysklad";
+import { money, moysklad, moyskladAll, moyskladConfigured } from "./moysklad";
+import { peekCatalog } from "./catalog";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 
 // Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
@@ -74,7 +75,7 @@ Tool:
 - Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
 - Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.
-- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, bugungi davomat, hisobot, xato, MS solishtirish — to‘liq stsenariyni o‘zingiz tanlab bajaring.`;
+- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, bugungi davomat, hisobot, xato, MS solishtirish, eng ko‘p sotilgan tovarlar — to‘liq stsenariyni o‘zingiz tanlab bajaring.`;
 
 const TOOLS = [
   {
@@ -212,6 +213,20 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: { minutes: { type: "number", description: "Default 60" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "top_sold_products",
+      description: "Belgilangan kun oralig‘ida MoySklad bo‘yicha eng ko‘p sotilgan tovarlar (dona + summa).",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "Default 15, max 365" },
+          limit: { type: "number", description: "Default 15, max 40" },
+        },
       },
     },
   },
@@ -673,10 +688,109 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         `journalctl -u smart-ombor --since "${minutes} minutes ago" -p warning..alert --no-pager -n 40 2>/dev/null || true`,
         { encoding: "utf8", timeout: 8000 },
       );
-      const lines = raw.split(/\n/).map((l) => l.trim()).filter(Boolean).slice(-30);
+      const lines = raw
+        .split(/\n/)
+        .map((l) => l.trim())
+        .filter((l) => Boolean(l) && !/^--\s*No entries\s*--$/i.test(l))
+        .slice(-30);
       return { minutes, lines };
     } catch (error) {
       return { minutes, error: error instanceof Error ? error.message : String(error), lines: [] };
+    }
+  }
+
+  if (name === "top_sold_products") {
+    const days = Math.min(365, Math.max(1, Math.round(Number(args.days) || 15)));
+    const limit = Math.min(40, Math.max(5, Math.round(Number(args.limit) || 15)));
+    const to = tashkentParts().date;
+    const toDate = new Date(`${to}T12:00:00+05:00`);
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - (days - 1));
+    const from = tashkentParts(fromDate).date;
+    const momentFrom = `${from} 00:00:00`;
+    const momentTo = `${to} 23:59:59`;
+
+    if (!moyskladConfigured()) {
+      const catalog = peekCatalog();
+      const ranked = [...(catalog?.products || [])]
+        .map((p) => ({
+          name: p.name,
+          code: p.code,
+          article: p.article,
+          qty: days <= 7 ? p.sales7 : p.sales30,
+          sum: null as number | null,
+          source: days <= 7 ? "katalog_7kun" : "katalog_30kun",
+        }))
+        .filter((p) => p.qty > 0)
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, limit);
+      return {
+        ok: true,
+        days,
+        from,
+        to,
+        source: "katalog",
+        note: "MoySklad ulanmagan — katalogdagi savdo maydonidan.",
+        totalQty: ranked.reduce((s, r) => s + r.qty, 0),
+        items: ranked,
+      };
+    }
+
+    try {
+      const profit = await moyskladAll<{
+        assortment?: { meta?: { href?: string }; name?: string; code?: string; article?: string };
+        sellQuantity?: number;
+        sellSum?: number;
+      }>(
+        `/report/profit/byproduct?momentFrom=${encodeURIComponent(momentFrom)}&momentTo=${encodeURIComponent(momentTo)}`,
+      );
+      const items = [...profit.rows]
+        .map((row) => ({
+          name: row.assortment?.name || "Mahsulot",
+          code: row.assortment?.code || null,
+          article: row.assortment?.article || null,
+          qty: Number(row.sellQuantity || 0),
+          sum: money(row.sellSum),
+        }))
+        .filter((row) => row.qty > 0)
+        .sort((a, b) => b.qty - a.qty || (b.sum || 0) - (a.sum || 0))
+        .slice(0, limit);
+      return {
+        ok: true,
+        days,
+        from,
+        to,
+        source: "moysklad",
+        totalQty: items.reduce((s, r) => s + r.qty, 0),
+        totalSum: items.reduce((s, r) => s + (r.sum || 0), 0),
+        items,
+      };
+    } catch (error) {
+      const catalog = peekCatalog();
+      const ranked = [...(catalog?.products || [])]
+        .map((p) => ({
+          name: p.name,
+          code: p.code,
+          article: p.article,
+          qty: days <= 7 ? p.sales7 : p.sales30,
+          sum: null as number | null,
+        }))
+        .filter((p) => p.qty > 0)
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, limit);
+      return {
+        ok: ranked.length > 0,
+        days,
+        from,
+        to,
+        source: "katalog_fallback",
+        error: error instanceof Error ? error.message : String(error),
+        note: ranked.length
+          ? `MoySklad vaqtincha o‘qilmadi — katalog (${days <= 7 ? "7" : "30"} kun) bo‘yicha.`
+          : "Savdo ma’lumoti olinmadi.",
+        totalQty: ranked.reduce((s, r) => s + r.qty, 0),
+        items: ranked,
+      };
     }
   }
 
@@ -1011,6 +1125,55 @@ function workedLabel(ms: number) {
   return `${m} daq`;
 }
 
+function parseDaysWindow(lower: string, fallback = 15) {
+  const m = lower.match(/(\d{1,3})\s*(kun|day|дн|дня|дней)/i)
+    || lower.match(/(?:oxirgi|so['‘`]?nggi|last|за)\s*(\d{1,3})/i);
+  if (m) return Math.min(365, Math.max(1, Number(m[1])));
+  if (/hafta|week|недел/.test(lower)) return 7;
+  if (/\boy\b|month|месяц/.test(lower)) return 30;
+  return fallback;
+}
+
+function isTopSoldIntent(lower: string) {
+  if (/(eng\s*ko['‘`]?p|top|reyting|лидер).{0,40}(sot|savdo|tovar|продаж)/.test(lower)) return true;
+  if (/(sotilgan|продаж).{0,40}(tovar|mahsulot|товар)/.test(lower)) return true;
+  if (/(ko['‘`]?p\s*sotil|best.?sell|хит\s*продаж)/.test(lower)) return true;
+  if (/savdo\s*(reyting|top|hisobot)/.test(lower)) return true;
+  return false;
+}
+
+function formatQty(n: number) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+function formatSum(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(Number(n))) return null;
+  return new Intl.NumberFormat("uz-UZ", { maximumFractionDigits: 0 }).format(Math.round(Number(n)));
+}
+
+function formatTopSoldReply(data: Record<string, unknown>) {
+  const days = Number(data.days) || 15;
+  const from = String(data.from || "");
+  const to = String(data.to || "");
+  const items = Array.isArray(data.items) ? data.items as Array<Record<string, unknown>> : [];
+  if (!items.length) {
+    return `Oxirgi ${days} kun (${from} — ${to}) ichida sotuv topilmadi.`;
+  }
+  const note = data.note ? `\n${data.note}` : "";
+  const lines = items.slice(0, 20).map((row, i) => {
+    const code = row.code ? ` · ${row.code}` : "";
+    const sum = formatSum(row.sum as number | null);
+    const sumPart = sum ? ` · ${sum} so‘m` : "";
+    return `${i + 1}) ${row.name}${code}: ${formatQty(Number(row.qty))} dona${sumPart}`;
+  });
+  return [
+    `Oxirgi ${days} kun (${from} — ${to}) — eng ko‘p sotilganlar:`,
+    ...lines,
+    `Jami (ro‘yxat): ${formatQty(Number(data.totalQty) || 0)} dona.`,
+  ].join("\n") + note;
+}
+
 function clockLabel(iso: string | null | undefined) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -1188,7 +1351,17 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 5) Oxirgi kirim ro‘yxati (tekshir emas)
+  // 5) Eng ko‘p sotilgan tovarlar
+  if (isTopSoldIntent(lower)) {
+    const days = parseDaysWindow(lower, 15);
+    const data = await run("top_sold_products", { days, limit: 15 }) as Record<string, unknown> | null;
+    if (!data) {
+      return { reply: "Savdo reytingini olib bo‘lmadi. Bir ozdan keyin qayta urinib ko‘ring.", model: "local-fast", tools, files };
+    }
+    return { reply: formatTopSoldReply(data), model: "local-fast", tools, files };
+  }
+
+  // 6) Oxirgi kirim ro‘yxati (tekshir emas)
   const wantsKirimList = /oxirgi|so['‘`]?nggi|последн|eng oxir|list|ro.?yxat/.test(lower)
     && /yuk|kirim|supply|наклад|moy\s*sklad|moysklad/.test(lower)
     && !auditAsk;
@@ -1212,7 +1385,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 6) Davomat board
+  // 7) Davomat board
   const wantsBoard = /bugun kim|kelganlar|kelmagan|bugungi davomat|davomat holat|kim keldi|kim kelmagan|сегодня кто|кто приш/.test(lower)
     || (/davomat/.test(lower) && /(bugun|holat|ro.?yxat|kim|stat|hozir)/.test(lower) && !/tushun|qanday|bolim/.test(lower));
   if (wantsBoard) {
@@ -1238,7 +1411,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 7) Xodimlar
+  // 8) Xodimlar
   if (/xodimlar ro.?yxat|kimlar bor|staff list|loginlar|barcha xodim|agentlar ro.?yxat/.test(lower)) {
     const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
     const items = data?.items || [];
@@ -1255,7 +1428,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 8) Journal / xato
+  // 9) Journal / xato
   if (/journal|лог|loglar|server xato|oxirgi xato|warning|ogohlantirish/.test(lower)
     || (/xato|error/.test(lower) && /server|tizim|journal|log/.test(lower))) {
     const data = await run("recent_logs", { minutes: 120 }) as { lines?: string[]; minutes?: number; error?: string } | null;
@@ -1263,14 +1436,14 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     return {
       reply: lines.length
         ? [`Oxirgi ${data?.minutes || 120} daq jurnal:`, ...lines.slice(-15).map((l) => `• ${l.slice(0, 180)}`)].join("\n")
-        : "Oxirgi ogohlantirish/xato yo‘q (yoki journal o‘qilmadi).",
+        : "Oxirgi 120 daqiqada ogohlantirish/xato yo‘q.",
       model: "local-fast",
       tools,
       files,
     };
   }
 
-  // 9) Tizim holati
+  // 10) Tizim holati
   if (/tizim holat|system overview|umumiy holat|server holat|yordamchi holat|ishlayaptimi/.test(lower)) {
     const data = await run("system_overview", {}) as Record<string, unknown> | null;
     if (!data) return { reply: "Tizim holati olinmadi.", model: "local-fast", tools, files };
@@ -1290,13 +1463,13 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 10) Tushuntirishlar
+  // 11) Tushuntirishlar
   const guided = localGuideReply(lower);
   if (guided) {
     return { reply: guided, model: "local-guide", tools, files };
   }
 
-  // 11) Yolg‘iz «tekshir» / «muammo bormi» — default: oxirgi yuk auditi
+  // 12) Yolg‘iz «tekshir» / «muammo bormi» — default: oxirgi yuk auditi
   if (auditAsk) {
     return doAudit();
   }
