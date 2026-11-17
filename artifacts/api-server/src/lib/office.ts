@@ -92,10 +92,21 @@ export type OfficeTask = {
   note: string;
 };
 
-type FaceRow = { hash: string; hashes?: string[]; enrolledAt: string };
-/** Bitta odam / turli yoritish — biroz bo‘sh. Boshqa odam o‘tmasligi uchun 14 emas. */
-const FACE_MATCH_MAX = 10;
-const FACE_UNIQUE_MAX = 10;
+type FaceRow = {
+  hash?: string;
+  hashes?: string[];
+  /** face-api FaceRecognitionNet 128-d vektorlar. */
+  descriptors?: number[][];
+  enrolledAt: string;
+};
+/** Legacy aHash (eski enrolllar). Yangi oqim — descriptors. */
+const FACE_MATCH_MAX = 16;
+const FACE_UNIQUE_MAX = 12;
+const FACE_HASH_KEEP = 6;
+/** face-api tavsiya: < 0.6 bir odam. */
+const FACE_DESC_MATCH = 0.55;
+const FACE_DESC_UNIQUE = 0.48;
+const FACE_DESC_KEEP = 8;
 type Store = {
   secret: string;
   site: OfficeSite;
@@ -335,28 +346,68 @@ function normalizeFaceHash(value: unknown) {
   return /^[0-9a-f]{16}$/.test(clean) ? clean : "";
 }
 
+function normalizeDescriptor(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length !== 128) return null;
+  const out: number[] = [];
+  for (const item of value) {
+    const n = Number(item);
+    if (!Number.isFinite(n)) return null;
+    out.push(Math.round(n * 1e6) / 1e6);
+  }
+  return out;
+}
+
+function euclidean(a: number[], b: number[]) {
+  if (a.length !== b.length) return 99;
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const d = a[i]! - b[i]!;
+    sum += d * d;
+  }
+  return Math.sqrt(sum);
+}
+
 function faceHashesOf(row: FaceRow | undefined) {
   if (!row) return [] as string[];
-  const list = [...(Array.isArray(row.hashes) ? row.hashes : []), row.hash]
+  const list = [...(Array.isArray(row.hashes) ? row.hashes : []), row.hash || ""]
     .map(normalizeFaceHash)
     .filter(Boolean);
   return [...new Set(list)];
 }
 
-export function faceEnrolled(accountId: string) {
-  return faceHashesOf(load().faces[accountId]).length > 0;
+function faceDescriptorsOf(row: FaceRow | undefined) {
+  if (!row || !Array.isArray(row.descriptors)) return [] as number[][];
+  return row.descriptors.map(normalizeDescriptor).filter((item): item is number[] => Boolean(item));
 }
 
-export function enrollFace(accountId: string, hashOrHashes: string | string[]) {
-  const cleaned = [...new Set(
-    (Array.isArray(hashOrHashes) ? hashOrHashes : [hashOrHashes])
-      .map(normalizeFaceHash)
-      .filter(Boolean),
-  )].slice(0, 3);
-  if (!cleaned.length) throw Object.assign(new Error("face"), { status: 400 });
-  if (faceEnrolled(accountId)) throw Object.assign(new Error("exists"), { status: 409 });
-  const store = load();
-  // Boshqa akkauntga birikkan yuz — shu odam boshqa login bilan o‘tmasin.
+export function faceEnrolled(accountId: string) {
+  const row = load().faces[accountId];
+  return faceDescriptorsOf(row).length > 0 || faceHashesOf(row).length > 0;
+}
+
+function bestDescriptorDistance(probe: number[], gallery: number[][]) {
+  let best = 99;
+  for (const item of gallery) {
+    const d = euclidean(probe, item);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function assertDescriptorsNotTaken(store: Store, accountId: string, probes: number[][]) {
+  for (const [id, row] of Object.entries(store.faces)) {
+    if (id === accountId) continue;
+    const gallery = faceDescriptorsOf(row);
+    if (!gallery.length) continue;
+    for (const probe of probes) {
+      if (bestDescriptorDistance(probe, gallery) <= FACE_DESC_UNIQUE) {
+        throw Object.assign(new Error("taken"), { status: 409 });
+      }
+    }
+  }
+}
+
+function assertHashesNotTaken(store: Store, accountId: string, cleaned: string[]) {
   for (const [id, row] of Object.entries(store.faces)) {
     if (id === accountId) continue;
     for (const saved of faceHashesOf(row)) {
@@ -367,24 +418,127 @@ export function enrollFace(accountId: string, hashOrHashes: string | string[]) {
       }
     }
   }
+}
+
+function dedupeDescriptors(list: number[][]) {
+  const out: number[][] = [];
+  for (const item of list) {
+    if (out.some((saved) => euclidean(saved, item) < 0.12)) continue;
+    out.push(item);
+    if (out.length >= FACE_DESC_KEEP) break;
+  }
+  return out;
+}
+
+export function enrollFace(
+  accountId: string,
+  input: { hashes?: string | string[]; descriptors?: number[][]; replace?: boolean },
+) {
+  const descriptors = dedupeDescriptors(
+    (Array.isArray(input.descriptors) ? input.descriptors : [])
+      .map(normalizeDescriptor)
+      .filter((item): item is number[] => Boolean(item)),
+  );
+  const cleaned = [...new Set(
+    (Array.isArray(input.hashes) ? input.hashes : input.hashes != null ? [input.hashes] : [])
+      .map(normalizeFaceHash)
+      .filter(Boolean),
+  )].slice(0, FACE_HASH_KEEP);
+  if (!descriptors.length && !cleaned.length) throw Object.assign(new Error("face"), { status: 400 });
+  const replace = Boolean(input.replace);
+  if (!replace && faceEnrolled(accountId)) throw Object.assign(new Error("exists"), { status: 409 });
+  const store = load();
+  if (descriptors.length) assertDescriptorsNotTaken(store, accountId, descriptors);
+  if (cleaned.length) assertHashesNotTaken(store, accountId, cleaned);
+  const prev = store.faces[accountId];
+  const prevDesc = replace ? faceDescriptorsOf(prev) : [];
+  const mergedDesc = descriptors.length
+    ? dedupeDescriptors([...descriptors, ...prevDesc])
+    : faceDescriptorsOf(prev);
+  const prevHash = replace ? faceHashesOf(prev) : [];
+  const mergedHash = cleaned.length
+    ? [...new Set([...cleaned, ...prevHash])].slice(0, FACE_HASH_KEEP)
+    : (descriptors.length ? [] : faceHashesOf(prev));
   store.faces[accountId] = {
-    hash: cleaned[0]!,
-    hashes: cleaned,
+    hash: mergedHash[0],
+    hashes: mergedHash.length ? mergedHash : undefined,
+    descriptors: mergedDesc.length ? mergedDesc : undefined,
     enrolledAt: new Date().toISOString(),
   };
   save(store);
 }
 
-export function faceMatches(accountId: string, hashOrHashes: string | string[]) {
-  const saved = faceHashesOf(load().faces[accountId]);
-  if (!saved.length) return false;
-  const probes = [...new Set(
-    (Array.isArray(hashOrHashes) ? hashOrHashes : [hashOrHashes])
+/** Muvaffaqiyatli punchdan keyin yangi namunalarni qo‘shib, keyingi urinishlar barqaror bo‘lsin. */
+export function rememberFace(
+  accountId: string,
+  input: { hashes?: string | string[]; descriptors?: number[][] },
+) {
+  if (!faceEnrolled(accountId)) return;
+  const store = load();
+  const prev = store.faces[accountId];
+  const probes = dedupeDescriptors(
+    (Array.isArray(input.descriptors) ? input.descriptors : [])
+      .map(normalizeDescriptor)
+      .filter((item): item is number[] => Boolean(item)),
+  );
+  const hashProbes = [...new Set(
+    (Array.isArray(input.hashes) ? input.hashes : input.hashes != null ? [input.hashes] : [])
       .map(normalizeFaceHash)
       .filter(Boolean),
   )];
-  if (!probes.length) return false;
-  return probes.some((probe) => saved.some((item) => hamming(item, probe) <= FACE_MATCH_MAX));
+  if (!probes.length && !hashProbes.length) return;
+  try {
+    if (probes.length) assertDescriptorsNotTaken(store, accountId, probes);
+    if (hashProbes.length) assertHashesNotTaken(store, accountId, hashProbes);
+  } catch {
+    return;
+  }
+  const mergedDesc = probes.length
+    ? dedupeDescriptors([...probes, ...faceDescriptorsOf(prev)])
+    : faceDescriptorsOf(prev);
+  const mergedHash = hashProbes.length
+    ? [...new Set([...hashProbes, ...faceHashesOf(prev)])].slice(0, FACE_HASH_KEEP)
+    : faceHashesOf(prev);
+  store.faces[accountId] = {
+    hash: mergedHash[0],
+    hashes: mergedHash.length ? mergedHash : undefined,
+    descriptors: mergedDesc.length ? mergedDesc : undefined,
+    enrolledAt: prev?.enrolledAt || new Date().toISOString(),
+  };
+  save(store);
+}
+
+export function faceMatchDistance(accountId: string, descriptor: number[]) {
+  const gallery = faceDescriptorsOf(load().faces[accountId]);
+  if (!gallery.length) return null;
+  const probe = normalizeDescriptor(descriptor);
+  if (!probe) return null;
+  return bestDescriptorDistance(probe, gallery);
+}
+
+export function faceMatches(
+  accountId: string,
+  input: { hashes?: string | string[]; descriptors?: number[][] },
+) {
+  const row = load().faces[accountId];
+  const gallery = faceDescriptorsOf(row);
+  const probes = (Array.isArray(input.descriptors) ? input.descriptors : [])
+    .map(normalizeDescriptor)
+    .filter((item): item is number[] => Boolean(item));
+  if (gallery.length && probes.length) {
+    return probes.some((probe) => bestDescriptorDistance(probe, gallery) <= FACE_DESC_MATCH);
+  }
+  // Legacy aHash — faqat descriptor yo‘q eski profil uchun.
+  if (gallery.length) return false;
+  const saved = faceHashesOf(row);
+  if (!saved.length) return false;
+  const hashProbes = [...new Set(
+    (Array.isArray(input.hashes) ? input.hashes : input.hashes != null ? [input.hashes] : [])
+      .map(normalizeFaceHash)
+      .filter(Boolean),
+  )];
+  if (!hashProbes.length) return false;
+  return hashProbes.some((probe) => saved.some((item) => hamming(item, probe) <= FACE_MATCH_MAX));
 }
 
 function wallToken(secret: string) {
@@ -417,6 +571,7 @@ export function punch(input: {
   accuracy?: number;
   faceHash?: string;
   faceHashes?: string[];
+  faceDescriptors?: number[][];
   qrToken?: string;
 }) {
   const accountId = String(input.accountId || "").trim();
@@ -438,13 +593,16 @@ export function punch(input: {
   }
   punchLocks.add(accountId);
   try {
+    const faceHashes = [
+      ...(Array.isArray(input.faceHashes) ? input.faceHashes : []),
+      String(input.faceHash || ""),
+    ];
+    const faceDescriptors = Array.isArray(input.faceDescriptors) ? input.faceDescriptors : [];
     if (input.method === "face") {
       if (!faceEnrolled(accountId)) throw Object.assign(new Error("enroll"), { status: 409 });
-      const probes = [
-        ...(Array.isArray(input.faceHashes) ? input.faceHashes : []),
-        String(input.faceHash || ""),
-      ];
-      if (!faceMatches(accountId, probes)) throw Object.assign(new Error("face"), { status: 403 });
+      if (!faceMatches(accountId, { hashes: faceHashes, descriptors: faceDescriptors })) {
+        throw Object.assign(new Error("face"), { status: 403 });
+      }
     } else if (!qrTokenOk(String(input.qrToken || ""))) {
       throw Object.assign(new Error("qr"), { status: 403 });
     }
@@ -480,6 +638,11 @@ export function punch(input: {
       row.outLng = input.lng;
     }
     save(store);
+    if (input.method === "face" && (faceDescriptors.length || faceHashes.some(Boolean))) {
+      try {
+        rememberFace(accountId, { hashes: faceHashes, descriptors: faceDescriptors });
+      } catch { /* ignore */ }
+    }
     return row;
   } finally {
     punchLocks.delete(accountId);

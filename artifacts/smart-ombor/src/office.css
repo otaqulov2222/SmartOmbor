@@ -275,38 +275,104 @@
   box-shadow: 0 12px 28px rgb(234 88 12 / .35);
 }
 .office-stage {
-  position: fixed; inset: 0; z-index: 80; background: #000;
+  position: fixed; inset: 0; z-index: 80; background: #05070d;
   display: flex; flex-direction: column;
 }
 .office-stage video { display: block !important; flex: 1; width: 100%; height: 100%; object-fit: cover; margin: 0; border-radius: 0; aspect-ratio: auto; }
+.office-stage-shade {
+  position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background:
+    linear-gradient(180deg, rgb(5 7 13 / .55) 0%, transparent 22%),
+    linear-gradient(0deg, rgb(5 7 13 / .78) 0%, transparent 34%);
+}
 .office-oval {
-  position: absolute; left: 50%; top: 42%; width: min(78vw, 280px); height: min(98vw, 360px);
-  transform: translate(-50%, -50%); border: 3px solid #fff; border-radius: 50%;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / .55); pointer-events: none;
+  position: absolute; left: 50%; top: 40%; width: min(74vw, 268px); height: min(92vw, 340px);
+  transform: translate(-50%, -50%); border: 2.5px solid rgb(255 255 255 / .92); border-radius: 50%;
+  box-shadow:
+    0 0 0 9999px rgb(0 0 0 / .52),
+    0 0 0 1px rgb(59 99 240 / .35),
+    0 12px 40px rgb(37 99 235 / .25);
+  pointer-events: none; z-index: 2;
+  animation: office-oval-pulse 2.4s ease-in-out infinite;
+  transition: border-color .25s ease, box-shadow .25s ease;
+}
+.office-oval.is-found {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 3px rgb(59 130 246 / .55), 0 16px 48px rgb(37 99 235 / .4);
+  animation: none;
+}
+.office-oval.is-ok {
+  border-color: #34d399;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .48), 0 0 0 4px rgb(52 211 153 / .55), 0 16px 48px rgb(16 185 129 / .35);
+  animation: none;
+}
+.office-oval.is-bad {
+  border-color: #f87171;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 3px rgb(248 113 113 / .5), 0 16px 48px rgb(239 68 68 / .3);
+  animation: none;
+}
+@keyframes office-oval-pulse {
+  0%, 100% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 1px rgb(59 99 240 / .28), 0 12px 40px rgb(37 99 235 / .2); }
+  50% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 3px rgb(59 99 240 / .5), 0 16px 48px rgb(37 99 235 / .35); }
 }
 .office-qr-frame {
   position: absolute; left: 50%; top: 46%; width: min(72vw, 280px); height: min(72vw, 280px);
-  transform: translate(-50%, -50%); border: 4px solid #34d399; border-radius: 22px; pointer-events: none;
+  transform: translate(-50%, -50%); border: 4px solid #34d399; border-radius: 22px; pointer-events: none; z-index: 2;
 }
 .office-stage-top {
   position: absolute; left: 12px; right: 12px; top: 12px;
-  display: flex; justify-content: space-between; align-items: center; color: #fff; z-index: 2;
+  display: flex; justify-content: space-between; align-items: center; color: #fff; z-index: 3;
 }
-.office-stage-top div { display: flex; gap: 8px; }
+.office-stage-title {
+  display: inline-flex; align-items: center; gap: .45rem;
+  padding: .45rem .7rem; border-radius: 999px;
+  background: rgb(15 23 42 / .55); border: 1px solid rgb(255 255 255 / .12);
+  backdrop-filter: blur(10px);
+}
+.office-stage-title b { font-size: .86rem; font-weight: 700; }
+.office-stage-top > div { display: flex; gap: 8px; }
 .office-stage-btn {
-  width: 40px; height: 40px; border-radius: 999px; background: rgb(15 23 42 / .7); color: #fff;
+  width: 40px; height: 40px; border: 1px solid rgb(255 255 255 / .12); border-radius: 999px;
+  background: rgb(15 23 42 / .7); color: #fff;
   display: grid; place-items: center;
 }
 .office-stage-copy {
-  position: absolute; left: 0; right: 0; bottom: 118px; text-align: center; color: #e2e8f0; z-index: 2;
+  position: absolute; left: 16px; right: 16px; bottom: 128px; text-align: center; color: #e2e8f0; z-index: 3;
+  font-size: .95rem; font-weight: 600; text-shadow: 0 1px 8px rgb(0 0 0 / .45);
 }
-.office-stage-copy small { display: block; opacity: .75; margin-top: 4px; }
-.office-stage-go { width: calc(100% - 28px); margin: 0 14px 12px; position: relative; z-index: 2; }
-.office-stage-hint { position: absolute; left: 16px; right: 16px; bottom: 70px; text-align: center; color: #cbd5e1; z-index: 2; }
+.office-stage-copy small { display: block; opacity: .78; margin-top: 6px; font-weight: 500; font-size: .78rem; }
+.office-stage-busy {
+  display: inline-block; margin-top: .45rem; font-style: normal; font-size: .78rem; font-weight: 700;
+  color: #93c5fd; background: rgb(37 99 235 / .22); border: 1px solid rgb(147 197 253 / .28);
+  border-radius: 999px; padding: .28rem .7rem;
+}
+.office-stage-err {
+  position: relative; z-index: 3; margin: 0 14px 8px; text-align: center;
+  color: #fecaca; font-size: .8rem; font-weight: 650;
+  background: rgb(127 29 29 / .55); border: 1px solid rgb(248 113 113 / .35);
+  border-radius: .85rem; padding: .55rem .7rem;
+}
+.office-stage-go {
+  width: calc(100% - 28px); margin: 0 14px 10px; position: relative; z-index: 3;
+  border: 0 !important; border-radius: 1rem !important;
+  background: linear-gradient(135deg, #4c6fff, #2563eb 55%, #1d4ed8) !important;
+  box-shadow: 0 14px 34px rgb(37 99 235 / .42) !important;
+  min-height: 3.2rem;
+}
+.office-stage-go:disabled { opacity: .55; box-shadow: none !important; }
+.office-stage-hint { position: absolute; left: 16px; right: 16px; bottom: 70px; text-align: center; color: #cbd5e1; z-index: 3; }
 .office-stage-cancel {
-  position: relative; z-index: 2; margin: 0 auto 16px; color: #e2e8f0;
+  position: relative; z-index: 3; margin: 0 auto 16px; color: #e2e8f0;
   display: inline-flex; align-items: center; gap: 6px;
+  padding: .35rem .7rem; border-radius: 999px; background: rgb(15 23 42 / .35);
 }
+.office-face-refresh {
+  grid-column: 1 / -1;
+  border: 1px dashed rgb(148 163 184 / .35); background: rgb(15 23 42 / .35);
+  color: #cbd5e1; border-radius: .85rem; padding: .55rem .75rem;
+  font-size: .78rem; font-weight: 650;
+}
+.office-face-refresh:disabled { opacity: .45; }
 .office-toast {
   position: fixed; right: 16px; bottom: 24px; z-index: 90; width: min(280px, calc(100% - 24px));
   background: #ef4444; color: #fff; border-radius: 16px; padding: 14px 16px 14px 14px;

@@ -4,6 +4,7 @@ import {
   currentQrToken,
   enrollFace,
   faceEnrolled,
+  faceMatchDistance,
   fiksaOf,
   insideOffice,
   officeDistance,
@@ -94,13 +95,34 @@ router.post("/office/face", (req, res) => {
   try {
     const hashes = Array.isArray(req.body?.hashes)
       ? req.body.hashes.map((item: unknown) => String(item ?? ""))
-      : [String(req.body?.hash ?? "")];
-    enrollFace(user.id, hashes);
-    res.json({ ok: true, face: true });
+      : req.body?.hash != null
+        ? [String(req.body.hash)]
+        : [];
+    const descriptors = Array.isArray(req.body?.descriptors) ? req.body.descriptors : [];
+    const replace = Boolean(req.body?.replace);
+    enrollFace(user.id, { hashes, descriptors, replace });
+    res.json({ ok: true, face: true, replaced: replace });
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
     res.status(status).json({ error: error instanceof Error ? error.message : "face" });
   }
+});
+
+/** Live Face ID scan — tugmadan oldin yuzni tanib olish. */
+router.post("/office/face/check", (req, res) => {
+  const user = requireLocalUser(req, res);
+  if (!user) return;
+  if (!faceEnrolled(user.id)) {
+    res.status(409).json({ error: "enroll", match: false });
+    return;
+  }
+  const descriptor = Array.isArray(req.body?.descriptor) ? req.body.descriptor : null;
+  const distance = descriptor ? faceMatchDistance(user.id, descriptor) : null;
+  if (distance == null) {
+    res.json({ match: false, distance: null, needEnroll: true });
+    return;
+  }
+  res.json({ match: distance <= 0.55, distance: Math.round(distance * 1000) / 1000 });
 });
 
 router.post("/office/punch", (req, res) => {
@@ -115,6 +137,7 @@ router.post("/office/punch", (req, res) => {
     const faceHashes = Array.isArray(req.body?.faceHashes)
       ? req.body.faceHashes.map((item: unknown) => String(item ?? ""))
       : undefined;
+    const faceDescriptors = Array.isArray(req.body?.faceDescriptors) ? req.body.faceDescriptors : undefined;
     const row = punch({
       accountId: user.id,
       kind,
@@ -124,6 +147,7 @@ router.post("/office/punch", (req, res) => {
       accuracy,
       faceHash: String(req.body?.faceHash ?? ""),
       faceHashes,
+      faceDescriptors,
       qrToken: String(req.body?.qrToken ?? ""),
     });
     res.json({ today: punchView(row) });
