@@ -1,3 +1,7 @@
+import dns from "node:dns";
+// VPS da api.groq.com IPv6 ishlamaydi — Node avval IPv4 olsin (Yordamchi "fetch failed" bo‘lmasin).
+dns.setDefaultResultOrder("ipv4first");
+
 import app from "./app";
 import { ensureCatalogBootstrapped, startCatalogKeepalive } from "./lib/catalog";
 import { logger } from "./lib/logger";

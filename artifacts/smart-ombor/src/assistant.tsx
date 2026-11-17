@@ -394,12 +394,28 @@ export function AssistantWidget() {
     setBusy(true);
     const sessionId = activeIdRef.current;
     const forceNew = forceNewRef.current && !sessionId;
+    const postChat = async (attempt: number): Promise<Response> => {
+      try {
+        return await fetch('/api/assistant/chat', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ message, history, sessionId, forceNew }),
+        });
+      } catch (err) {
+        if (attempt < 1) {
+          await new Promise((r) => window.setTimeout(r, 700));
+          return postChat(attempt + 1);
+        }
+        throw err;
+      }
+    };
     try {
-      const response = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ message, history, sessionId, forceNew }),
-      });
+      let response = await postChat(0);
+      // Tarmoq xatosi bo‘lsa bir marta qayta
+      if (!response.ok && response.status >= 500 && response.status < 600) {
+        await new Promise((r) => window.setTimeout(r, 600));
+        response = await postChat(1);
+      }
       const body = await response.json() as {
         reply?: string;
         error?: string;
@@ -442,8 +458,8 @@ export function AssistantWidget() {
         }]);
       }
     } catch {
-      setError(t('assistant.failed'));
-      setMessages((current) => [...current, { role: 'assistant', content: t('assistant.failed'), at: Date.now() }]);
+      setError(t('assistant.network'));
+      setMessages((current) => [...current, { role: 'assistant', content: t('assistant.network'), at: Date.now() }]);
     } finally {
       setBusy(false);
     }

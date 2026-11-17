@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import dns from "node:dns";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
@@ -8,6 +9,13 @@ import { packSizeOf, ensurePachka, productPackSize } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { moysklad, moyskladConfigured } from "./moysklad";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
+
+// Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  /* ignore */
+}
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
@@ -657,6 +665,92 @@ function pickMessageText(msg: ChatMsg | undefined | null): string {
   return last.slice(0, 4000);
 }
 
+/** Groq o‘chsa ham bo‘sh xato chiqmasin — mahalliy tushuntirish. */
+function localGuideReply(lower: string): string | null {
+  if (/kpi|kpi\b|boshqaruv|agentlar va|savdo va to['‘`]?lov|3 bosqich/.test(lower)
+    && /tushun|nima|qanday|bolim|bo['‘`]?lim|ishla|farq|vhk|tushuntir/.test(lower)) {
+    return [
+      "KPI bo‘limi — agentlar savdosi va foiz hisobi.",
+      "",
+      "• Boshqaruv — umumiy rasm: agentlar, jami KPI, MS yangilash. Agentni bosib guruh/mijozlarni ko‘rasiz.",
+      "• Agentlar va hamkorlar — agent bo‘yicha jami (mijozlar, kirim, chiqim, KPI). Mijozlar tabi — biriktirish.",
+      "• Savdo va to‘lov — har bir jo‘natma: savdo, to‘langan, foiz, KPI, holat.",
+      "• 3 bosqich qoidalari — shu kun 3%, 1–7 kun 2%, 8–15 kun 1% (asos: to‘langan summa).",
+      "",
+      "Login/parol — Xodimlar bo‘limida. KPI raqamlari shu KPI menyusida.",
+    ].join("\n");
+  }
+  if (/davomat|ofis|keldim|ketdim|face|qr|gps/.test(lower)
+    && /tushun|nima|qanday|bolim|bo['‘`]?lim|ishla/.test(lower)) {
+    return [
+      "Davomat — ofisga kelish/ketish nazorati.",
+      "",
+      "• Belgilash — Face ID yoki QR + GPS (ofis 150 m ichida).",
+      "• Tarix — o‘z kelish/ketishlaringiz.",
+      "• Sozlamalar — yuz bog‘lash.",
+      "• Hisobot — rahbar uchun jadval, Excel/PDF.",
+    ].join("\n");
+  }
+  if (/xodim|login|parol|lavozim|ruxsat/.test(lower)
+    && /tushun|nima|qanday|bolim|bo['‘`]?lim|ishla|qo['‘`]?sh/.test(lower)) {
+    return [
+      "Xodimlar — akkauntlar (ism, login, parol, lavozim, ruxsat).",
+      "",
+      "• Qo‘shish / tahrirlash / o‘chirish shu yerda.",
+      "• Agentlar ham shu ro‘yxatda; KPI raqamlari KPI bo‘limida.",
+    ].join("\n");
+  }
+  if (/meny|sidebar|bo['‘`]?limlar|qayerda|navigats/.test(lower)
+    || (/tushun|nima qil/.test(lower) && /tizim|smart\s*ombor|loyih/.test(lower))) {
+    return [
+      "Asosiy menyu tartibi:",
+      "Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar",
+      "",
+      "Aniqroq so‘rang: masalan «KPI ni tushuntir», «davomat PDF», «0066-013 pachka».",
+    ].join("\n");
+  }
+  if (/^salom|^assalom|^hello|^hi\b/.test(lower.trim())) {
+    return "Salom! Ombor, davomat, KPI, yuk xati yoki hisobot bo‘yicha yordam beraman. Nima kerak?";
+  }
+  return null;
+}
+
+function offlineAssistantReply(input: {
+  message: string;
+  files: AssistantFile[];
+  tools: Array<{ name: string; ok: boolean }>;
+}): { reply: string; model: string; tools: Array<{ name: string; ok: boolean }>; files: AssistantFile[] } {
+  const lower = input.message.toLowerCase();
+  if (input.files.length) {
+    const f = input.files[0];
+    return {
+      reply: `${f.name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`,
+      model: "local-offline",
+      tools: input.tools,
+      files: input.files,
+    };
+  }
+  const guided = localGuideReply(lower);
+  if (guided) {
+    return { reply: guided, model: "local-offline", tools: input.tools, files: input.files };
+  }
+  return {
+    reply: [
+      "Hozir AI ulanishi sekin edi — lekin asosiy yordam mahalliy ishlayapti.",
+      "",
+      "So‘rashingiz mumkin:",
+      "• KPI / Davomat / Xodimlar haqida tushuntirish",
+      "• Davomat PDF yoki Excel",
+      "• Yuk raqami (masalan 0066-013) yoki pachka",
+      "",
+      "Xabaringizni qisqa qilib qayta yuboring.",
+    ].join("\n"),
+    model: "local-offline",
+    tools: input.tools,
+    files: input.files,
+  };
+}
+
 async function groqChat(messages: ChatMsg[], tools = true) {
   const key = groqKey();
   if (!key) throw Object.assign(new Error("assistant_unconfigured"), { status: 503 });
@@ -758,6 +852,12 @@ export async function runAssistantChat(input: {
   const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
   const wantsErrors = /xato|ошибк|error|journal|log/.test(lower)
     && !wantsKirim;
+  const needsLiveData = Boolean(exportWanted || wantsKirim || wantsPachka || wantsOffice || wantsErrors || shipmentMatch);
+  // Sof tushuntirish — Groq kutmasdan mahalliy javob (tarmoq xatosi bo‘lmasin).
+  const guideOnly = localGuideReply(lower);
+  if (guideOnly && !needsLiveData) {
+    return { reply: guideOnly, model: "local-guide", tools: toolTrace, files };
+  }
 
   const pushPrefetch = async (name: string, args: Record<string, unknown>, id: string) => {
     try {
@@ -813,86 +913,104 @@ export async function runAssistantChat(input: {
       || t.length < 8;
   };
 
-  for (let round = 0; round < 6; round += 1) {
-    const reply = await groqChat(messages, true);
-    if (!reply) break;
-    const calls = reply.tool_calls || [];
-    if (!calls.length) {
-      const text = sanitizeAssistantReply(pickMessageText(reply));
-      if (!weak(text) || !toolTrace.some((x) => x.ok)) {
-        const finalText = text
-          || (files.length ? `PDF tayyor: ${files[0].name}. Pastdagi Yuklab olish tugmasini bosing.` : "Javob bo‘sh qaytdi.");
-        return { reply: finalText, model: MODEL, tools: toolTrace, files };
+  const finishWithFiles = (text: string, model = MODEL) => {
+    if (files.length) {
+      const f = files[0];
+      return {
+        reply: `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`,
+        model,
+        tools: toolTrace,
+        files,
+      };
+    }
+    return { reply: text, model, tools: toolTrace, files };
+  };
+
+  try {
+    for (let round = 0; round < 6; round += 1) {
+      const reply = await groqChat(messages, true);
+      if (!reply) break;
+      const calls = reply.tool_calls || [];
+      if (!calls.length) {
+        const text = sanitizeAssistantReply(pickMessageText(reply));
+        if (!weak(text) || !toolTrace.some((x) => x.ok)) {
+          const finalText = text
+            || (files.length ? `PDF tayyor: ${files[0].name}. Pastdagi Yuklab olish tugmasini bosing.` : "Javob bo‘sh qaytdi.");
+          return finishWithFiles(finalText);
+        }
+        messages.push({
+          role: "user",
+          content: "Tool natijasi bor. Undan aniq fakt bilan javob bering. Base64 yozmang. «tekshira olmadim» demang.",
+        });
+        break;
       }
+      messages.push({
+        role: "assistant",
+        content: reply.content || "",
+        tool_calls: calls,
+      });
+      for (const call of calls) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+        } catch {
+          args = {};
+        }
+        let result: unknown;
+        let ok = true;
+        try {
+          result = await runTool(call.function.name, args);
+          extractFiles(result, files);
+        } catch (error) {
+          ok = false;
+          result = { error: error instanceof Error ? error.message : String(error) };
+          logger.warn({ tool: call.function.name, err: result }, "assistant tool failed");
+        }
+        toolTrace.push({ name: call.function.name, ok });
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.function.name,
+          content: toolPayloadForModel(result),
+        });
+      }
+    }
+
+    const fallback = await groqChat(messages, false);
+    let text = sanitizeAssistantReply(pickMessageText(fallback));
+    if (weak(text) && toolTrace.some((x) => x.ok)) {
       messages.push({
         role: "user",
-        content: "Tool natijasi bor. Undan aniq fakt bilan javob bering. Base64 yozmang. «tekshira olmadim» demang.",
+        content: "Qayta: tool natijasidagi raqam/sana/statusni ochiq yozing. Base64/kod blokini yozmang.",
       });
-      break;
+      const again = await groqChat(messages, false);
+      text = sanitizeAssistantReply(pickMessageText(again) || text);
     }
-    messages.push({
-      role: "assistant",
-      content: reply.content || "",
-      tool_calls: calls,
-    });
-    for (const call of calls) {
-      let args: Record<string, unknown> = {};
+    // Fayl so‘ralgan bo‘lsa — yo‘q bo‘lsa majburiy yasaymiz
+    if (exportWanted && !files.length) {
       try {
-        args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
-      } catch {
-        args = {};
-      }
-      let result: unknown;
-      let ok = true;
-      try {
-        result = await runTool(call.function.name, args);
-        extractFiles(result, files);
+        const forced = await runTool("export_report", exportWanted);
+        extractFiles(forced, files);
+        toolTrace.push({ name: "export_report", ok: Boolean((forced as { ok?: boolean })?.ok) });
       } catch (error) {
-        ok = false;
-        result = { error: error instanceof Error ? error.message : String(error) };
-        logger.warn({ tool: call.function.name, err: result }, "assistant tool failed");
+        toolTrace.push({ name: "export_report", ok: false });
+        logger.warn({ err: error instanceof Error ? error.message : error }, "assistant forced export failed");
       }
-      toolTrace.push({ name: call.function.name, ok });
-      messages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        name: call.function.name,
-        content: toolPayloadForModel(result),
-      });
     }
-  }
 
-  const fallback = await groqChat(messages, false);
-  let text = sanitizeAssistantReply(pickMessageText(fallback));
-  if (weak(text) && toolTrace.some((x) => x.ok)) {
-    messages.push({
-      role: "user",
-      content: "Qayta: tool natijasidagi raqam/sana/statusni ochiq yozing. Base64/kod blokini yozmang.",
-    });
-    const again = await groqChat(messages, false);
-    text = sanitizeAssistantReply(pickMessageText(again) || text);
-  }
-  // Fayl so‘ralgan bo‘lsa — yo‘q bo‘lsa majburiy yasaymiz
-  if (exportWanted && !files.length) {
-    try {
-      const forced = await runTool("export_report", exportWanted);
-      extractFiles(forced, files);
-      toolTrace.push({ name: "export_report", ok: Boolean((forced as { ok?: boolean })?.ok) });
-    } catch (error) {
-      toolTrace.push({ name: "export_report", ok: false });
-      logger.warn({ err: error instanceof Error ? error.message : error }, "assistant forced export failed");
+    return finishWithFiles(text || "Tool natijasi bo‘yicha yakuniy javob olinmadi.");
+  } catch (error) {
+    const code = error instanceof Error ? error.message : String(error);
+    logger.warn({ err: code }, "assistant groq failed — offline reply");
+    if (exportWanted && !files.length) {
+      try {
+        const forced = await runTool("export_report", exportWanted);
+        extractFiles(forced, files);
+        toolTrace.push({ name: "export_report", ok: Boolean((forced as { ok?: boolean })?.ok) });
+      } catch {
+        toolTrace.push({ name: "export_report", ok: false });
+      }
     }
+    return offlineAssistantReply({ message, files, tools: toolTrace });
   }
-
-  if (files.length) {
-    const f = files[0];
-    // Model ba’zan noto‘g‘ri sana/UUID yozadi — fayl bo‘lsa qisqa aniq xulosa
-    text = `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`;
-  }
-  return {
-    reply: text || "Tool natijasi bo‘yicha yakuniy javob olinmadi.",
-    model: MODEL,
-    tools: toolTrace,
-    files,
-  };
 }
