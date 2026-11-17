@@ -98,6 +98,7 @@ export function OfficePage() {
   const [payOpen, setPayOpen] = useState(false);
   const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'settings'>('mark');
   const matchStreak = useRef(0);
+  const qrStreak = useRef<{ token: string; n: number }>({ token: '', n: 0 });
   const [scanStatus, setScanStatus] = useState<FaceScanStatus>('loading');
   const [faceReady, setFaceReady] = useState(false);
   const [enrollCount, setEnrollCount] = useState(0);
@@ -678,41 +679,73 @@ export function OfficePage() {
     await doPunch(punchKind.current, { qrToken: token }, 'qr');
   };
 
-  const decodeQrCanvas = (canvas: HTMLCanvasElement) => {
-    try {
-      return new BrowserMultiFormatReader(QR_HINTS).decodeFromCanvas(canvas).getText();
-    } catch {
-      return '';
-    }
+  /** QR yashil ramka ichida, yetarli katta va deyarli to‘liq ko‘rinsin. */
+  const qrBoxInGuide = (
+    box: { x: number; y: number; width: number; height: number },
+    vw: number,
+    vh: number,
+  ) => {
+    const guide = Math.min(vw, vh) * 0.72;
+    const gx = (vw - guide) / 2;
+    const gy = vh * 0.46 - guide / 2;
+    const area = Math.max(1, box.width * box.height);
+    const overlapX = Math.max(0, Math.min(box.x + box.width, gx + guide) - Math.max(box.x, gx));
+    const overlapY = Math.max(0, Math.min(box.y + box.height, gy + guide) - Math.max(box.y, gy));
+    const overlap = overlapX * overlapY;
+    if (overlap / area < 0.82) return false;
+    const minSide = Math.min(vw, vh);
+    if (box.width < minSide * 0.22 || box.height < minSide * 0.22) return false;
+    if (box.width < guide * 0.34 || box.height < guide * 0.34) return false;
+    // Markaz guide ichida.
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    return cx >= gx && cx <= gx + guide && cy >= gy && cy <= gy + guide;
   };
 
-  const readQr = async (el: HTMLVideoElement) => {
-    const Detector = (window as Window & { BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
+  const readQr = async (el: HTMLVideoElement): Promise<string> => {
+    if (!el.videoWidth || el.readyState < 2) return '';
+    const vw = el.videoWidth;
+    const vh = el.videoHeight;
+    const guide = Math.min(vw, vh) * 0.72;
+    const gx = (vw - guide) / 2;
+    const gy = vh * 0.46 - guide / 2;
+
+    type Detected = { rawValue?: string; boundingBox?: { x: number; y: number; width: number; height: number } };
+    const Detector = (window as Window & {
+      BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (source: CanvasImageSource) => Promise<Detected[]> };
+    }).BarcodeDetector;
+
+    // 1) Native detector — faqat bbox guide ichida bo‘lsa qabul.
     if (Detector) {
       try {
         const codes = await new Detector({ formats: ['qr_code'] }).detect(el);
-        if (codes[0]?.rawValue && isOfficeQr(codes[0].rawValue)) return codes[0].rawValue;
+        for (const code of codes) {
+          if (!code.rawValue || !isOfficeQr(code.rawValue)) continue;
+          const box = code.boundingBox;
+          if (box && qrBoxInGuide(box, vw, vh)) return code.rawValue.trim();
+        }
       } catch { /* zxing */ }
     }
-    if (!el.videoWidth) return '';
-    const vw = el.videoWidth;
-    const vh = el.videoHeight;
+
+    // 2) Faqat yashil ramka zonasi — kichik chetki QR o‘tmasin.
     const reader = new BrowserMultiFormatReader(QR_HINTS);
-    const tryCrop = (sx: number, sy: number, sw: number, sh: number, scale = 1, invert = false) => {
+    const tryGuide = (pad = 0, scale = 1.35, invert = false) => {
+      const sx = Math.max(0, gx - pad);
+      const sy = Math.max(0, gy - pad);
+      const sw = Math.min(vw - sx, guide + pad * 2);
+      const sh = Math.min(vh - sy, guide + pad * 2);
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sw * scale));
       canvas.height = Math.max(1, Math.round(sh * scale));
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return '';
-      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(el, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       if (invert) {
         const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = img.data;
-        for (let i = 0; i < data.length; i += 4) {
-          data[i] = 255 - data[i]!;
-          data[i + 1] = 255 - data[i + 1]!;
-          data[i + 2] = 255 - data[i + 2]!;
+        for (let i = 0; i < img.data.length; i += 4) {
+          img.data[i] = 255 - img.data[i]!;
+          img.data[i + 1] = 255 - img.data[i + 1]!;
+          img.data[i + 2] = 255 - img.data[i + 2]!;
         }
         ctx.putImageData(img, 0, 0);
       }
@@ -722,35 +755,36 @@ export function OfficePage() {
         return '';
       }
     };
-    const side = Math.min(vw, vh);
-    const attempts: Array<[number, number, number, number, number, boolean]> = [
-      [0, 0, vw, vh, 1, false],
-      [(vw - side * 0.78) / 2, (vh - side * 0.78) / 2, side * 0.78, side * 0.78, 1.4, false],
-      [(vw - side * 0.62) / 2, (vh - side * 0.62) / 2, side * 0.62, side * 0.62, 1.8, false],
-      [(vw - side * 0.78) / 2, (vh - side * 0.78) / 2, side * 0.78, side * 0.78, 1.5, true],
-      [(vw - side * 0.9) / 2, (vh - side * 0.9) / 2, side * 0.9, side * 0.9, 1.2, false],
-    ];
-    for (const [sx, sy, sw, sh, scale, invert] of attempts) {
-      const text = tryCrop(sx, sy, sw, sh, scale, invert);
-      if (text && isOfficeQr(text)) return text.trim();
+
+    for (const [pad, scale, invert] of [[0, 1.4, false], [0, 1.7, false], [8, 1.5, true]] as const) {
+      const text = tryGuide(pad, scale, invert);
+      if (text && isOfficeQr(text)) {
+        // Guide crop dan topildi — QR asosan ramkada.
+        return text.trim();
+      }
       if (Detector) {
         try {
           const canvas = document.createElement('canvas');
+          const sx = Math.max(0, gx - pad);
+          const sy = Math.max(0, gy - pad);
+          const sw = Math.min(vw - sx, guide + pad * 2);
+          const sh = Math.min(vh - sy, guide + pad * 2);
           canvas.width = Math.round(sw * scale);
           canvas.height = Math.round(sh * scale);
           canvas.getContext('2d')?.drawImage(el, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
           const codes = await new Detector({ formats: ['qr_code'] }).detect(canvas);
-          if (codes[0]?.rawValue && isOfficeQr(codes[0].rawValue)) return codes[0].rawValue.trim();
+          for (const code of codes) {
+            if (!code.rawValue || !isOfficeQr(code.rawValue)) continue;
+            // Crop ichidagi bbox — butun crop guide, shuning uchun QR cropning >=35% ini egallasin.
+            const box = code.boundingBox;
+            if (!box) continue;
+            if (box.width < canvas.width * 0.34 || box.height < canvas.height * 0.34) continue;
+            return code.rawValue.trim();
+          }
         } catch { /* next */ }
       }
     }
-    const fallback = decodeQrCanvas((() => {
-      const c = document.createElement('canvas');
-      c.width = vw; c.height = vh;
-      c.getContext('2d')?.drawImage(el, 0, 0);
-      return c;
-    })());
-    return fallback && isOfficeQr(fallback) ? fallback.trim() : '';
+    return '';
   };
 
   const openStage = async (kind: 'in' | 'out', used: 'face' | 'qr') => {
@@ -785,19 +819,28 @@ export function OfficePage() {
     if (!ready) { setStage(null); return; }
     if (used !== 'qr') return;
     scanStop.current = false;
+    qrStreak.current = { token: '', n: 0 };
     const started = Date.now();
     const tick = async () => {
       if (scanStop.current || !video.current) return;
       const text = await readQr(video.current);
       if (text && isOfficeQr(text)) {
-        scanStop.current = true;
-        pendingQr.current = text.trim();
-        stopCam();
-        setStage('qr-confirm');
-        return;
+        const token = text.trim();
+        if (qrStreak.current.token === token) qrStreak.current.n += 1;
+        else qrStreak.current = { token, n: 1 };
+        // 2 marta ketma-ket to‘liq QR — tasodifiy bo‘lak bilan ochilmasin.
+        if (qrStreak.current.n >= 2) {
+          scanStop.current = true;
+          pendingQr.current = token;
+          stopCam();
+          setStage('qr-confirm');
+          return;
+        }
+      } else {
+        qrStreak.current = { token: '', n: 0 };
       }
       if (Date.now() - started > 45000) { setNote(t('office.qrNeed')); return; }
-      window.setTimeout(() => { void tick(); }, 160);
+      window.setTimeout(() => { void tick(); }, 180);
     };
     void tick();
   };
@@ -1070,7 +1113,9 @@ export function OfficePage() {
             </span>
             <small>{stage === 'qr-confirm' ? t('office.confirmViaQr') : t('office.confirmViaFace')}</small>
             <h2>{punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn')}</h2>
-            <p>{punchKind.current === 'out' ? t('office.confirmOutBody') : t('office.confirmInBody')}</p>
+            <p>{stage === 'qr-confirm'
+              ? (punchKind.current === 'out' ? t('office.confirmOutBodyQr') : t('office.confirmInBodyQr'))
+              : (punchKind.current === 'out' ? t('office.confirmOutBodyFace') : t('office.confirmInBodyFace'))}</p>
             {busy && <em className="office-stage-busy">{t('office.checking')}</em>}
             {note && <p className="office-stage-err">{note}</p>}
             <button
@@ -1144,7 +1189,6 @@ export function OfficePage() {
               {busy ? t('office.checking') : faceReady ? t('office.enrollSave') : t('office.faceWait')}
             </button>
           )}
-          {stage === 'qr' && <p className="office-stage-hint">{t('office.scanHint')}</p>}
           {note && <p className="office-stage-err">{note}</p>}
           <button type="button" className="office-stage-cancel" onClick={closeStage}><X size={14}/> {t('common.cancel')}</button>
         </>

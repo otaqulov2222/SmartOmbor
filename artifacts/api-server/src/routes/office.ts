@@ -9,6 +9,7 @@ import {
   insideOffice,
   officeDistance,
   officeSite,
+  pruneOrphanFaces,
   punch,
   punchesFor,
   rangeDays,
@@ -100,7 +101,9 @@ router.post("/office/face", (req, res) => {
         : [];
     const descriptors = Array.isArray(req.body?.descriptors) ? req.body.descriptors : [];
     const replace = Boolean(req.body?.replace);
-    enrollFace(user.id, { hashes, descriptors, replace });
+    const activeAccountIds = listLocalPeople().map((person) => person.id);
+    pruneOrphanFaces(activeAccountIds);
+    enrollFace(user.id, { hashes, descriptors, replace, activeAccountIds });
     res.json({ ok: true, face: true, replaced: replace });
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;

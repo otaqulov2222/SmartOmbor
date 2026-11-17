@@ -633,6 +633,10 @@ router.delete("/local-accounts/:id", async (req, res) => {
   await writeReliable(store);
   forgetLogin(target.login);
   await deactivateKpiAgent(target.login);
+  try {
+    const { clearFace } = await import("../lib/office");
+    clearFace(target.id);
+  } catch { /* ignore */ }
   res.json(store.accounts.map(publicAccount));
 });
 

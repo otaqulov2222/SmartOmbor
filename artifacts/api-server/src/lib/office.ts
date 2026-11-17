@@ -203,6 +203,19 @@ function save(store: Store) {
     .catch(() => undefined);
 }
 
+function activeAccountIdsFromDisk() {
+  try {
+    const raw = JSON.parse(readFileSync(dataFile("accounts.json"), "utf8")) as {
+      accounts?: Array<{ id?: string }>;
+    };
+    return (Array.isArray(raw.accounts) ? raw.accounts : [])
+      .map((row) => String(row?.id || "").trim())
+      .filter(Boolean);
+  } catch {
+    return [] as string[];
+  }
+}
+
 export async function hydrateOffice() {
   try {
     await pool.query(`
@@ -220,6 +233,8 @@ export async function hydrateOffice() {
       writeFileSync(FILE, JSON.stringify(remote));
       memory = null;
       load();
+      const active = activeAccountIdsFromDisk();
+      if (active.length) pruneOrphanFaces(active);
       return;
     }
     const current = load();
@@ -227,6 +242,8 @@ export async function hydrateOffice() {
       "insert into partner_store (id, document, updated_at) values ('office', $1::jsonb, now()) on conflict (id) do update set document = excluded.document, updated_at = now()",
       [JSON.stringify(current)],
     );
+    const active = activeAccountIdsFromDisk();
+    if (active.length) pruneOrphanFaces(active);
   } catch {
     /* ignore */
   }
@@ -385,6 +402,31 @@ export function faceEnrolled(accountId: string) {
   return faceDescriptorsOf(row).length > 0 || faceHashesOf(row).length > 0;
 }
 
+/** Xodim o‘chirilganda Face ID ham o‘chadi. */
+export function clearFace(accountId: string) {
+  const id = String(accountId || "").trim();
+  if (!id) return false;
+  const store = load();
+  if (!store.faces[id]) return false;
+  delete store.faces[id];
+  save(store);
+  return true;
+}
+
+/** O‘chirilgan akkauntlarning Face ID si “taken” bermasligi uchun. */
+export function pruneOrphanFaces(activeAccountIds: string[]) {
+  const active = new Set(activeAccountIds.map((id) => String(id || "").trim()).filter(Boolean));
+  const store = load();
+  let changed = 0;
+  for (const id of Object.keys(store.faces)) {
+    if (active.has(id)) continue;
+    delete store.faces[id];
+    changed += 1;
+  }
+  if (changed) save(store);
+  return changed;
+}
+
 function bestDescriptorDistance(probe: number[], gallery: number[][]) {
   let best = 99;
   for (const item of gallery) {
@@ -394,9 +436,15 @@ function bestDescriptorDistance(probe: number[], gallery: number[][]) {
   return best;
 }
 
-function assertDescriptorsNotTaken(store: Store, accountId: string, probes: number[][]) {
+function assertDescriptorsNotTaken(
+  store: Store,
+  accountId: string,
+  probes: number[][],
+  activeIds?: Set<string>,
+) {
   for (const [id, row] of Object.entries(store.faces)) {
     if (id === accountId) continue;
+    if (activeIds && !activeIds.has(id)) continue;
     const gallery = faceDescriptorsOf(row);
     if (!gallery.length) continue;
     for (const probe of probes) {
@@ -407,9 +455,15 @@ function assertDescriptorsNotTaken(store: Store, accountId: string, probes: numb
   }
 }
 
-function assertHashesNotTaken(store: Store, accountId: string, cleaned: string[]) {
+function assertHashesNotTaken(
+  store: Store,
+  accountId: string,
+  cleaned: string[],
+  activeIds?: Set<string>,
+) {
   for (const [id, row] of Object.entries(store.faces)) {
     if (id === accountId) continue;
+    if (activeIds && !activeIds.has(id)) continue;
     for (const saved of faceHashesOf(row)) {
       for (const probe of cleaned) {
         if (hamming(saved, probe) <= FACE_UNIQUE_MAX) {
@@ -432,7 +486,12 @@ function dedupeDescriptors(list: number[][]) {
 
 export function enrollFace(
   accountId: string,
-  input: { hashes?: string | string[]; descriptors?: number[][]; replace?: boolean },
+  input: {
+    hashes?: string | string[];
+    descriptors?: number[][];
+    replace?: boolean;
+    activeAccountIds?: string[];
+  },
 ) {
   const descriptors = dedupeDescriptors(
     (Array.isArray(input.descriptors) ? input.descriptors : [])
@@ -447,9 +506,13 @@ export function enrollFace(
   if (!descriptors.length && !cleaned.length) throw Object.assign(new Error("face"), { status: 400 });
   const replace = Boolean(input.replace);
   if (!replace && faceEnrolled(accountId)) throw Object.assign(new Error("exists"), { status: 409 });
+  if (Array.isArray(input.activeAccountIds)) pruneOrphanFaces(input.activeAccountIds);
   const store = load();
-  if (descriptors.length) assertDescriptorsNotTaken(store, accountId, descriptors);
-  if (cleaned.length) assertHashesNotTaken(store, accountId, cleaned);
+  const activeIds = Array.isArray(input.activeAccountIds)
+    ? new Set(input.activeAccountIds.map((id) => String(id || "").trim()).filter(Boolean))
+    : undefined;
+  if (descriptors.length) assertDescriptorsNotTaken(store, accountId, descriptors, activeIds);
+  if (cleaned.length) assertHashesNotTaken(store, accountId, cleaned, activeIds);
   const prev = store.faces[accountId];
   const prevDesc = replace ? faceDescriptorsOf(prev) : [];
   const mergedDesc = descriptors.length
