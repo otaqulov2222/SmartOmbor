@@ -5,7 +5,7 @@ import dns from "node:dns";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
-import { packSizeOf, ensurePachka, productPackSize, pieceCount } from "./supply-assortment";
+import { packSizeOf, ensurePachka, productPackSize, pieceCount, receiptParts } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { moysklad, moyskladConfigured } from "./moysklad";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
@@ -527,7 +527,9 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
           quantity: Number(c.quantity) || 0,
         }))
         : [];
-      const pieces = pieceCount({ pairs, boxes, quantity, colors } as LineLike);
+      const shape = { pairs, boxes, quantity, colors } as LineLike;
+      const pieces = pieceCount(shape);
+      const parts = receiptParts(shape);
       const pachka = Number(line.pachka) || 0;
       return {
         productCode: String(line.productCode || ""),
@@ -538,12 +540,14 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         boxes,
         pachka,
         pieces,
+        msParts: parts.length,
         packSizeOf: packSizeOf({ pachka, pairs }),
         price: Number(line.price) || 0,
       };
     });
     const expectedTotal = expectedRows.reduce((sum, row) => sum + row.pieces, 0);
-    const expectedWithPachka = expectedRows.filter((row) => row.packSizeOf > 1);
+    const expectedMsPositions = expectedRows.reduce((sum, row) => sum + row.msParts, 0);
+    const expectedWithPachka = expectedRows.filter((row) => row.pachka > 1 || row.packSizeOf > 1);
 
     const supplyId = hit.moyskladId ? String(hit.moyskladId) : "";
     let ms: Record<string, unknown> | null = null;
@@ -575,8 +579,12 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     if (ms && ms.deleted) issues.push("MS hujjat o‘chirilgan");
     if (ms && ms.applicable === false) issues.push("MS hujjat hali o‘tkazilmagan (applicable=yo‘q)");
     if (supplyId && !msError) {
-      if (positions.length !== expectedRows.length) {
-        issues.push(`Qator soni mos emas: yuk xati ${expectedRows.length}, MS ${positions.length}`);
+      // MS da rang/variant bo‘yicha qatorlar ajraladi — lokal model qatori emas, receiptParts bilan solishtiramiz.
+      if (positions.length !== expectedMsPositions) {
+        issues.push(
+          `MS qator soni mos emas: kutildi ${expectedMsPositions} (rang/variant), MS da ${positions.length}`
+          + ` (yuk xati model qatorlari: ${expectedRows.length})`,
+        );
       }
       if (actualTotal !== expectedTotal) {
         issues.push(`Dona jami mos emas: yuk xati ${expectedTotal}, MS ${actualTotal}`);
@@ -622,6 +630,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       factory: factory?.name || factory?.code || hit.factoryId || null,
       local: {
         lines: expectedRows.length,
+        expectedMsPositions,
         pieces: expectedTotal,
         pachkaLines: expectedWithPachka.length,
         postedUnits: hit.postedUnitsTotal ?? hit.postedUnits ?? null,
@@ -632,6 +641,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
           boxes: r.boxes,
           pachka: r.pachka,
           pieces: r.pieces,
+          msParts: r.msParts,
         })),
       },
       moysklad: supplyId ? {
@@ -1040,7 +1050,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     const lines = [
       `Yuk xati ${audit.number} (${audit.date || "—"}) — ${audit.verdict || ""}`,
       `Zavod: ${audit.factory || "—"} · holat: ${localizeStatus(audit.status)}`,
-      `Yuk xati: ${local.lines || 0} qator, ${local.pieces || 0} dona, pachka qatorlari ${local.pachkaLines || 0}.`,
+      `Yuk xati: ${local.lines || 0} model qator, MS uchun kutilyotgan pozitsiya ${local.expectedMsPositions || 0}, dona ${local.pieces || 0}, pachka qatorlari ${local.pachkaLines || 0}.`,
     ];
     if (ms) {
       lines.push(
@@ -1049,7 +1059,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
         `• Kontragent: ${ms.agent || "tanlanmagan"}`,
         `• Ombor: ${ms.store || "tanlanmagan"}`,
         `• Tashkilot: ${ms.organization || "tanlanmagan"}`,
-        `• MS qatorlar: ${ms.positions || 0}, dona: ${ms.pieces || 0}${ms.sum != null ? `, summa: ${ms.sum}` : ""}`,
+        `• MS pozitsiya: ${ms.positions || 0} (kutilgan ${local.expectedMsPositions || 0}), dona: ${ms.pieces || 0} (kutilgan ${local.pieces || 0})${ms.sum != null ? `, summa: ${ms.sum}` : ""}`,
       );
     } else {
       lines.push("MoySklad hujjati topilmadi yoki o‘qilmadi.");
