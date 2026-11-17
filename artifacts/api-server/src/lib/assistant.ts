@@ -531,6 +531,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       const pieces = pieceCount(shape);
       const parts = receiptParts(shape);
       const pachka = Number(line.pachka) || 0;
+      const expectedPack = packSizeOf({ pachka, pairs });
       return {
         productCode: String(line.productCode || ""),
         productName: String(line.productName || ""),
@@ -541,13 +542,13 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         pachka,
         pieces,
         msParts: parts.length,
-        packSizeOf: packSizeOf({ pachka, pairs }),
+        expectedPack,
         price: Number(line.price) || 0,
       };
     });
     const expectedTotal = expectedRows.reduce((sum, row) => sum + row.pieces, 0);
     const expectedMsPositions = expectedRows.reduce((sum, row) => sum + row.msParts, 0);
-    const expectedWithPachka = expectedRows.filter((row) => row.pachka > 1 || row.packSizeOf > 1);
+    const expectedWithPachka = expectedRows.filter((row) => row.expectedPack > 1 || row.pachka > 1);
 
     const supplyId = hit.moyskladId ? String(hit.moyskladId) : "";
     let ms: Record<string, unknown> | null = null;
@@ -596,20 +597,21 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
 
     const pachkaChecks: Array<Record<string, unknown>> = [];
     for (const row of expectedWithPachka.slice(0, 12)) {
+      const want = row.expectedPack > 1 ? row.expectedPack : row.pachka;
       if (!row.productId) {
-        pachkaChecks.push({ productCode: row.productCode, expected: row.packSizeOf, ms: null, ok: false, note: "productId yo‘q" });
+        pachkaChecks.push({ productCode: row.productCode, expected: want, ms: null, ok: false, note: "productId yo‘q" });
         issues.push(`${row.productCode}: productId yo‘q — pachka tekshirilmadi`);
         continue;
       }
       try {
         const msPack = await productPackSize(row.productId);
-        const ok = msPack === row.packSizeOf;
-        pachkaChecks.push({ productCode: row.productCode, expected: row.packSizeOf, ms: msPack, ok });
-        if (!ok) issues.push(`${row.productCode}: pachka kutildi ${row.packSizeOf}, MS da ${msPack}`);
+        const ok = msPack === want;
+        pachkaChecks.push({ productCode: row.productCode, expected: want, ms: msPack, ok });
+        if (!ok) issues.push(`${row.productCode}: pachka kutildi ${want}, MS da ${msPack}`);
       } catch (error) {
         pachkaChecks.push({
           productCode: row.productCode,
-          expected: row.packSizeOf,
+          expected: want,
           ms: null,
           ok: false,
           note: error instanceof Error ? error.message : String(error),
