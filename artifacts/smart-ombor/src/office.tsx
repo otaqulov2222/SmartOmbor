@@ -17,7 +17,14 @@ type Me = {
   clock: string; date: string; today: Punch | null; fiksa: number;
 };
 const SESSION = 'smart-ombor-session';
-const QR_HINTS = new Map<DecodeHintType, unknown>([[DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]]]);
+const QR_HINTS = new Map<DecodeHintType, unknown>([
+  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
+  [DecodeHintType.TRY_HARDER, true],
+]);
+function isOfficeQr(text: string) {
+  const value = text.trim();
+  return value.includes('BORDO-OFFICE-') || value.startsWith('BORDO-');
+}
 
 function session() {
   try {
@@ -78,7 +85,7 @@ export function OfficePage() {
   const [gps, setGps] = useState<{ lat: number; lng: number; accuracy: number; heading: number | null } | null>(null);
   const [gpsState, setGpsState] = useState<'pending' | 'ready' | 'denied' | 'error'>('pending');
   const [method, setMethod] = useState<'face' | 'qr'>('face');
-  const [stage, setStage] = useState<null | 'face' | 'enroll' | 'qr' | 'qr-confirm'>(null);
+  const [stage, setStage] = useState<null | 'face' | 'enroll' | 'qr' | 'qr-confirm' | 'face-confirm'>(null);
   const pendingQr = useRef('');
   const [facing, setFacing] = useState<'user' | 'environment'>('user');
   const [camDenied, setCamDenied] = useState(false);
@@ -89,7 +96,8 @@ export function OfficePage() {
   const [range, setRange] = useState<'day' | 'week' | 'month'>('week');
   const [history, setHistory] = useState<Punch[]>([]);
   const [payOpen, setPayOpen] = useState(false);
-  const [section, setSection] = useState<'mark' | 'history' | 'pay'>('mark');
+  const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'settings'>('mark');
+  const matchStreak = useRef(0);
   const [scanStatus, setScanStatus] = useState<FaceScanStatus>('loading');
   const [faceReady, setFaceReady] = useState(false);
   const [enrollCount, setEnrollCount] = useState(0);
@@ -97,6 +105,7 @@ export function OfficePage() {
   const markRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const payRef = useRef<HTMLDivElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
   const punchKind = useRef<'in' | 'out'>('in');
@@ -463,8 +472,8 @@ export function OfficePage() {
       setNote(t('office.distFar', { m: Math.round(distNow || 0) }));
       return;
     }
-    const replacing = stage === 'enroll' && Boolean(me?.face);
-    if (stage === 'enroll' || !me?.face) {
+    const replacing = (stage === 'enroll') && Boolean(me?.face);
+    if (stage === 'enroll' || (!me?.face && stage !== 'face-confirm')) {
       const descriptors = enrollBag.current.slice(0, ENROLL_NEED);
       if (descriptors.length < ENROLL_NEED) {
         setBusy(false);
@@ -549,6 +558,7 @@ export function OfficePage() {
       }
       if (!alive) return;
       setScanStatus('searching');
+      matchStreak.current = 0;
       while (alive && !scanStop.current) {
         const el = video.current;
         if (!el || el.readyState < 2) {
@@ -559,13 +569,23 @@ export function OfficePage() {
           const shot = await detectFaceDescriptor(el);
           if (!alive || scanStop.current) break;
           if (shot.status === 'multi') {
+            matchStreak.current = 0;
             setScanStatus('multi');
             setFaceReady(false);
             matchedDesc.current = null;
             await sleep(120);
             continue;
           }
+          if (shot.status === 'partial') {
+            matchStreak.current = 0;
+            setScanStatus('partial');
+            setFaceReady(false);
+            matchedDesc.current = null;
+            await sleep(80);
+            continue;
+          }
           if (!shot.descriptor) {
+            matchStreak.current = 0;
             setScanStatus('searching');
             if (stage === 'face') {
               setFaceReady(false);
@@ -575,7 +595,7 @@ export function OfficePage() {
             continue;
           }
           if (stage === 'enroll') {
-            // Faqat deyarli bir xil freymlarni tashla — harakat kutmasin.
+            // Faqat sifatli + deyarli bir xil emas freymlar.
             const near = enrollBag.current.some((item) => euclidean(item, shot.descriptor!) < 0.02);
             if (!near && enrollBag.current.length < ENROLL_NEED) {
               enrollBag.current.push(shot.descriptor);
@@ -591,13 +611,13 @@ export function OfficePage() {
               if (alive) void confirmFaceRef.current();
               break;
             }
-            await sleep(40);
+            await sleep(50);
             continue;
           }
           setScanStatus('found');
           const now = Date.now();
-          if (now - checkAt.current < 450) {
-            await sleep(80);
+          if (now - checkAt.current < 400) {
+            await sleep(70);
             continue;
           }
           checkAt.current = now;
@@ -609,6 +629,7 @@ export function OfficePage() {
           const payload = await response.json().catch(() => ({})) as { match?: boolean; needEnroll?: boolean };
           if (!alive || scanStop.current) break;
           if (payload.needEnroll) {
+            matchStreak.current = 0;
             setScanStatus('loading');
             setFaceReady(false);
             enrollBag.current = [];
@@ -620,10 +641,21 @@ export function OfficePage() {
             break;
           }
           if (payload.match) {
+            matchStreak.current += 1;
             matchedDesc.current = shot.descriptor;
-            setFaceReady(true);
-            setScanStatus('recognized');
+            // 2 marta ketma-ket to‘liq yuz — keyin to‘liq ekran tasdiqlash.
+            if (matchStreak.current >= 2) {
+              setFaceReady(true);
+              setScanStatus('recognized');
+              scanStop.current = true;
+              stopCam();
+              setStage('face-confirm');
+              break;
+            }
+            setFaceReady(false);
+            setScanStatus('found');
           } else {
+            matchStreak.current = 0;
             matchedDesc.current = null;
             setFaceReady(false);
             setScanStatus('unknown');
@@ -646,24 +678,79 @@ export function OfficePage() {
     await doPunch(punchKind.current, { qrToken: token }, 'qr');
   };
 
-  const readQr = async (el: HTMLVideoElement) => {
-    const Detector = (window as Window & { BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
-    if (Detector) {
-      try {
-        const codes = await new Detector({ formats: ['qr_code'] }).detect(el);
-        if (codes[0]?.rawValue) return codes[0].rawValue;
-      } catch { /* zxing */ }
-    }
-    if (!el.videoWidth) return '';
-    const canvas = document.createElement('canvas');
-    canvas.width = el.videoWidth;
-    canvas.height = el.videoHeight;
-    canvas.getContext('2d')?.drawImage(el, 0, 0);
+  const decodeQrCanvas = (canvas: HTMLCanvasElement) => {
     try {
       return new BrowserMultiFormatReader(QR_HINTS).decodeFromCanvas(canvas).getText();
     } catch {
       return '';
     }
+  };
+
+  const readQr = async (el: HTMLVideoElement) => {
+    const Detector = (window as Window & { BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>> } }).BarcodeDetector;
+    if (Detector) {
+      try {
+        const codes = await new Detector({ formats: ['qr_code'] }).detect(el);
+        if (codes[0]?.rawValue && isOfficeQr(codes[0].rawValue)) return codes[0].rawValue;
+      } catch { /* zxing */ }
+    }
+    if (!el.videoWidth) return '';
+    const vw = el.videoWidth;
+    const vh = el.videoHeight;
+    const reader = new BrowserMultiFormatReader(QR_HINTS);
+    const tryCrop = (sx: number, sy: number, sw: number, sh: number, scale = 1, invert = false) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return '';
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(el, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      if (invert) {
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = img.data;
+        for (let i = 0; i < data.length; i += 4) {
+          data[i] = 255 - data[i]!;
+          data[i + 1] = 255 - data[i + 1]!;
+          data[i + 2] = 255 - data[i + 2]!;
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+      try {
+        return reader.decodeFromCanvas(canvas).getText();
+      } catch {
+        return '';
+      }
+    };
+    const side = Math.min(vw, vh);
+    const attempts: Array<[number, number, number, number, number, boolean]> = [
+      [0, 0, vw, vh, 1, false],
+      [(vw - side * 0.78) / 2, (vh - side * 0.78) / 2, side * 0.78, side * 0.78, 1.4, false],
+      [(vw - side * 0.62) / 2, (vh - side * 0.62) / 2, side * 0.62, side * 0.62, 1.8, false],
+      [(vw - side * 0.78) / 2, (vh - side * 0.78) / 2, side * 0.78, side * 0.78, 1.5, true],
+      [(vw - side * 0.9) / 2, (vh - side * 0.9) / 2, side * 0.9, side * 0.9, 1.2, false],
+    ];
+    for (const [sx, sy, sw, sh, scale, invert] of attempts) {
+      const text = tryCrop(sx, sy, sw, sh, scale, invert);
+      if (text && isOfficeQr(text)) return text.trim();
+      if (Detector) {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(sw * scale);
+          canvas.height = Math.round(sh * scale);
+          canvas.getContext('2d')?.drawImage(el, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          const codes = await new Detector({ formats: ['qr_code'] }).detect(canvas);
+          if (codes[0]?.rawValue && isOfficeQr(codes[0].rawValue)) return codes[0].rawValue.trim();
+        } catch { /* next */ }
+      }
+    }
+    const fallback = decodeQrCanvas((() => {
+      const c = document.createElement('canvas');
+      c.width = vw; c.height = vh;
+      c.getContext('2d')?.drawImage(el, 0, 0);
+      return c;
+    })());
+    return fallback && isOfficeQr(fallback) ? fallback.trim() : '';
   };
 
   const openStage = async (kind: 'in' | 'out', used: 'face' | 'qr') => {
@@ -702,14 +789,15 @@ export function OfficePage() {
     const tick = async () => {
       if (scanStop.current || !video.current) return;
       const text = await readQr(video.current);
-      if (text.includes('BORDO-OFFICE-') || text.startsWith('BORDO-')) {
+      if (text && isOfficeQr(text)) {
         scanStop.current = true;
         pendingQr.current = text.trim();
+        stopCam();
         setStage('qr-confirm');
         return;
       }
-      if (Date.now() - started > 25000) { setNote(t('office.qrNeed')); return; }
-      window.setTimeout(() => { void tick(); }, 280);
+      if (Date.now() - started > 45000) { setNote(t('office.qrNeed')); return; }
+      window.setTimeout(() => { void tick(); }, 160);
     };
     void tick();
   };
@@ -772,9 +860,15 @@ export function OfficePage() {
     }
   };
 
-  const jumpSection = (id: 'mark' | 'history' | 'pay') => {
+  const jumpSection = (id: 'mark' | 'history' | 'pay' | 'settings') => {
     setSection(id);
-    const node = id === 'mark' ? markRef.current : id === 'history' ? historyRef.current : payRef.current;
+    const node = id === 'mark'
+      ? markRef.current
+      : id === 'history'
+        ? historyRef.current
+        : id === 'pay'
+          ? payRef.current
+          : settingsRef.current;
     node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -824,10 +918,11 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className="office-sections is-3" role="tablist" aria-label={t('nav.office')}>
+      <div className="office-sections is-4" role="tablist" aria-label={t('nav.office')}>
         <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
         <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
         <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
+        <button type="button" role="tab" aria-selected={section === 'settings'} className={section === 'settings' ? 'is-on' : ''} onClick={() => jumpSection('settings')}>{t('office.sectionSettings')}</button>
       </div>
       <div ref={markRef} id="office-mark" className="office-block">
         <div className="office-pair">
@@ -881,11 +976,6 @@ export function OfficePage() {
             <span className="office-method-ico"><ScanFace size={22}/></span>{method === 'face' && <em className="office-check">✓</em>}
             <b>Face ID</b><small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
           </button>
-          {me?.face ? (
-            <button type="button" className="office-face-refresh" disabled={busy || !inZone} onClick={() => void reconnectFace()}>
-              {t('office.faceReconnect')}
-            </button>
-          ) : null}
           <button type="button" className={`office-method ${method === 'qr' ? 'is-on' : ''}`} onClick={() => { scanStop.current = true; setMethod('qr'); }}>
             <span className="office-method-ico"><QrCode size={22}/></span>{method === 'qr' && <em className="office-check">✓</em>}
             <b>QR Scanner</b><small>{t('office.qrHint')}</small>
@@ -928,6 +1018,29 @@ export function OfficePage() {
         </div>
         {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
       </div>
+      <div ref={settingsRef} id="office-settings" className="office-card office-block">
+        <div className="office-card-top">
+          <div className="office-card-title">
+            <span className="is-clock"><ScanFace size={16}/></span>
+            <div><b>{t('office.sectionSettings')}</b><small>{t('office.settingsLead')}</small></div>
+          </div>
+        </div>
+        <div className="office-settings-row">
+          <div>
+            <b>Face ID</b>
+            <small>{me?.face ? t('office.faceReady') : t('office.faceEnroll')}</small>
+          </div>
+          <button
+            type="button"
+            className="office-face-refresh"
+            disabled={busy || !inZone || gpsState === 'denied'}
+            onClick={() => void reconnectFace()}
+          >
+            {me?.face ? t('office.faceReconnect') : t('office.enrollSave')}
+          </button>
+        </div>
+        <p className="lead" style={{ marginTop: 8 }}>{t('office.faceCardBody')}</p>
+      </div>
       <div ref={payRef} id="office-pay" className="office-card office-block">
         <div className="office-card-top">
           <div className="office-card-title">
@@ -947,80 +1060,95 @@ export function OfficePage() {
         {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
       </div>
     </div>
-    {stage && <div className="office-stage">
-      <video ref={video} className="is-on" playsInline muted autoPlay/>
-      <div className="office-stage-shade" aria-hidden="true"/>
-      {(stage === 'face' || stage === 'enroll') && (
-        <div className={`office-oval ${
-          scanStatus === 'recognized' ? 'is-ok'
-            : scanStatus === 'unknown' || scanStatus === 'multi' ? 'is-bad'
-              : scanStatus === 'found' ? 'is-found'
-                : ''
-        }`}/>
-      )}
-      {(stage === 'qr' || stage === 'qr-confirm') && <div className="office-qr-frame"/>}
-      <div className="office-stage-top">
-        <div className="office-stage-title">
-          <ScanFace size={16}/>
-          <b>{stage === 'enroll'
-            ? t('office.enrollTitle')
-            : stage === 'face'
-              ? (scanStatus === 'recognized' ? t('office.faceMatched') : t('office.faceScan'))
-              : stage === 'qr-confirm'
-                ? (punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn'))
-                : punchKind.current === 'out' ? t('office.scanOut') : t('office.scanIn')}</b>
+    {stage && <div className={`office-stage ${(stage === 'face-confirm' || stage === 'qr-confirm') ? 'is-confirm' : ''}`}>
+      {(stage === 'face-confirm' || stage === 'qr-confirm') ? (
+        <div className="office-confirm">
+          <button type="button" className="office-stage-btn office-confirm-close" onClick={closeStage} aria-label={t('common.close')}><X size={18}/></button>
+          <div className="office-confirm-card">
+            <span className={`office-confirm-ico ${punchKind.current === 'out' ? 'is-out' : 'is-in'}`}>
+              {stage === 'qr-confirm' ? <QrCode size={34}/> : <ScanFace size={34}/>}
+            </span>
+            <small>{stage === 'qr-confirm' ? t('office.confirmViaQr') : t('office.confirmViaFace')}</small>
+            <h2>{punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn')}</h2>
+            <p>{punchKind.current === 'out' ? t('office.confirmOutBody') : t('office.confirmInBody')}</p>
+            {busy && <em className="office-stage-busy">{t('office.checking')}</em>}
+            {note && <p className="office-stage-err">{note}</p>}
+            <button
+              type="button"
+              className="office-cam office-stage-go"
+              disabled={busy}
+              onClick={() => void (stage === 'qr-confirm' ? confirmQrPunch() : confirmFace())}
+            >
+              {busy
+                ? t('office.checking')
+                : (punchKind.current === 'out' ? t('office.qrConfirmGoOut') : t('office.qrConfirmGoIn'))}
+            </button>
+            <button type="button" className="office-stage-cancel" onClick={closeStage}><X size={14}/> {t('common.cancel')}</button>
+          </div>
         </div>
-        <div>
-          {stage !== 'qr-confirm' && <button type="button" className="office-stage-btn" onClick={() => void flipCam()} aria-label={t('office.flip')}><SwitchCamera size={18}/></button>}
-          <button type="button" className="office-stage-btn" onClick={closeStage} aria-label={t('common.close')}><X size={18}/></button>
-        </div>
-      </div>
-      <div className="office-stage-copy">
-        {stage === 'enroll'
-          ? (faceReady ? t('office.enrollReady') : t('office.enrollBody'))
-          : stage === 'face'
-            ? (scanStatus === 'recognized'
-              ? t('office.faceMatchedBody')
-              : scanStatus === 'unknown'
-                ? t('office.faceUnknown')
-                : scanStatus === 'multi'
-                  ? t('office.faceMulti')
-                  : scanStatus === 'loading'
-                    ? t('office.faceLoading')
-                    : t('office.faceScanBody'))
-            : stage === 'qr-confirm'
-              ? (punchKind.current === 'out' ? t('office.qrConfirmOut') : t('office.qrConfirmIn'))
-              : t('office.scanHint')}
-        {(stage === 'face' || stage === 'enroll') && (
-          <small>
+      ) : (
+        <>
+          <video ref={video} className="is-on" playsInline muted autoPlay/>
+          <div className="office-stage-shade" aria-hidden="true"/>
+          {(stage === 'face' || stage === 'enroll') && (
+            <div className={`office-oval ${
+              scanStatus === 'recognized' ? 'is-ok'
+                : scanStatus === 'unknown' || scanStatus === 'multi' || scanStatus === 'partial' ? 'is-bad'
+                  : scanStatus === 'found' ? 'is-found'
+                    : ''
+            }`}/>
+          )}
+          {stage === 'qr' && <div className="office-qr-frame"/>}
+          <div className="office-stage-top">
+            <div className="office-stage-title">
+              {stage === 'qr' ? <QrCode size={16}/> : <ScanFace size={16}/>}
+              <b>{stage === 'enroll'
+                ? t('office.enrollTitle')
+                : stage === 'face'
+                  ? t('office.faceScan')
+                  : punchKind.current === 'out' ? t('office.scanOut') : t('office.scanIn')}</b>
+            </div>
+            <div>
+              <button type="button" className="office-stage-btn" onClick={() => void flipCam()} aria-label={t('office.flip')}><SwitchCamera size={18}/></button>
+              <button type="button" className="office-stage-btn" onClick={closeStage} aria-label={t('common.close')}><X size={18}/></button>
+            </div>
+          </div>
+          <div className="office-stage-copy">
             {stage === 'enroll'
-              ? t('office.enrollProgress', { n: Math.min(enrollCount, ENROLL_NEED), max: ENROLL_NEED })
-              : t('office.frontCam')}
-          </small>
-        )}
-        {busy && <em className="office-stage-busy">{t('office.checking')}</em>}
-        {!busy && (stage === 'face' || stage === 'enroll') && scanStatus === 'searching' && (
-          <em className="office-stage-busy">{t('office.faceSearching')}</em>
-        )}
-      </div>
-      {stage === 'enroll' && (
-        <button type="button" className="office-cam office-stage-go" disabled={busy || !faceReady} onClick={() => void confirmFace()}>
-          {busy ? t('office.checking') : faceReady ? t('office.enrollSave') : t('office.faceWait')}
-        </button>
+              ? (faceReady ? t('office.enrollReady') : t('office.enrollBody'))
+              : stage === 'face'
+                ? (scanStatus === 'unknown'
+                  ? t('office.faceUnknown')
+                  : scanStatus === 'partial'
+                    ? t('office.facePartial')
+                    : scanStatus === 'multi'
+                      ? t('office.faceMulti')
+                      : scanStatus === 'loading'
+                        ? t('office.faceLoading')
+                        : t('office.faceScanBody'))
+                : t('office.scanHint')}
+            {(stage === 'face' || stage === 'enroll') && (
+              <small>
+                {stage === 'enroll'
+                  ? t('office.enrollProgress', { n: Math.min(enrollCount, ENROLL_NEED), max: ENROLL_NEED })
+                  : t('office.frontCam')}
+              </small>
+            )}
+            {busy && <em className="office-stage-busy">{t('office.checking')}</em>}
+            {!busy && (stage === 'face' || stage === 'enroll') && scanStatus === 'searching' && (
+              <em className="office-stage-busy">{t('office.faceSearching')}</em>
+            )}
+          </div>
+          {stage === 'enroll' && (
+            <button type="button" className="office-cam office-stage-go" disabled={busy || !faceReady} onClick={() => void confirmFace()}>
+              {busy ? t('office.checking') : faceReady ? t('office.enrollSave') : t('office.faceWait')}
+            </button>
+          )}
+          {stage === 'qr' && <p className="office-stage-hint">{t('office.scanHint')}</p>}
+          {note && <p className="office-stage-err">{note}</p>}
+          <button type="button" className="office-stage-cancel" onClick={closeStage}><X size={14}/> {t('common.cancel')}</button>
+        </>
       )}
-      {stage === 'face' && (
-        <button type="button" className="office-cam office-stage-go" disabled={busy || !faceReady} onClick={() => void confirmFace()}>
-          {busy
-            ? t('office.checking')
-            : !faceReady
-              ? t('office.faceWait')
-              : (punchKind.current === 'out' ? t('office.qrConfirmGoOut') : t('office.qrConfirmGoIn'))}
-        </button>
-      )}
-      {stage === 'qr-confirm' && <button type="button" className="office-cam office-stage-go" disabled={busy} onClick={() => void confirmQrPunch()}>{busy ? t('office.checking') : (punchKind.current === 'out' ? t('office.qrConfirmGoOut') : t('office.qrConfirmGoIn'))}</button>}
-      {stage === 'qr' && <p className="office-stage-hint">{t('office.scanHint')}</p>}
-      {note && stage && <p className="office-stage-err">{note}</p>}
-      <button type="button" className="office-stage-cancel" onClick={closeStage}><X size={14}/> {t('common.cancel')}</button>
     </div>}
     {camDenied && <div className="office-toast">
       <button type="button" className="office-toast-x" onClick={() => setCamDenied(false)}><X size={14}/></button>

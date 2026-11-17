@@ -103,9 +103,9 @@ type FaceRow = {
 const FACE_MATCH_MAX = 16;
 const FACE_UNIQUE_MAX = 12;
 const FACE_HASH_KEEP = 6;
-/** face-api tavsiya: < 0.6 bir odam. */
-const FACE_DESC_MATCH = 0.55;
-const FACE_DESC_UNIQUE = 0.48;
+/** face-api tavsiya: < 0.6; biroz qattiqroq — peshona/fragment kamroq o‘tsin. */
+const FACE_DESC_MATCH = 0.48;
+const FACE_DESC_UNIQUE = 0.42;
 const FACE_DESC_KEEP = 8;
 type Store = {
   secret: string;

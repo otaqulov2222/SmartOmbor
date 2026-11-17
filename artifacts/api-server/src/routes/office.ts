@@ -122,7 +122,7 @@ router.post("/office/face/check", (req, res) => {
     res.json({ match: false, distance: null, needEnroll: true });
     return;
   }
-  res.json({ match: distance <= 0.55, distance: Math.round(distance * 1000) / 1000 });
+  res.json({ match: distance <= 0.48, distance: Math.round(distance * 1000) / 1000 });
 });
 
 router.post("/office/punch", (req, res) => {

@@ -149,13 +149,15 @@
   position: absolute; inset: 0; z-index: 1;
   background: #0b1524;
 }
-.office-leaflet-tiles {
-  /* Dark Carto tiles — filter yo‘q (invert tile orasida oq chiziq berardi). */
-  filter: none;
-}
 .office-map .leaflet-container { background: #0b1524 !important; }
+/* Filter butun pane da — har bir tile ga alohida invert oq chiziq berardi. */
+.office-map .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(1.05) saturate(.7);
+}
+.office-leaflet-tiles {
+  filter: none !important;
+}
 .office-map .leaflet-tile-container img {
-  /* Subpixel tile gap / retina seam */
   width: 256.5px !important;
   height: 256.5px !important;
 }
@@ -285,7 +287,53 @@
   position: fixed; inset: 0; z-index: 80; background: #05070d;
   display: flex; flex-direction: column;
 }
+.office-stage.is-confirm { background: linear-gradient(160deg, #07111f 0%, #0b1a33 48%, #0a1222 100%); }
 .office-stage video { display: block !important; flex: 1; width: 100%; height: 100%; object-fit: cover; margin: 0; border-radius: 0; aspect-ratio: auto; }
+.office-confirm {
+  flex: 1; display: grid; place-items: center; padding: 24px 18px calc(24px + env(safe-area-inset-bottom));
+  position: relative;
+}
+.office-confirm-close {
+  position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; z-index: 2;
+}
+.office-confirm-card {
+  width: min(100%, 380px); text-align: center; color: #e2e8f0;
+  display: grid; gap: 12px; justify-items: center;
+  padding: 28px 20px 18px;
+  border-radius: 24px;
+  background: rgb(15 23 42 / .72);
+  border: 1px solid rgb(255 255 255 / .1);
+  box-shadow: 0 24px 60px rgb(0 0 0 / .45);
+  backdrop-filter: blur(14px);
+}
+.office-confirm-ico {
+  width: 72px; height: 72px; border-radius: 22px; display: grid; place-items: center;
+  background: rgb(37 99 235 / .2); color: #93c5fd;
+  border: 1px solid rgb(147 197 253 / .28);
+}
+.office-confirm-ico.is-out {
+  background: rgb(239 68 68 / .18); color: #fecaca;
+  border-color: rgb(248 113 113 / .35);
+}
+.office-confirm-ico.is-in {
+  background: rgb(16 185 129 / .16); color: #6ee7b7;
+  border-color: rgb(52 211 153 / .35);
+}
+.office-confirm-card small {
+  font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: #94a3b8;
+}
+.office-confirm-card h2 {
+  margin: 0; font-size: 1.45rem; line-height: 1.25; font-weight: 800; color: #fff;
+}
+.office-confirm-card p {
+  margin: 0; color: #cbd5e1; font-size: .95rem; line-height: 1.4; max-width: 28ch;
+}
+.office-confirm-card .office-stage-go {
+  width: 100%; margin: 8px 0 0;
+}
+.office-confirm-card .office-stage-cancel { margin-top: 2px; }
+.office-confirm-card .office-stage-err { width: 100%; margin: 0; }
 .office-stage-shade {
   position: absolute; inset: 0; pointer-events: none; z-index: 1;
   background:
@@ -374,12 +422,17 @@
   padding: .35rem .7rem; border-radius: 999px; background: rgb(15 23 42 / .35);
 }
 .office-face-refresh {
-  grid-column: 1 / -1;
-  border: 1px dashed rgb(148 163 184 / .35); background: rgb(15 23 42 / .35);
-  color: #cbd5e1; border-radius: .85rem; padding: .55rem .75rem;
-  font-size: .78rem; font-weight: 650;
+  border: 1px solid rgb(148 163 184 / .35); background: rgb(15 23 42 / .45);
+  color: #e2e8f0; border-radius: .85rem; padding: .55rem .85rem;
+  font-size: .78rem; font-weight: 650; white-space: nowrap;
 }
 .office-face-refresh:disabled { opacity: .45; }
+.office-settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0 4px;
+}
+.office-settings-row b { display: block; font-size: .95rem; }
+.office-settings-row small { color: var(--o-muted); font-size: .78rem; }
 .office-toast {
   position: fixed; right: 16px; bottom: 24px; z-index: 90; width: min(280px, calc(100% - 24px));
   background: #ef4444; color: #fff; border-radius: 16px; padding: 14px 16px 14px 14px;
