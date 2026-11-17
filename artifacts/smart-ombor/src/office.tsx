@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import {
-  ChevronLeft, Clock, LogIn, LogOut, Moon, QrCode, ScanFace, Sun, SwitchCamera, Wallet, X,
+  ChevronLeft, Clock, LogIn, LogOut, Moon, QrCode, ScanFace, Sun, SwitchCamera, X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
@@ -14,7 +14,7 @@ type Punch = { date: string; inAt: string | null; outAt: string | null; workedMs
 type Me = {
   id: string; name: string; login: string; role: string; director: boolean; face: boolean;
   office: { name: string; lat: number; lng: number; radiusM: number; accuracyM: number; start: string; end: string };
-  clock: string; date: string; today: Punch | null; fiksa: number;
+  clock: string; date: string; today: Punch | null; fiksa?: number;
 };
 const SESSION = 'smart-ombor-session';
 const QR_HINTS = new Map<DecodeHintType, unknown>([
@@ -62,23 +62,8 @@ function heading(iso: string, weekdays: string, months: string) {
   const cap = label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
   return { weekday, line: `${day} ${cap} ${year}` };
 }
-function weekBounds(iso: string) {
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d, 12));
-  const dow = dt.getUTCDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  const from = new Date(dt); from.setUTCDate(dt.getUTCDate() + offset);
-  const to = new Date(from); to.setUTCDate(from.getUTCDate() + 6);
-  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
-}
-function monthDay(iso: string, months: string) {
-  const [, month, day] = iso.split('-').map(Number);
-  const label = months.split(',')[(month || 1) - 1] || '';
-  return `${Number(day)} ${label}`;
-}
-
 export function OfficePage() {
-  const { t, lang, setLang, date, time, money } = useI18n();
+  const { t, lang, setLang, date, time } = useI18n();
   const [, setLocation] = useLocation();
   const [me, setMe] = useState<Me | null>(null);
   const [clock, setClock] = useState(tashkentClock());
@@ -95,8 +80,7 @@ export function OfficePage() {
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<'day' | 'week' | 'month'>('week');
   const [history, setHistory] = useState<Punch[]>([]);
-  const [payOpen, setPayOpen] = useState(false);
-  const [section, setSection] = useState<'mark' | 'history' | 'pay' | 'settings'>('mark');
+  const [section, setSection] = useState<'mark' | 'history' | 'settings'>('mark');
   const matchStreak = useRef(0);
   const qrStreak = useRef<{ token: string; n: number }>({ token: '', n: 0 });
   const [scanStatus, setScanStatus] = useState<FaceScanStatus>('loading');
@@ -105,7 +89,6 @@ export function OfficePage() {
   const video = useRef<HTMLVideoElement>(null);
   const markRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
-  const payRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const scanStop = useRef(false);
@@ -305,7 +288,6 @@ export function OfficePage() {
     ? (me.today.outAt ? me.today.workedMs : Date.now() - Date.parse(me.today.inAt))
     : 0;
   const day = heading(me?.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()), t('date.weekdaysLong'), t('date.months'));
-  const week = weekBounds(me?.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()));
   const ranges: Array<{ id: 'day' | 'week' | 'month'; key: TKey }> = [
     { id: 'day', key: 'office.day' },
     { id: 'week', key: 'office.week' },
@@ -903,15 +885,13 @@ export function OfficePage() {
     }
   };
 
-  const jumpSection = (id: 'mark' | 'history' | 'pay' | 'settings') => {
+  const jumpSection = (id: 'mark' | 'history' | 'settings') => {
     setSection(id);
     const node = id === 'mark'
       ? markRef.current
       : id === 'history'
         ? historyRef.current
-        : id === 'pay'
-          ? payRef.current
-          : settingsRef.current;
+        : settingsRef.current;
     node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -961,10 +941,9 @@ export function OfficePage() {
           <small>{me?.today?.inAt ? t('office.working') : t('office.notStarted')}</small>
         </div>
       </div>
-      <div className="office-sections is-4" role="tablist" aria-label={t('nav.office')}>
+      <div className="office-sections is-3" role="tablist" aria-label={t('nav.office')}>
         <button type="button" role="tab" aria-selected={section === 'mark'} className={section === 'mark' ? 'is-on' : ''} onClick={() => jumpSection('mark')}>{t('office.sectionMark')}</button>
         <button type="button" role="tab" aria-selected={section === 'history'} className={section === 'history' ? 'is-on' : ''} onClick={() => jumpSection('history')}>{t('office.sectionHistory')}</button>
-        <button type="button" role="tab" aria-selected={section === 'pay'} className={section === 'pay' ? 'is-on' : ''} onClick={() => jumpSection('pay')}>{t('office.sectionPay')}</button>
         <button type="button" role="tab" aria-selected={section === 'settings'} className={section === 'settings' ? 'is-on' : ''} onClick={() => jumpSection('settings')}>{t('office.sectionSettings')}</button>
       </div>
       <div ref={markRef} id="office-mark" className="office-block">
@@ -1083,24 +1062,6 @@ export function OfficePage() {
           </button>
         </div>
         <p className="lead" style={{ marginTop: 8 }}>{t('office.faceCardBody')}</p>
-      </div>
-      <div ref={payRef} id="office-pay" className="office-card office-block">
-        <div className="office-card-top">
-          <div className="office-card-title">
-            <span className="is-pay"><Wallet size={16}/></span>
-            <div>
-              <b>{t('office.pay')}</b>
-              <small>{t('office.payWeek', { from: monthDay(week.from, t('date.months')), to: monthDay(week.to, t('date.months')) })}</small>
-            </div>
-          </div>
-          <button type="button" className="office-detail" onClick={() => setPayOpen(open => !open)}>{t('office.detail')}</button>
-        </div>
-        <div className="office-pay">
-          <div>{t('office.fiksa')}<b>{money(me?.fiksa || 0)}</b></div>
-          <div>{t('office.fine')}<b>{money(0)}</b></div>
-          <div className="full">{t('office.left')}<b>{money(me?.fiksa || 0)}</b></div>
-        </div>
-        {payOpen && <p className="lead" style={{ marginTop: 10 }}>{t('office.payHint')}</p>}
       </div>
     </div>
     {stage && <div className={`office-stage ${(stage === 'face-confirm' || stage === 'qr-confirm') ? 'is-confirm' : ''}`}>
