@@ -7,6 +7,7 @@ import settingsRouter from "./settings";
 import localAuthRouter from "./local-auth";
 import officeRouter from "./office";
 import kpiRouter from "./kpi";
+import assistantRouter from "./assistant";
 
 const router: IRouter = Router();
 
@@ -15,6 +16,7 @@ router.use(localAuthRouter);
 router.use(officeRouter);
 router.use(partnersRouter);
 router.use(kpiRouter);
+router.use(assistantRouter);
 router.use(auditRouter);
 router.use(settingsRouter);
 router.use(dataRouter);

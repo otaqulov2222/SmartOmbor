@@ -48,6 +48,7 @@ import {
   type AccessModuleId,
 } from '@/access';
 import { GpsPage } from '@/kpi/gps';
+import { AssistantWidget } from '@/assistant';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 20_000, retry: 2, retryDelay: attempt => Math.min(1000, 400 * (attempt + 1)), refetchOnWindowFocus: false } } });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -365,7 +366,7 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
 function LocalShell({ children, title }: { children: ReactNode; title: string }) {
   const [, setLocation] = useLocation(); const { t } = useI18n();
   const session = readLocalSession();
-  return <WorkspaceChrome title={title} userName={session?.name || t('shell.localUser')} onSignOut={() => { sessionStorage.removeItem(LOCAL_SESSION); setLocation('/'); }}>{children}</WorkspaceChrome>;
+  return <WorkspaceChrome title={title} userName={session?.name || t('shell.localUser')} onSignOut={() => { sessionStorage.removeItem(LOCAL_SESSION); setLocation('/'); }}>{children}<AssistantWidget/></WorkspaceChrome>;
 }
 function WorkspaceChrome({ children, title, userName, onSignOut }: { children: ReactNode; title: string; userName: string; onSignOut: () => void }) {
   const { t, fmt } = useI18n();
