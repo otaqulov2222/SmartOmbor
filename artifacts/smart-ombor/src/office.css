@@ -150,7 +150,14 @@
   background: #0b1524;
 }
 .office-leaflet-tiles {
-  filter: invert(1) hue-rotate(180deg) brightness(.82) contrast(1.12) saturate(.55);
+  /* Dark Carto tiles — filter yo‘q (invert tile orasida oq chiziq berardi). */
+  filter: none;
+}
+.office-map .leaflet-container { background: #0b1524 !important; }
+.office-map .leaflet-tile-container img {
+  /* Subpixel tile gap / retina seam */
+  width: 256.5px !important;
+  height: 256.5px !important;
 }
 .office-map .leaflet-control-zoom {
   border: 0 !important; box-shadow: none !important; margin: 10px 10px 0 0 !important;

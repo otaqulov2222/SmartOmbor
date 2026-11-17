@@ -151,8 +151,10 @@ export function OfficeMap({
         boxZoom: true,
         keyboard: true,
       });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // Dark basemap — CSS invert tile seam (oq chiziq) bermaydi.
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19,
+        subdomains: 'abcd',
         className: 'office-leaflet-tiles',
       }).addTo(map);
       L.control.zoom({ position: 'topright' }).addTo(map);

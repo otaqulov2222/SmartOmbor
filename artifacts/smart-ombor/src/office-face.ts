@@ -101,7 +101,8 @@ export async function detectFaceDescriptor(video: HTMLVideoElement): Promise<{
   if (!video.videoWidth || video.readyState < 2) {
     return { status: 'searching', descriptor: null, box: null };
   }
-  const options = new api.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.45 });
+  // 160 — telefonda 224 dan sezilarli tezroq; enroll uchun yetarli.
+  const options = new api.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.4 });
   const detections = await api.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
   if (!detections.length) return { status: 'searching', descriptor: null, box: null };
   if (detections.length > 1) return { status: 'multi', descriptor: null, box: null };

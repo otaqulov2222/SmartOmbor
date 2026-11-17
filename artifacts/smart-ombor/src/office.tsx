@@ -103,6 +103,14 @@ export function OfficePage() {
   const matchedDesc = useRef<number[] | null>(null);
   const enrollBag = useRef<number[][]>([]);
   const checkAt = useRef(0);
+  const enrollAuto = useRef(false);
+  const confirmFaceRef = useRef<() => Promise<void>>(async () => undefined);
+  const ENROLL_NEED = 3;
+
+  // Modelni oldindan yuklash — kamera ochilganda kutish kamayadi.
+  useEffect(() => {
+    void ensureFaceModels().catch(() => undefined);
+  }, []);
 
   const loadMe = async () => {
     const response = await fetch('/api/office/me', { headers: officeHeaders() });
@@ -338,6 +346,7 @@ export function OfficePage() {
     pendingQr.current = '';
     matchedDesc.current = null;
     enrollBag.current = [];
+    enrollAuto.current = false;
     setFaceReady(false);
     setEnrollCount(0);
     setScanStatus('loading');
@@ -428,6 +437,7 @@ export function OfficePage() {
       setNote(t('office.faceWait'));
       return;
     }
+    if (busy) return;
     setBusy(true); setNote(''); setOk('');
     const fix = await freshGps();
     if (!fix) {
@@ -455,8 +465,8 @@ export function OfficePage() {
     }
     const replacing = stage === 'enroll' && Boolean(me?.face);
     if (stage === 'enroll' || !me?.face) {
-      const descriptors = enrollBag.current.slice(0, 8);
-      if (descriptors.length < 3) {
+      const descriptors = enrollBag.current.slice(0, ENROLL_NEED);
+      if (descriptors.length < ENROLL_NEED) {
         setBusy(false);
         setNote(t('office.faceDark'));
         return;
@@ -475,6 +485,7 @@ export function OfficePage() {
       const payload = await response.json().catch(() => ({})) as { error?: string; meters?: number };
       setBusy(false);
       if (!response.ok) {
+        enrollAuto.current = false;
         if (payload.error === 'radius') setNote(t('office.distFar', { m: Math.round(payload.meters || distNow || 0) }));
         else if (payload.error === 'taken') setNote(t('office.faceTaken'));
         else if (payload.error === 'exists') setNote(t('office.faceExists'));
@@ -495,6 +506,7 @@ export function OfficePage() {
     setBusy(false);
     await doPunch(punchKind.current, { faceDescriptors: [descriptor] }, 'face', fix);
   };
+  confirmFaceRef.current = () => confirmFace();
 
   const reconnectFace = async () => {
     if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
@@ -513,13 +525,14 @@ export function OfficePage() {
     if (!readyEnroll) setStage(null);
   };
 
-  // Live Face ID scan — yuz topilgach tanib oladi; tugma shundan keyin ochiladi.
+  // Live Face ID scan — enroll tez namuna + auto-bog‘lash; punchda tanib olgach tugma.
   useEffect(() => {
     if (stage !== 'face' && stage !== 'enroll') return;
     let alive = true;
     scanStop.current = false;
     matchedDesc.current = null;
     enrollBag.current = [];
+    enrollAuto.current = false;
     setFaceReady(false);
     setEnrollCount(0);
     setScanStatus('loading');
@@ -539,7 +552,7 @@ export function OfficePage() {
       while (alive && !scanStop.current) {
         const el = video.current;
         if (!el || el.readyState < 2) {
-          await sleep(220);
+          await sleep(80);
           continue;
         }
         try {
@@ -549,7 +562,7 @@ export function OfficePage() {
             setScanStatus('multi');
             setFaceReady(false);
             matchedDesc.current = null;
-            await sleep(280);
+            await sleep(120);
             continue;
           }
           if (!shot.descriptor) {
@@ -558,25 +571,33 @@ export function OfficePage() {
               setFaceReady(false);
               matchedDesc.current = null;
             }
-            await sleep(220);
+            await sleep(60);
             continue;
           }
           if (stage === 'enroll') {
-            const near = enrollBag.current.some((item) => euclidean(item, shot.descriptor!) < 0.12);
-            if (!near) {
+            // Faqat deyarli bir xil freymlarni tashla — harakat kutmasin.
+            const near = enrollBag.current.some((item) => euclidean(item, shot.descriptor!) < 0.02);
+            if (!near && enrollBag.current.length < ENROLL_NEED) {
               enrollBag.current.push(shot.descriptor);
               setEnrollCount(enrollBag.current.length);
             }
-            const enough = enrollBag.current.length >= 4;
+            const enough = enrollBag.current.length >= ENROLL_NEED;
             setFaceReady(enough);
             setScanStatus(enough ? 'recognized' : 'found');
-            await sleep(200);
+            if (enough && !enrollAuto.current) {
+              enrollAuto.current = true;
+              scanStop.current = true;
+              await sleep(60);
+              if (alive) void confirmFaceRef.current();
+              break;
+            }
+            await sleep(40);
             continue;
           }
           setScanStatus('found');
           const now = Date.now();
-          if (now - checkAt.current < 700) {
-            await sleep(180);
+          if (now - checkAt.current < 450) {
+            await sleep(80);
             continue;
           }
           checkAt.current = now;
@@ -588,10 +609,10 @@ export function OfficePage() {
           const payload = await response.json().catch(() => ({})) as { match?: boolean; needEnroll?: boolean };
           if (!alive || scanStop.current) break;
           if (payload.needEnroll) {
-            // Eski aHash yoki descriptor yo‘q — yangi Face ID skaneriga o‘tkazamiz.
             setScanStatus('loading');
             setFaceReady(false);
             enrollBag.current = [];
+            enrollAuto.current = false;
             setEnrollCount(0);
             setOk('');
             setNote(t('office.faceUpgrade'));
@@ -610,7 +631,7 @@ export function OfficePage() {
         } catch {
           if (alive) setScanStatus('error');
         }
-        await sleep(280);
+        await sleep(120);
       }
     };
     void loop();
@@ -973,7 +994,7 @@ export function OfficePage() {
         {(stage === 'face' || stage === 'enroll') && (
           <small>
             {stage === 'enroll'
-              ? t('office.enrollProgress', { n: enrollCount, max: 4 })
+              ? t('office.enrollProgress', { n: Math.min(enrollCount, ENROLL_NEED), max: ENROLL_NEED })
               : t('office.frontCam')}
           </small>
         )}
