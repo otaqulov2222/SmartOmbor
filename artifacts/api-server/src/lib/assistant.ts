@@ -75,7 +75,8 @@ Tool:
 - Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
 - Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.
-- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, bugungi davomat, hisobot, xato, MS solishtirish, eng ko‘p sotilgan tovarlar — to‘liq stsenariyni o‘zingiz tanlab bajaring.`;
+- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, bugungi davomat, hisobot, xato, MS solishtirish, eng ko‘p sotilgan tovarlar — to‘liq stsenariyni o‘zingiz tanlab bajaring.
+- FAQAT so‘ralgan savolga javob bering. O‘zingizdan qo‘shimcha audit, boshqa yuk, «vhk» uslubidagi ortiqcha matn yozmang.`;
 
 const TOOLS = [
   {
@@ -945,12 +946,24 @@ function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; for
   return { kind: "davomat", format };
 }
 
-function isAuditIntent(lower: string): boolean {
-  return /tekshir|solishtir|muammo|kamchilik|mosmi|mos\s*mi|qanday yozilgan|tanlanganmi|tanlash kerak|to['‘`]?g['‘`]?\s*rimi|xato\s*bormi|verify|audit|насколько\s*верно|проверь/.test(lower);
+function isShipmentTopic(lower: string): boolean {
+  return /yuk\b|yuk\s*xati|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|pachka|пачк|otgruz|prihod/.test(lower);
 }
 
-function isShipmentTopic(lower: string): boolean {
-  return /yuk|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|pachka|пачк|otgruz|prihod/.test(lower);
+function isAuditIntent(lower: string): boolean {
+  // Aniq tekshiruv buyruqlari
+  if (/tekshir|solishtir|muammo|kamchilik|verify|audit|проверь|насколько\s*верно|xato\s*bormi/.test(lower)) {
+    return true;
+  }
+  // «to‘g‘rimi / mosmi» — faqat yuk/kirim/pachka kontekstida (savdo tasdig‘i emas!)
+  const confirm = /mosmi|mos\s*mi|to['‘`]?g['‘`]?\s*rimi|qanday yozilgan|tanlanganmi|tanlash kerak/.test(lower);
+  if (!confirm) return false;
+  return isShipmentTopic(lower) || /\b\d{3,5}-\d{2,4}\b/.test(lower);
+}
+
+function isSalesConfirmIntent(lower: string): boolean {
+  if (!/(sotilgan|savdo|sotuv|продаж)/.test(lower)) return false;
+  return /to['‘`]?g['‘`]?\s*ri|rostmi|haqiqat|confirm|бұл\s*правиль|shu\s*ro.?yxat|bular/.test(lower);
 }
 
 function pickMessageText(msg: ChatMsg | undefined | null): string {
@@ -1034,42 +1047,31 @@ function formatAuditReply(audit: Record<string, unknown>): string {
   const local = (audit.local || {}) as Record<string, unknown>;
   const ms = (audit.moysklad || null) as Record<string, unknown> | null;
   const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
-  const sample = Array.isArray(local.sample) ? local.sample as Array<Record<string, unknown>> : [];
   const pachka = Array.isArray(audit.pachkaChecks) ? audit.pachkaChecks as Array<Record<string, unknown>> : [];
+  const badPachka = pachka.filter((row) => row.ok === false);
   const lines = [
     `Yuk xati ${audit.number} (${audit.date || "—"}) — ${audit.verdict || ""}`,
     `Zavod: ${audit.factory || "—"} · holat: ${localizeStatus(audit.status)}`,
-    `Yuk xati: ${local.lines || 0} model qator, MS uchun kutilyotgan pozitsiya ${local.expectedMsPositions || 0}, dona ${local.pieces || 0}, pachka qatorlari ${local.pachkaLines || 0}.`,
   ];
   if (ms) {
     lines.push(
-      `MoySklad: ${ms.name || ms.id}`,
-      `• O‘tkazilgan: ${ms.applicable === true ? "ha" : ms.applicable === false ? "yo‘q" : "—"}`,
-      `• Kontragent: ${ms.agent || "tanlanmagan"}`,
-      `• Ombor: ${ms.store || "tanlanmagan"}`,
-      `• Tashkilot: ${ms.organization || "tanlanmagan"}`,
-      `• MS pozitsiya: ${ms.positions || 0} (kutilgan ${local.expectedMsPositions || 0}), dona: ${ms.pieces || 0} (kutilgan ${local.pieces || 0})${ms.sum != null ? `, summa: ${ms.sum}` : ""}`,
+      `MS: ${ms.name || "—"} · ombor ${ms.store || "—"} · kontragent ${ms.agent || "—"}`,
+      `Pozitsiya ${ms.positions || 0}/${local.expectedMsPositions || 0}, dona ${ms.pieces || 0}/${local.pieces || 0}`,
     );
   } else {
-    lines.push("MoySklad hujjati topilmadi yoki o‘qilmadi.");
+    lines.push("MoySklad hujjati topilmadi.");
   }
-  if (sample.length) {
-    lines.push("Yuk xati namunasi:");
-    for (const row of sample.slice(0, 6)) {
-      lines.push(`• ${row.code} ${row.size}: juft ${row.pairs}, quti ${row.boxes}, pachka ${row.pachka}, dona ${row.pieces}`);
-    }
-  }
-  if (pachka.length) {
-    lines.push("Pachka (MS packs):");
-    for (const row of pachka.slice(0, 8)) {
-      lines.push(`• ${row.productCode}: kutildi ${row.expected}, MS ${row.ms ?? "—"} — ${row.ok ? "OK" : "MOS EMAS"}`);
+  if (badPachka.length) {
+    lines.push("Pachka mos emas:");
+    for (const row of badPachka.slice(0, 8)) {
+      lines.push(`• ${row.productCode}: kutildi ${row.expected}, MS ${row.ms ?? "—"}`);
     }
   }
   if (issues.length) {
     lines.push("Kamchiliklar:");
-    for (const issue of issues.slice(0, 12)) lines.push(`• ${issue}`);
+    for (const issue of issues.slice(0, 10)) lines.push(`• ${issue}`);
   } else {
-    lines.push("Kamchilik topilmadi — kirim maydonlari va miqdorlar mos.");
+    lines.push("Kamchilik yo‘q.");
   }
   return lines.join("\n");
 }
@@ -1186,7 +1188,10 @@ function clockLabel(iso: string | null | undefined) {
 }
 
 /** Buyruq/vazifa — Groq kutmasdan tool + mahalliy matn (tez va barqaror). Barcha asosiy stsenariylar. */
-async function tryFastLocalTask(message: string): Promise<AssistantResult | null> {
+async function tryFastLocalTask(
+  message: string,
+  history: Array<{ role: "user" | "assistant"; content: string }> = [],
+): Promise<AssistantResult | null> {
   const lower = message.toLowerCase();
   const tools: Array<{ name: string; ok: boolean }> = [];
   const files: AssistantFile[] = [];
@@ -1194,6 +1199,8 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
   const shipmentNo = shipmentMatch?.[1] || "";
   const auditAsk = isAuditIntent(lower);
   const shipTopic = isShipmentTopic(lower);
+  const prevAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content || "";
+  const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|profit byproduct|savdo hisobot/i.test(prevAssistant);
 
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     try {
@@ -1215,6 +1222,18 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     }
     return { reply: formatAuditReply(audit), model: "local-fast", tools, files } satisfies AssistantResult;
   };
+
+  // 0) Savdo ro‘yxatini tasdiqlash — auditga tushmasin
+  if (isSalesConfirmIntent(lower) || (prevWasSales && /to['‘`]?g['‘`]?\s*ri|rostmi|haqiqat|bular|shu\s*ro.?yxat/.test(lower))) {
+    return {
+      reply: prevWasSales || /sotilgan|savdo/.test(lower)
+        ? "Ha. Bu MoySklad savdo hisobotidan olingan eng ko‘p sotilgan tovarlar — yuk xati yoki kirim emas."
+        : "Ha, oldingi ro‘yxat savdo hisoboti bo‘yicha.",
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
 
   // 1) Fayl / hisobot
   const exportWanted = detectExport(lower);
@@ -1284,11 +1303,11 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 3) Audit: oxirgi / bugungi / yolg‘iz «tekshir»
+  // 3) Audit: oxirgi / bugungi / yolg‘iz «tekshir» (qisqa matnni avtomatik audit qilmaymiz)
   const wantsLatestAudit = auditAsk && (
     shipTopic
     || /oxirgi|so['‘`]?nggi|bugun|last|сегодня|последн/.test(lower)
-    || lower.trim().length < 40 // qisqa «tekshir» / «tekshirib ber»
+    || /^(tekshir(ib\s*ber)?|solishtir|muammo\s*bormi|verify|audit)[\s?.!]*$/i.test(lower.trim())
   );
   const wantsTodayAll = auditAsk && /bugun|сегодня/.test(lower) && /hamma|barcha|all|yuklar/.test(lower);
   if (wantsTodayAll) {
@@ -1553,14 +1572,14 @@ export async function runAssistantChat(input: {
   const message = String(input.message || "").trim().slice(0, 4000);
   if (message.length < 1) throw Object.assign(new Error("empty"), { status: 400 });
 
-  // Avvalo tez mahalliy yo‘l: buyruq/vazifa/tushuntirish — Groq kutmaydi.
-  const fast = await tryFastLocalTask(message);
-  if (fast) return fast;
-
   const history = (input.history || [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
     .slice(-12)
     .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
+
+  // Avvalo tez mahalliy yo‘l: buyruq/vazifa/tushuntirish — Groq kutmaydi.
+  const fast = await tryFastLocalTask(message, history);
+  if (fast) return fast;
 
   const messages: ChatMsg[] = [
     { role: "system", content: SYSTEM },
