@@ -4,11 +4,13 @@ import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
-import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
+import { officeSite, tashkentParts, todayBoard, workedMs, tabelDay } from "./office";
 import { packSizeOf, ensurePachka, productPackSize, pieceCount, receiptParts } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { idFromHref, money, moysklad, moyskladAll, moyskladConfigured } from "./moysklad";
-import { peekCatalog } from "./catalog";
+import { compactCode, findProductsByBarcode, findProductsByLabel, foldProductName, peekCatalog } from "./catalog";
+import { orderRecommendations } from "./recommendations";
+import { listAccounts } from "./partners";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 
 // Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
@@ -75,8 +77,9 @@ Tool:
 - Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
 - Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.
-- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, bugungi davomat, hisobot, xato, MS solishtirish, eng ko‘p sotilgan tovarlar — to‘liq stsenariyni o‘zingiz tanlab bajaring.
-- FAQAT so‘ralgan savolga javob bering. O‘zingizdan qo‘shimcha audit, boshqa yuk, «vhk» uslubidagi ortiqcha matn yozmang.`;
+- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, davomat, hisobot, xato, MS solishtirish, eng ko‘p/sotilmagan tovar, qoldiq past, ombor, savdo summasi, mahsulot qidiruv, buyurtma tavsiya, zavodlar — o‘zingiz tanlab bajaring.
+- FAQAT so‘ralgan savolga javob bering. O‘zingizdan qo‘shimcha audit, boshqa yuk, «vhk» uslubidagi ortiqcha matn yozmang.
+- Tool nomini (inglizcha) foydalanuvchiga yozmang.`;
 
 const TOOLS = [
   {
@@ -243,6 +246,72 @@ const TOOLS = [
           limit: { type: "number", description: "Default 20, max 50" },
         },
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "sales_summary",
+      description: "Bugungi yoki N kunlik savdo summasi/dona (MoySklad + katalog).",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "1=bugun, default 1, max 365" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "warehouse_overview",
+      description: "Ombor holati: tovar soni, qoldiq, past/harakatsiz, bugungi savdo/kirim.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "low_stock_products",
+      description: "Qoldig‘i past yoki tugagan tovarlar.",
+      parameters: {
+        type: "object",
+        properties: { limit: { type: "number", description: "Default 20" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_products",
+      description: "Mahsulot qidiruv: kod, nom, barkod — qoldiq va narx.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "order_recommendations",
+      description: "Buyurtma tavsiyalari — qoldiq yetarli bo‘lmagan tez sotiladigan tovarlar.",
+      parameters: {
+        type: "object",
+        properties: { limit: { type: "number" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_factories",
+      description: "Hamkor/zavod ro‘yxati va kutayotgan yuklar.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
 ] as const;
@@ -876,6 +945,185 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     };
   }
 
+  if (name === "sales_summary") {
+    const days = Math.min(365, Math.max(1, Math.round(Number(args.days) || 1)));
+    const catalog = peekCatalog();
+    const to = tashkentParts().date;
+    const toDate = new Date(`${to}T12:00:00+05:00`);
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - (days - 1));
+    const from = tashkentParts(fromDate).date;
+    if (days === 1) {
+      return {
+        ok: true,
+        days: 1,
+        from: to,
+        to,
+        salesAmount: catalog?.salesToday ?? null,
+        incomingToday: catalog?.incomingToday ?? null,
+        pendingTransfers: catalog?.pendingTransfers ?? null,
+        source: catalog ? "katalog" : "yoq",
+      };
+    }
+    if (!moyskladConfigured()) {
+      return { ok: false, days, from, to, error: "MoySklad ulanmagan", salesAmount: null, salesQty: null };
+    }
+    try {
+      const profit = await moyskladAll<{ sellQuantity?: number; sellSum?: number }>(
+        `/report/profit/byproduct?momentFrom=${encodeURIComponent(`${from} 00:00:00`)}&momentTo=${encodeURIComponent(`${to} 23:59:59`)}`,
+      );
+      const salesQty = profit.rows.reduce((s, r) => s + Number(r.sellQuantity || 0), 0);
+      const salesAmount = profit.rows.reduce((s, r) => s + (money(r.sellSum) || 0), 0);
+      return { ok: true, days, from, to, salesAmount, salesQty, source: "moysklad" };
+    } catch (error) {
+      return {
+        ok: false,
+        days,
+        from,
+        to,
+        error: error instanceof Error ? error.message : String(error),
+        salesAmount: null,
+        salesQty: null,
+      };
+    }
+  }
+
+  if (name === "warehouse_overview") {
+    const catalog = peekCatalog();
+    if (!catalog) return { ok: false, error: "katalog_yuklanmagan" };
+    const products = catalog.products || [];
+    const stockUnits = products.reduce((s, p) => s + Number(p.stock || 0), 0);
+    const stockValue = products.reduce((s, p) => s + Number(p.stock || 0) * Number(p.cost || p.salePrice || 0), 0);
+    const low = products.filter((p) => p.stockStatus === "low").length;
+    const out = products.filter((p) => p.stockStatus === "out").length;
+    const nonMoving = products.filter((p) => p.stockStatus === "non_moving").length;
+    const byWh = new Map<string, { name: string; units: number; products: number }>();
+    for (const row of catalog.stockRows || []) {
+      const id = row.warehouse.id;
+      const cur = byWh.get(id) || { name: row.warehouse.name, units: 0, products: 0 };
+      cur.units += Number(row.quantity || 0);
+      if (Number(row.quantity || 0) > 0) cur.products += 1;
+      byWh.set(id, cur);
+    }
+    return {
+      ok: true,
+      productCount: catalog.productCount || products.length,
+      stockUnits,
+      stockValue: Math.round(stockValue),
+      lowStock: low,
+      outOfStock: out,
+      nonMoving,
+      salesToday: catalog.salesToday,
+      incomingToday: catalog.incomingToday,
+      pendingTransfers: catalog.pendingTransfers,
+      warehouses: [...byWh.values()].sort((a, b) => b.units - a.units).slice(0, 12),
+      loadedAt: catalog.loadedAt || null,
+    };
+  }
+
+  if (name === "low_stock_products") {
+    const limit = Math.min(40, Math.max(5, Math.round(Number(args.limit) || 20)));
+    const catalog = peekCatalog();
+    if (!catalog) return { ok: false, error: "katalog_yuklanmagan", items: [] };
+    const items = [...catalog.products]
+      .filter((p) => p.stockStatus === "low" || p.stockStatus === "out")
+      .sort((a, b) => {
+        const rank = (s: string) => (s === "out" ? 0 : 1);
+        return rank(a.stockStatus) - rank(b.stockStatus) || a.stock - b.stock;
+      })
+      .slice(0, limit)
+      .map((p) => ({
+        name: p.name,
+        code: p.code,
+        stock: p.stock,
+        status: p.stockStatus === "out" ? "tugagan" : "past",
+        sales30: p.sales30,
+      }));
+    return { ok: true, total: items.length, items };
+  }
+
+  if (name === "search_products") {
+    const query = String(args.query || "").trim();
+    const limit = Math.min(20, Math.max(3, Math.round(Number(args.limit) || 8)));
+    const catalog = peekCatalog();
+    if (!catalog) return { ok: false, error: "katalog_yuklanmagan", items: [] };
+    if (!query) return { ok: false, error: "query_kerak", items: [] };
+    let hits = findProductsByBarcode(catalog, query);
+    if (!hits.length) hits = findProductsByLabel(catalog, query).products;
+    if (!hits.length) {
+      const q = foldProductName(query);
+      const compact = compactCode(query);
+      const rawLower = query.toLowerCase();
+      const digits = query.replace(/\D+/g, " ").trim().split(/\s+/).filter((t) => t.length >= 3);
+      hits = catalog.products.filter((p) => {
+        const nameLower = String(p.name || "").toLowerCase();
+        const codeLower = String(p.code || "").toLowerCase();
+        const blob = foldProductName(`${p.name} ${p.code || ""} ${p.article || ""} ${p.factory || ""}`);
+        if (rawLower && (nameLower.includes(rawLower) || codeLower.includes(rawLower))) return true;
+        if (digits.length && digits.every((d) => nameLower.includes(d) || codeLower.includes(d) || String(p.article || "").includes(d))) return true;
+        if (q && blob.includes(q)) return true;
+        if (compact && compactCode(`${p.code || ""}${p.article || ""}`).includes(compact)) return true;
+        return (p.barcodes || []).some((b) => compactCode(b).includes(compact));
+      }).slice(0, limit * 3);
+    }
+    const items = hits.slice(0, limit).map((p) => {
+      const rows = (catalog.stockRows || [])
+        .filter((r) => r.product.id === p.id && Number(r.quantity || 0) > 0)
+        .slice(0, 4)
+        .map((r) => ({ warehouse: r.warehouse.name, qty: r.quantity }));
+      return {
+        name: p.name,
+        code: p.code,
+        article: p.article,
+        stock: p.stock,
+        available: p.available,
+        salePrice: p.salePrice,
+        cost: p.cost,
+        status: p.stockStatus,
+        warehouses: rows,
+      };
+    });
+    return { ok: true, query, total: items.length, items };
+  }
+
+  if (name === "order_recommendations") {
+    const limit = Math.min(30, Math.max(5, Math.round(Number(args.limit) || 15)));
+    const catalog = peekCatalog();
+    if (!catalog) return { ok: false, error: "katalog_yuklanmagan", items: [] };
+    const lines = orderRecommendations(catalog).slice(0, limit);
+    return {
+      ok: true,
+      total: lines.length,
+      items: lines.map((l) => ({
+        name: l.product.name,
+        code: l.product.code,
+        onHand: l.onHand,
+        inTransit: l.inTransit,
+        suggested: l.suggestedQuantity,
+        daily: l.dailyAverage,
+        reason: l.reason === "out_of_stock" ? "tugagan" : l.reason === "fast" ? "tez ketadi" : "qoldiq past",
+      })),
+    };
+  }
+
+  if (name === "list_factories") {
+    const accounts = listAccounts();
+    const shipments = readPartners().shipments || [];
+    const pendingBy = new Map<string, number>();
+    for (const s of shipments) {
+      if (String(s.status || "") !== "sent") continue;
+      const id = String(s.factoryId || "");
+      pendingBy.set(id, (pendingBy.get(id) || 0) + 1);
+    }
+    const items = accounts.slice(0, 40).map((a: Record<string, unknown>) => ({
+      name: a.name || a.code || a.id,
+      code: a.code || null,
+      pending: pendingBy.get(String(a.id)) || 0,
+    }));
+    const pendingTotal = [...pendingBy.values()].reduce((s, n) => s + n, 0);
+    return { ok: true, total: items.length, pendingShipments: pendingTotal, items };
+  }
+
   return { error: `unknown_tool:${name}` };
 }
 
@@ -1028,7 +1276,7 @@ function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; for
 }
 
 function isShipmentTopic(lower: string): boolean {
-  return /yuk\b|yuk\s*xati|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|pachka|пачк|otgruz|prihod/.test(lower);
+  return /yuklar|yuk\b|yuk\s*xati|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|pachka|пачк|otgruz|prihod/.test(lower);
 }
 
 function isAuditIntent(lower: string): boolean {
@@ -1187,12 +1435,8 @@ function offlineAssistantReply(input: {
     reply: [
       "Hozir AI ulanishi sekin edi — lekin asosiy yordam mahalliy ishlayapti.",
       "",
-      "So‘rashingiz mumkin:",
-      "• KPI / Davomat / Xodimlar haqida tushuntirish",
-      "• Davomat PDF yoki Excel",
-      "• Yuk raqami (masalan 0066-013) yoki pachka",
-      "",
-      "Xabaringizni qisqa qilib qayta yuboring.",
+      "So‘rashingiz mumkin: yuk tekshiruvi, davomat, savdo, sotilmagan/qoldiq past, ombor, buyurtma tavsiya, mahsulot qidiruv, hisobot.",
+      "Xabarni qisqa qilib qayta yuboring.",
     ].join("\n"),
     model: "local-offline",
     tools: input.tools,
@@ -1232,6 +1476,56 @@ function isTopSoldIntent(lower: string) {
   if (/(ko['‘`]?p\s*sotil|best.?sell|хит\s*продаж)/.test(lower)) return true;
   if (/savdo\s*(reyting|top|hisobot)/.test(lower)) return true;
   return false;
+}
+
+function isSalesSummaryIntent(lower: string) {
+  if (isTopSoldIntent(lower) || isUnsoldIntent(lower)) return false;
+  if (/bugungi\s*savdo|kechagi\s*savdo|savdo\s*summa|qancha\s*savdo|tushum|оборот|выручк/.test(lower)) return true;
+  if (/savdo/.test(lower) && /(bugun|kecha|hafta|oy|kun|summa|jami|necha|qancha)/.test(lower)) return true;
+  return false;
+}
+
+function isLowStockIntent(lower: string) {
+  return /qoldiq\s*past|kam\s*qol|tugab|tugagan|low\s*stock|out\s*of\s*stock|мало\s*остат|закончил/.test(lower)
+    || (/qoldiq|stock/.test(lower) && /(past|kam|tug|oz|мало)/.test(lower));
+}
+
+function isWarehouseIntent(lower: string) {
+  return /ombor\s*holat|omborlar|stock\s*overview|jami\s*qoldiq|sklad\s*holat|склад\s*состоян/.test(lower)
+    || (/ombor/.test(lower) && /(holat|qancha|jami|umumiy|nechta)/.test(lower));
+}
+
+function isRecoIntent(lower: string) {
+  return /buyurtma\s*tavsiya|nimaga\s*buyurt|zakaz\s*ber|tavsiya\s*buyurt|рекоменд|что\s*заказать|order\s*reco/.test(lower)
+    || (/buyurtma|zakaz/.test(lower) && /(tavsiya|kerak|nima|qaysi)/.test(lower));
+}
+
+function isFactoryIntent(lower: string) {
+  return /zavodlar|hamkorlar\s*ro.?yxat|fabrika|factory\s*list|контрагент|partner\s*list/.test(lower)
+    || (/zavod|hamkor|fabrika/.test(lower) && /(ro.?yxat|kim|qaysi|nechta|bor)/.test(lower));
+}
+
+function isProductSearchIntent(lower: string, raw: string) {
+  if (/mahsulot\s*qidir|tovar\s*qidir|barkod|barcode|qoldiq\s*bor\s*mi|narxi\s*qancha/.test(lower)) return true;
+  if (/(qoldiq|stock|narx|price|bormi|бор\s*ли).{0,20}(qancha|necha|\?)/.test(lower) && !isShipmentTopic(lower)) return true;
+  // Kod/barkod o‘xshash so‘rov (yuk raqamisiz)
+  if (!/\b\d{3,5}-\d{2,4}\b/.test(raw) && /(?:^|\s)(?:bordo\s+)?\d{3,8}(?:\s|$)/i.test(raw) && /(tovar|mahsulot|qoldiq|narx|kod|article|арт)/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+function extractSearchQuery(message: string, lower: string) {
+  const m = message.match(/(?:qidir|top|ko['‘`]?rsat|bormi|qoldiq|narx)[:\s]+(.+)$/i)
+    || message.match(/["«](.+?)["»]/)
+    || message.match(/\b(\d{8,14})\b/)
+    || message.match(/\b((?:bordo\s+)?\d{3,6}(?:\s+\d{2,6}){0,3})\b/i);
+  if (m?.[1]) return m[1].trim();
+  return message
+    .replace(/mahsulot|tovar|qidir|ko['‘`]?rsat|bormi|qoldiq|narxi?|qancha|necha|ber|pls|please/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || lower.slice(0, 80);
 }
 
 function formatQty(n: number) {
@@ -1314,7 +1608,8 @@ async function tryFastLocalTask(
   const auditAsk = isAuditIntent(lower);
   const shipTopic = isShipmentTopic(lower);
   const prevAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content || "";
-  const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|profit byproduct|savdo hisobot/i.test(prevAssistant);
+  const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|savdo hisobot/i.test(prevAssistant);
+  const prevWasUnsold = /sotilmagan \(qoldiq bor\)|harakatsiz/i.test(prevAssistant);
 
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     try {
@@ -1337,16 +1632,12 @@ async function tryFastLocalTask(
     return { reply: formatAuditReply(audit), model: "local-fast", tools, files } satisfies AssistantResult;
   };
 
-  // 0) Savdo ro‘yxatini tasdiqlash — auditga tushmasin
-  if (isSalesConfirmIntent(lower) || (prevWasSales && /to['‘`]?g['‘`]?\s*ri|rostmi|haqiqat|bular|shu\s*ro.?yxat/.test(lower))) {
-    return {
-      reply: prevWasSales || /sotilgan|savdo/.test(lower)
-        ? "Ha. Bu MoySklad savdo hisobotidan olingan eng ko‘p sotilgan tovarlar — yuk xati yoki kirim emas."
-        : "Ha, oldingi ro‘yxat savdo hisoboti bo‘yicha.",
-      model: "local-fast",
-      tools,
-      files,
-    };
+  // 0) Oldingi ro‘yxatni tasdiqlash — auditga tushmasin
+  if (isSalesConfirmIntent(lower) || ((prevWasSales || prevWasUnsold) && /to['‘`]?g['‘`]?\s*ri|rostmi|haqiqat|bular|shu\s*ro.?yxat/.test(lower))) {
+    const reply = prevWasUnsold
+      ? "Ha. Bu belgilangan kun ichida sotuvi bo‘lmagan, lekin qoldig‘i bor tovarlar."
+      : "Ha. Bu MoySklad savdo hisobotidan olingan eng ko‘p sotilgan tovarlar — yuk xati yoki kirim emas.";
+    return { reply, model: "local-fast", tools, files };
   }
 
   // 1) Fayl / hisobot
@@ -1399,17 +1690,12 @@ async function tryFastLocalTask(
     if (/pachka|пачк|tuzat|yoz/.test(lower)) {
       await run("diagnose_pachka", { shipment_number: shipmentNo });
     }
-    // Chuqurroq kerak bo‘lishi mumkin — MS id bo‘lsa qisqa audit eslatmasi
-    const tip = found.moyskladId
-      ? `Chuqur tekshirish: «${found.number} ni tekshir» deb yozing.`
-      : "Hali MoySkladga bog‘lanmagan — avval Kirim qiling.";
     return {
       reply: [
         `Yuk xati ${found.number}: holat — ${localizeStatus(found.status)}, sana ${found.date || "—"}.`,
-        found.moyskladNumber ? `MoySklad: ${found.moyskladNumber}` : "MoySkladga hali yozilmagan yoki raqam yo‘q.",
+        found.moyskladNumber ? `MoySklad: ${found.moyskladNumber}` : "MoySkladga hali yozilmagan.",
         `Tovar qatorlari: ${lines.length}.`,
         bullets.length ? "Pachka qatorlari:\n" + bullets.join("\n") : "Pachka (>1) qatorlari yo‘q.",
-        tip,
       ].join("\n"),
       model: "local-fast",
       tools,
@@ -1454,7 +1740,8 @@ async function tryFastLocalTask(
   }
 
   // 4) MS ga yozilmagan / xato vazifalar
-  if (/yozilmagan|post\s*qilinmagan|ms\s*yo.?q|bog.?lanmagan|unposted|не\s*провед/.test(lower) && shipTopic) {
+  if (/yozilmagan|post\s*qilinmagan|ms\s*yo.?q|bog.?lanmagan|unposted|не\s*провед/.test(lower)
+    && (shipTopic || /ms\b|moy\s*sklad|moysklad|yuk/.test(lower))) {
     const data = await run("latest_kirim", { limit: 15, skipMs: true }) as Record<string, unknown> | null;
     const local = Array.isArray(data?.localShipments) ? data!.localShipments as Array<Record<string, unknown>> : [];
     const open = local.filter((s) => !(s.posted === true || s.moySkladgaYozilgan === true || s.moySkladgaYozilgan === "ha" || s.posted === "yozilgan"));
@@ -1504,6 +1791,137 @@ async function tryFastLocalTask(
     return { reply: formatTopSoldReply(data), model: "local-fast", tools, files };
   }
 
+  // 5c) Savdo summasi
+  if (isSalesSummaryIntent(lower)) {
+    let days = 1;
+    if (/kecha|вчера/.test(lower)) days = 1; // kecha → 1 kunlik oynada bugun emas — soddalashtirish: 2
+    if (/kecha|вчера/.test(lower)) days = 2;
+    else if (/hafta|week|7\s*kun/.test(lower)) days = 7;
+    else if (/\boy\b|month|30\s*kun/.test(lower)) days = 30;
+    else days = parseDaysWindow(lower, /bugun|сегодня/.test(lower) ? 1 : 7);
+    const data = await run("sales_summary", { days }) as Record<string, unknown> | null;
+    if (!data) return { reply: "Savdo summasini olib bo‘lmadi.", model: "local-fast", tools, files };
+    const amount = data.salesAmount != null ? formatSum(Number(data.salesAmount)) : null;
+    const qty = data.salesQty != null ? formatQty(Number(data.salesQty)) : null;
+    if (days <= 1) {
+      return {
+        reply: [
+          `Bugungi savdo: ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"}.`,
+          data.incomingToday != null ? `Bugungi kirim: ${formatQty(Number(data.incomingToday))} dona.` : "",
+        ].filter(Boolean).join("\n"),
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+    return {
+      reply: [
+        `Oxirgi ${days} kun (${data.from} — ${data.to}) savdo:`,
+        amount != null ? `• Summa: ${amount} so‘m` : "• Summa olinmadi",
+        qty != null ? `• Dona: ${qty}` : "",
+      ].filter(Boolean).join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 5d) Qoldiq past / tugagan
+  if (isLowStockIntent(lower)) {
+    const data = await run("low_stock_products", { limit: 20 }) as Record<string, unknown> | null;
+    const items = Array.isArray(data?.items) ? data!.items as Array<Record<string, unknown>> : [];
+    if (!items.length) {
+      return { reply: data?.error === "katalog_yuklanmagan" ? "Katalog hali tayyor emas." : "Qoldig‘i past/tugagan tovar topilmadi.", model: "local-fast", tools, files };
+    }
+    return {
+      reply: [
+        "Qoldiq past / tugagan:",
+        ...items.slice(0, 20).map((p, i) => `${i + 1}) ${p.name}${p.code ? ` · ${p.code}` : ""}: ${p.status}, qoldiq ${formatQty(Number(p.stock))}`),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 5e) Ombor holati
+  if (isWarehouseIntent(lower)) {
+    const data = await run("warehouse_overview", {}) as Record<string, unknown> | null;
+    if (!data || data.error) {
+      return { reply: "Ombor holati olinmadi (katalog yuklanmagan bo‘lishi mumkin).", model: "local-fast", tools, files };
+    }
+    const wh = Array.isArray(data.warehouses) ? data.warehouses as Array<Record<string, unknown>> : [];
+    return {
+      reply: [
+        `Ombor: ${data.productCount} kartochka, qoldiq ${formatQty(Number(data.stockUnits))} dona.`,
+        `Past: ${data.lowStock}, tugagan: ${data.outOfStock}, harakatsiz: ${data.nonMoving}.`,
+        `Bugun: savdo ${formatSum(Number(data.salesToday)) || 0} so‘m, kirim ${formatQty(Number(data.incomingToday || 0))}.`,
+        wh.length ? "Omborlar:\n" + wh.slice(0, 8).map((w) => `• ${w.name}: ${formatQty(Number(w.units))} dona`).join("\n") : "",
+      ].filter(Boolean).join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 5f) Buyurtma tavsiya
+  if (isRecoIntent(lower)) {
+    const data = await run("order_recommendations", { limit: 15 }) as Record<string, unknown> | null;
+    const items = Array.isArray(data?.items) ? data!.items as Array<Record<string, unknown>> : [];
+    if (!items.length) {
+      return { reply: data?.error === "katalog_yuklanmagan" ? "Katalog hali tayyor emas." : "Hozircha buyurtma tavsiyasi yo‘q.", model: "local-fast", tools, files };
+    }
+    return {
+      reply: [
+        "Buyurtma tavsiyalari:",
+        ...items.slice(0, 15).map((p, i) => `${i + 1}) ${p.name}${p.code ? ` · ${p.code}` : ""}: buyurtma ${formatQty(Number(p.suggested))} (qoldiq ${formatQty(Number(p.onHand))}, ${p.reason})`),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 5g) Zavod / hamkor
+  if (isFactoryIntent(lower)) {
+    const data = await run("list_factories", {}) as Record<string, unknown> | null;
+    const items = Array.isArray(data?.items) ? data!.items as Array<Record<string, unknown>> : [];
+    return {
+      reply: [
+        `Hamkor/zavodlar: ${data?.total || items.length} ta. Kutayotgan yuk: ${data?.pendingShipments || 0}.`,
+        ...items.slice(0, 20).map((a) => `• ${a.name}${a.code ? ` (${a.code})` : ""}${Number(a.pending) > 0 ? ` — kutayotgan ${a.pending}` : ""}`),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 5h) Mahsulot qidiruv
+  if (isProductSearchIntent(lower, message)) {
+    const query = extractSearchQuery(message, lower);
+    const data = await run("search_products", { query, limit: 8 }) as Record<string, unknown> | null;
+    const items = Array.isArray(data?.items) ? data!.items as Array<Record<string, unknown>> : [];
+    if (!items.length) {
+      return { reply: `«${query}» bo‘yicha mahsulot topilmadi.`, model: "local-fast", tools, files };
+    }
+    return {
+      reply: [
+        `Qidiruv: ${query}`,
+        ...items.map((p, i) => {
+          const price = p.salePrice != null ? ` · ${formatSum(Number(p.salePrice))} so‘m` : "";
+          const wh = Array.isArray(p.warehouses) && p.warehouses.length
+            ? " · " + (p.warehouses as Array<Record<string, unknown>>).map((w) => `${w.warehouse}: ${formatQty(Number(w.qty))}`).join(", ")
+            : "";
+          return `${i + 1}) ${p.name}${p.code ? ` · ${p.code}` : ""}: qoldiq ${formatQty(Number(p.stock))}${price}${wh}`;
+        }),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
   // 6) Oxirgi kirim ro‘yxati (tekshir emas)
   const wantsKirimList = /oxirgi|so['‘`]?nggi|последн|eng oxir|list|ro.?yxat/.test(lower)
     && /yuk|kirim|supply|наклад|moy\s*sklad|moysklad/.test(lower)
@@ -1520,7 +1938,6 @@ async function tryFastLocalTask(
           const holat = posted === true || posted === "ha" || posted === "yozilgan" ? "MS ga yozilgan" : "mahalliy";
           return `• ${s.number} · ${s.date || "—"} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
         }),
-        "Chuqur tekshiruv: «oxirgi yukni tekshir» yoki raqam + «tekshir».",
       ].join("\n"),
       model: "local-fast",
       tools,
@@ -1528,8 +1945,8 @@ async function tryFastLocalTask(
     };
   }
 
-  // 7) Davomat board
-  const wantsBoard = /bugun kim|kelganlar|kelmagan|bugungi davomat|davomat holat|kim keldi|kim kelmagan|сегодня кто|кто приш/.test(lower)
+  // 7) Davomat board (+ kechikkan)
+  const wantsBoard = /bugun kim|kelganlar|kelmagan|bugungi davomat|davomat holat|kim keldi|kim kelmagan|kechik|сегодня кто|кто приш/.test(lower)
     || (/davomat/.test(lower) && /(bugun|holat|ro.?yxat|kim|stat|hozir)/.test(lower) && !/tushun|qanday|bolim/.test(lower));
   if (wantsBoard) {
     const board = await run("office_today", {}) as Record<string, unknown> | null;
@@ -1539,9 +1956,23 @@ async function tryFastLocalTask(
     const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
     const people = listLocalPeople();
     const byId = new Map(people.map((p) => [p.id, p.name]));
+    const day = tashkentParts().date;
+    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
+    const onlyLate = /kechik/.test(lower);
+    if (onlyLate) {
+      return {
+        reply: late.length
+          ? [`Bugun kechikkanlar (${late.length}):`, ...late.slice(0, 20).map((r) => `• ${r.name}: ${r.inHm || "—"} (+${r.lateIn || 0} daq)`)].join("\n")
+          : "Bugun kechikkan yo‘q.",
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
     return {
       reply: [
-        `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}.`,
+        `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}, kechikkan ${late.length}.`,
         ...present.slice(0, 12).map((r) => {
           const rawName = String(r.name || "");
           const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";
