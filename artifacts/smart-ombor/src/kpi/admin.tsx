@@ -1300,11 +1300,29 @@ const STAGE_HINTS = [
   '15 kun ichida (8–15 kun)',
 ];
 
+const STAGE_TONES = ['is-hot', 'is-mid', 'is-soft'] as const;
+
+/** 3.00 → "3", 2.50 → "2.5" (yozish paytida "3." saqlanadi). */
+function displayPct(raw: string | number): string {
+  const s = String(raw ?? '').trim().replace(',', '.');
+  if (!s || s.endsWith('.')) return s;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return String(raw ?? '');
+  return String(parseFloat(n.toFixed(4)));
+}
+
 function RulesSection() {
   const cache = useQueryClient();
   const policy = useQuery({ queryKey: ['kpi-policy'], queryFn: () => kpiFetch<Policy>('/kpi/policy') });
   const [stages, setStages] = useState<Policy['stages'] | null>(null);
-  const current = stages || policy.data?.stages || [];
+  const current = (stages || policy.data?.stages || []).map((stage) => (
+    stages ? stage : { ...stage, percent: displayPct(stage.percent) }
+  ));
+  const patchStage = (index: number, patch: Partial<Policy['stages'][number]>) => {
+    const base = stages || (policy.data?.stages || []).map((s) => ({ ...s, percent: displayPct(s.percent) }));
+    const next = base.map((s, i) => (i === index ? { ...s, ...patch } : s));
+    setStages(next);
+  };
   const save = useMutation({
     mutationFn: () => kpiFetch<{ recalculated?: number }>('/kpi/policy', {
       method: 'PUT',
@@ -1313,7 +1331,7 @@ function RulesSection() {
         baseType: policy.data?.baseType || 'paid_amount',
         startAnchor: policy.data?.startAnchor || 'order_confirmed',
         warningDays: policy.data?.warningDays ?? 2,
-        stages: current,
+        stages: current.map((s) => ({ ...s, percent: displayPct(s.percent) || '0' })),
       }),
     }),
     onSuccess: () => {
@@ -1333,47 +1351,73 @@ function RulesSection() {
     },
   });
   return (
-    <section className="kpi-panel">
-      <h2>3 bosqichli KPI foizlari</h2>
-      <p className="kpi-muted">
-        Jo‘natma sanasidan to‘lov yopilgungacha o‘tgan kunlarga qarab foiz hisoblanadi.
-      </p>
-      <div className="kpi-stages-table">
-        <div className="kpi-stages-head">
-          <span>Bosqich</span>
-          <span>Dan (kun)</span>
-          <span>Gacha (kun)</span>
-          <span>Foiz %</span>
-          <span>Qachon</span>
+    <section className="kpi-panel kpi-rules-panel">
+      <div className="kpi-rules-head">
+        <div>
+          <h2>3 bosqichli KPI foizlari</h2>
+          <p className="kpi-muted">
+            Jo‘natma sanasidan to‘lov yopilgungacha o‘tgan kunlarga qarab foiz hisoblanadi.
+          </p>
         </div>
-        {current.map((stage, index) => (
-          <div className="kpi-stage" key={index}>
-            <input className="input" value={stage.name} onChange={(e) => {
-              const next = [...current]; next[index] = { ...stage, name: e.target.value }; setStages(next);
-            }} />
-            <label className="kpi-stage-field">
-              <span className="kpi-stage-mobile">Dan (kun)</span>
-              <input className="input" type="number" min={0} value={stage.dayFrom} onChange={(e) => {
-                const next = [...current]; next[index] = { ...stage, dayFrom: Number(e.target.value) }; setStages(next);
-              }} />
-            </label>
-            <label className="kpi-stage-field">
-              <span className="kpi-stage-mobile">Gacha (kun)</span>
-              <input className="input" type="number" min={0} value={stage.dayTo} onChange={(e) => {
-                const next = [...current]; next[index] = { ...stage, dayTo: Number(e.target.value) }; setStages(next);
-              }} />
-            </label>
-            <label className="kpi-stage-field">
-              <span className="kpi-stage-mobile">Foiz %</span>
-              <input className="input" value={stage.percent} onChange={(e) => {
-                const next = [...current]; next[index] = { ...stage, percent: e.target.value }; setStages(next);
-              }} />
-            </label>
-            <div className="kpi-stage-hint">{STAGE_HINTS[index] || `${stage.dayFrom}–${stage.dayTo} kun`}</div>
-          </div>
-        ))}
       </div>
-      <div className="kpi-actions">
+      <div className="kpi-stages-cards">
+        {current.map((stage, index) => {
+          const tone = STAGE_TONES[index] || 'is-soft';
+          const pct = displayPct(stage.percent);
+          return (
+            <article className={`kpi-stage-card ${tone}`} key={index}>
+              <div className="kpi-stage-card-top">
+                <div className="kpi-stage-pct" aria-hidden>
+                  <strong>{pct || '0'}</strong>
+                  <span>%</span>
+                </div>
+                <div className="kpi-stage-card-meta">
+                  <input
+                    className="input kpi-stage-name"
+                    value={stage.name}
+                    onChange={(e) => patchStage(index, { name: e.target.value })}
+                    aria-label={`Bosqich ${index + 1} nomi`}
+                  />
+                  <p className="kpi-stage-hint">{STAGE_HINTS[index] || `${stage.dayFrom}–${stage.dayTo} kun`}</p>
+                </div>
+              </div>
+              <div className="kpi-stage-card-fields">
+                <label className="kpi-stage-field">
+                  <span>Dan (kun)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    value={stage.dayFrom}
+                    onChange={(e) => patchStage(index, { dayFrom: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="kpi-stage-field">
+                  <span>Gacha (kun)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    value={stage.dayTo}
+                    onChange={(e) => patchStage(index, { dayTo: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="kpi-stage-field kpi-stage-pct-field">
+                  <span>Foiz %</span>
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    value={stage.percent}
+                    onChange={(e) => patchStage(index, { percent: e.target.value.replace(',', '.') })}
+                    onBlur={(e) => patchStage(index, { percent: displayPct(e.target.value) })}
+                  />
+                </label>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      <div className="kpi-actions kpi-rules-actions">
         <button type="button" className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? 'Saqlanmoqda…' : 'Saqlash + KPI yangilash'}
         </button>
