@@ -41,6 +41,7 @@ const KNOWN_AGENTS: Array<[string, string]> = [
   ["Abdug'ani", "abdugani"],
   ["Nozim", "nozim"],
   ["Farxod aka", "farxodaka"],
+  ["Sevinch", "sevinch"],
   ["Van seling", "vanseling"],
   ["Ofis", "ofis"],
 ];
@@ -64,6 +65,7 @@ const ALIAS: Record<string, string> = {
   "farxod aka": "Farxod aka",
   "abdug'ani": "Abdug'ani",
   abdugani: "Abdug'ani",
+  sevinch: "Sevinch",
   ofis: "Ofis",
   "van seling": "Van seling",
 };

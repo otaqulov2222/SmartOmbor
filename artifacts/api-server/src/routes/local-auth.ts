@@ -340,6 +340,7 @@ const SEED_AGENTS: Array<[string, string, string]> = [
   ["Abdug'ani", "abdugani", "Abdugani@4268"],
   ["Nozim", "nozim", "Nozim@7835"],
   ["Farxod aka", "farxodaka", "Farxod@3591"],
+  ["Sevinch", "sevinch", "Sevinch@4826"],
 ];
 
 /** Returns true when admin or default MoySklad agents were created or corrected. */
@@ -544,10 +545,15 @@ router.get("/local-me", (req, res) => {
   });
 });
 
-router.get("/local-accounts", (req, res) => {
+router.get("/local-accounts", async (req, res) => {
   if (!requireStaffManager(req, res)) return;
   const store = read();
-  if (ensureAdmin(store)) write(store);
+  if (ensureAdmin(store)) await writeReliable(store);
+  // MoySklad seed agentlar Xodimlarda bo‘lsa KPI da ham active bo‘lsin.
+  const removed = new Set((store.removedLogins || []).map((l) => l.toLowerCase()));
+  for (const [, login] of SEED_AGENTS) {
+    if (!removed.has(login.toLowerCase())) await reactivateKpiAgent(login);
+  }
   res.json(store.accounts.map(publicAccount));
 });
 
