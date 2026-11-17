@@ -5,7 +5,7 @@ import dns from "node:dns";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
 import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
-import { packSizeOf, ensurePachka, productPackSize } from "./supply-assortment";
+import { packSizeOf, ensurePachka, productPackSize, pieceCount } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { moysklad, moyskladConfigured } from "./moysklad";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
@@ -186,6 +186,19 @@ const TOOLS = [
         type: "object",
         properties: {
           limit: { type: "number", description: "Default 8, max 20" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "audit_shipment",
+      description: "Yuk xatini MoySklad supply bilan to‘liq solishtirish: ombor, kontragent, qator/dona, pachka, kamchiliklar. Oxirgi yoki raqam bo‘yicha.",
+      parameters: {
+        type: "object",
+        properties: {
+          number: { type: "string", description: "Masalan 0066-015; bo‘sh = oxirgi yuk" },
         },
       },
     },
@@ -486,6 +499,157 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       moyskladError,
       recentJobs,
       hint: "Oxirgi MoySklad kirim uchun moyskladLatest / latestLocalPosted ni ayting.",
+    };
+  }
+
+  if (name === "audit_shipment") {
+    const needle = String(args.number || "").trim().toLowerCase();
+    const partners = readPartners();
+    const accounts = partners.accounts || [];
+    const byFactory = new Map(accounts.map((a) => [String(a.id), a]));
+    const ships = [...(partners.shipments || [])].sort((a, b) => shipmentSortKey(b).localeCompare(shipmentSortKey(a)));
+    const hit = needle
+      ? ships.find((s) => String(s.number || "").toLowerCase() === needle)
+        || ships.find((s) => String(s.number || "").toLowerCase().includes(needle))
+      : ships[0];
+    if (!hit) return { ok: false, error: "yuk_topilmadi", number: needle || null };
+
+    const factory = byFactory.get(String(hit.factoryId)) as Record<string, unknown> | undefined;
+    const localLines = Array.isArray(hit.lines) ? hit.lines as Array<Record<string, unknown>> : [];
+    type LineLike = { pairs: number; boxes: number; quantity: number; colors: Array<{ name?: string; quantity: number }> };
+    const expectedRows = localLines.map((line) => {
+      const pairs = Number(line.pairs) || 0;
+      const boxes = Number(line.boxes) || 0;
+      const quantity = Number(line.quantity) || 0;
+      const colors = Array.isArray(line.colors)
+        ? (line.colors as Array<Record<string, unknown>>).map((c) => ({
+          name: String(c.name || ""),
+          quantity: Number(c.quantity) || 0,
+        }))
+        : [];
+      const pieces = pieceCount({ pairs, boxes, quantity, colors } as LineLike);
+      const pachka = Number(line.pachka) || 0;
+      return {
+        productCode: String(line.productCode || ""),
+        productName: String(line.productName || ""),
+        productId: line.productId ? String(line.productId) : null,
+        size: String(line.size || ""),
+        pairs,
+        boxes,
+        pachka,
+        pieces,
+        packSizeOf: packSizeOf({ pachka, pairs }),
+        price: Number(line.price) || 0,
+      };
+    });
+    const expectedTotal = expectedRows.reduce((sum, row) => sum + row.pieces, 0);
+    const expectedWithPachka = expectedRows.filter((row) => row.packSizeOf > 1);
+
+    const supplyId = hit.moyskladId ? String(hit.moyskladId) : "";
+    let ms: Record<string, unknown> | null = null;
+    let positions: Array<Record<string, unknown>> = [];
+    let msError: string | null = null;
+    if (!supplyId) {
+      msError = "MoySklad id yo‘q — hali yozilmagan yoki bog‘lanmagan";
+    } else if (!moyskladConfigured()) {
+      msError = "MOYSKLAD_TOKEN yo‘q";
+    } else {
+      try {
+        ms = await moysklad<Record<string, unknown>>(
+          `/entity/supply/${encodeURIComponent(supplyId)}?expand=agent,organization,store,project,contract`,
+        );
+        const pos = await moysklad<{ rows?: Array<Record<string, unknown>> }>(
+          `/entity/supply/${encodeURIComponent(supplyId)}/positions?limit=100&expand=assortment`,
+        );
+        positions = pos.rows || [];
+      } catch (error) {
+        msError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    const actualQty = positions.map((row) => Math.round(Number(row.quantity) || 0));
+    const actualTotal = actualQty.reduce((sum, qty) => sum + qty, 0);
+    const issues: string[] = [];
+    if (!supplyId) issues.push("MoySklad supply bog‘lanmagan");
+    if (msError) issues.push(`MS o‘qish: ${msError}`);
+    if (ms && ms.deleted) issues.push("MS hujjat o‘chirilgan");
+    if (ms && ms.applicable === false) issues.push("MS hujjat hali o‘tkazilmagan (applicable=yo‘q)");
+    if (supplyId && !msError) {
+      if (positions.length !== expectedRows.length) {
+        issues.push(`Qator soni mos emas: yuk xati ${expectedRows.length}, MS ${positions.length}`);
+      }
+      if (actualTotal !== expectedTotal) {
+        issues.push(`Dona jami mos emas: yuk xati ${expectedTotal}, MS ${actualTotal}`);
+      }
+    }
+    if (!(ms as { agent?: unknown } | null)?.agent) issues.push("MS da kontragent (agent) tanlanmagan");
+    if (!(ms as { store?: unknown } | null)?.store) issues.push("MS da ombor (store) tanlanmagan");
+    if (!(ms as { organization?: unknown } | null)?.organization) issues.push("MS da tashkilot (organization) tanlanmagan");
+
+    const pachkaChecks: Array<Record<string, unknown>> = [];
+    for (const row of expectedWithPachka.slice(0, 12)) {
+      if (!row.productId) {
+        pachkaChecks.push({ productCode: row.productCode, expected: row.packSizeOf, ms: null, ok: false, note: "productId yo‘q" });
+        issues.push(`${row.productCode}: productId yo‘q — pachka tekshirilmadi`);
+        continue;
+      }
+      try {
+        const msPack = await productPackSize(row.productId);
+        const ok = msPack === row.packSizeOf;
+        pachkaChecks.push({ productCode: row.productCode, expected: row.packSizeOf, ms: msPack, ok });
+        if (!ok) issues.push(`${row.productCode}: pachka kutildi ${row.packSizeOf}, MS da ${msPack}`);
+      } catch (error) {
+        pachkaChecks.push({
+          productCode: row.productCode,
+          expected: row.packSizeOf,
+          ms: null,
+          ok: false,
+          note: error instanceof Error ? error.message : String(error),
+        });
+        issues.push(`${row.productCode}: pachka o‘qilmadi`);
+      }
+    }
+
+    const agentName = String((ms as { agent?: { name?: string } } | null)?.agent?.name || "") || null;
+    const storeName = String((ms as { store?: { name?: string } } | null)?.store?.name || "") || null;
+    const orgName = String((ms as { organization?: { name?: string } } | null)?.organization?.name || "") || null;
+
+    return {
+      ok: issues.length === 0,
+      number: hit.number,
+      date: hit.date,
+      status: hit.status,
+      factory: factory?.name || factory?.code || hit.factoryId || null,
+      local: {
+        lines: expectedRows.length,
+        pieces: expectedTotal,
+        pachkaLines: expectedWithPachka.length,
+        postedUnits: hit.postedUnitsTotal ?? hit.postedUnits ?? null,
+        sample: expectedRows.slice(0, 8).map((r) => ({
+          code: r.productCode,
+          size: r.size,
+          pairs: r.pairs,
+          boxes: r.boxes,
+          pachka: r.pachka,
+          pieces: r.pieces,
+        })),
+      },
+      moysklad: supplyId ? {
+        id: supplyId,
+        name: ms?.name || hit.moyskladNumber || null,
+        applicable: ms?.applicable ?? null,
+        sum: typeof ms?.sum === "number" ? Number(ms.sum) / 100 : null,
+        agent: agentName,
+        store: storeName,
+        organization: orgName,
+        positions: positions.length,
+        pieces: actualTotal,
+      } : null,
+      pachkaChecks,
+      issues,
+      verdict: issues.length === 0
+        ? "Mos: yuk xati va MoySklad bir xil, asosiy maydonlar tanlangan."
+        : `Kamchiliklar: ${issues.length} ta.`,
     };
   }
 
@@ -859,7 +1023,59 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     };
   }
 
-  // 3) Oxirgi kirim / yuk
+  // 3) Oxirgi/berilgan yukni chuqur tekshirish (MS solishtirish)
+  const wantsAudit = /tekshir|solishtir|muammo|kamchilik|mosmi|mos\s*mi|to['‘`]?liq\s*tekshir|qanday yozilgan|tanlanganmi|tanlash kerak/.test(lower)
+    && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|oxirgi|so['‘`]?nggi|bugun/.test(lower);
+  if (wantsAudit || (/oxirgi|so['‘`]?nggi|bugun/.test(lower) && /yuk|kirim/.test(lower) && /tekshir|muammo|mos|to['‘`]?liq/.test(lower))) {
+    const num = (message.match(/\b(\d{3,5}-\d{2,4})\b/) || [])[1] || "";
+    const audit = await run("audit_shipment", num ? { number: num } : {}) as Record<string, unknown> | null;
+    if (!audit || audit.error === "yuk_topilmadi") {
+      return { reply: "Tekshirish uchun yuk xati topilmadi.", model: "local-fast", tools, files };
+    }
+    const local = (audit.local || {}) as Record<string, unknown>;
+    const ms = (audit.moysklad || null) as Record<string, unknown> | null;
+    const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
+    const sample = Array.isArray(local.sample) ? local.sample as Array<Record<string, unknown>> : [];
+    const pachka = Array.isArray(audit.pachkaChecks) ? audit.pachkaChecks as Array<Record<string, unknown>> : [];
+    const lines = [
+      `Yuk xati ${audit.number} (${audit.date || "—"}) — ${audit.verdict || ""}`,
+      `Zavod: ${audit.factory || "—"} · holat: ${localizeStatus(audit.status)}`,
+      `Yuk xati: ${local.lines || 0} qator, ${local.pieces || 0} dona, pachka qatorlari ${local.pachkaLines || 0}.`,
+    ];
+    if (ms) {
+      lines.push(
+        `MoySklad: ${ms.name || ms.id}`,
+        `• O‘tkazilgan: ${ms.applicable === true ? "ha" : ms.applicable === false ? "yo‘q" : "—"}`,
+        `• Kontragent: ${ms.agent || "tanlanmagan"}`,
+        `• Ombor: ${ms.store || "tanlanmagan"}`,
+        `• Tashkilot: ${ms.organization || "tanlanmagan"}`,
+        `• MS qatorlar: ${ms.positions || 0}, dona: ${ms.pieces || 0}${ms.sum != null ? `, summa: ${ms.sum}` : ""}`,
+      );
+    } else {
+      lines.push("MoySklad hujjati topilmadi yoki o‘qilmadi.");
+    }
+    if (sample.length) {
+      lines.push("Yuk xati namunasi:");
+      for (const row of sample.slice(0, 6)) {
+        lines.push(`• ${row.code} ${row.size}: juft ${row.pairs}, quti ${row.boxes}, pachka ${row.pachka}, dona ${row.pieces}`);
+      }
+    }
+    if (pachka.length) {
+      lines.push("Pachka (MS packs):");
+      for (const row of pachka.slice(0, 8)) {
+        lines.push(`• ${row.productCode}: kutildi ${row.expected}, MS ${row.ms ?? "—"} — ${row.ok ? "OK" : "MOS EMAS"}`);
+      }
+    }
+    if (issues.length) {
+      lines.push("Kamchiliklar:");
+      for (const issue of issues.slice(0, 12)) lines.push(`• ${issue}`);
+    } else {
+      lines.push("Kamchilik topilmadi — kirim maydonlari va miqdorlar mos.");
+    }
+    return { reply: lines.join("\n"), model: "local-fast", tools, files };
+  }
+
+  // 4) Oxirgi kirim / yuk (qisqa ro‘yxat)
   const wantsKirim = /kirim|supply|приход|oxirgi yuk|so['‘`]?nggi yuk|oxirgi.*moy|moy\s*sklad.*yuk|yuk.*moy\s*sklad|последн.*(приход|наклад|поставк)/.test(lower)
     || (/oxirgi|so['‘`]?nggi|последн|eng oxir/.test(lower) && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад/.test(lower));
   if (wantsKirim) {
