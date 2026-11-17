@@ -424,12 +424,54 @@ export function OfficePage() {
   };
 
   const confirmFace = async () => {
-    if (!video.current) { setCamDenied(true); return; }
+    if (busy) return;
+    // face-confirm: kamera allaqachon yopilgan, video DOM dan olingan — bu ruxsat xatosi EMAS
+    if (stage === 'face-confirm') {
+      const descriptor = matchedDesc.current;
+      if (!descriptor) {
+        setNote(t('office.faceWait'));
+        return;
+      }
+      setBusy(true); setNote(''); setOk(''); setCamDenied(false);
+      const fix = await freshGps();
+      if (!fix) {
+        setBusy(false);
+        setNote(t('office.gpsNeed'));
+        return;
+      }
+      const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
+      const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= (me?.office.accuracyM || 500);
+      const zoneOk = Boolean(
+        distNow != null && (
+          distNow <= (me?.office.radiusM || 100)
+          || (accOk && fix.accuracy <= 80 && distNow <= (me?.office.radiusM || 100) + 20)
+        ),
+      );
+      if (!accOk) {
+        setBusy(false);
+        setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
+        return;
+      }
+      if (!zoneOk) {
+        setBusy(false);
+        setNote(t('office.distFar', { m: Math.round(distNow || 0) }));
+        return;
+      }
+      setBusy(false);
+      await doPunch(punchKind.current, { faceDescriptors: [descriptor] }, 'face', fix);
+      return;
+    }
+    if (!video.current) {
+      const okCam = await startCam(facing);
+      if (!okCam || !video.current) {
+        setNote(t('office.camNeed'));
+        return;
+      }
+    }
     if (!faceReady) {
       setNote(t('office.faceWait'));
       return;
     }
-    if (busy) return;
     setBusy(true); setNote(''); setOk('');
     const fix = await freshGps();
     if (!fix) {
@@ -456,7 +498,7 @@ export function OfficePage() {
       return;
     }
     const replacing = (stage === 'enroll') && Boolean(me?.face);
-    if (stage === 'enroll' || (!me?.face && stage !== 'face-confirm')) {
+    if (stage === 'enroll' || !me?.face) {
       const descriptors = enrollBag.current.slice(0, ENROLL_NEED);
       if (descriptors.length < ENROLL_NEED) {
         setBusy(false);
@@ -632,6 +674,8 @@ export function OfficePage() {
               setScanStatus('recognized');
               scanStop.current = true;
               stopCam();
+              setCamDenied(false);
+              setNote('');
               setStage('face-confirm');
               break;
             }
@@ -1155,7 +1199,7 @@ export function OfficePage() {
         </>
       )}
     </div>}
-    {camDenied && <div className="office-toast">
+    {camDenied && stage !== 'face-confirm' && stage !== 'qr-confirm' && <div className="office-toast">
       <button type="button" className="office-toast-x" onClick={() => setCamDenied(false)}><X size={14}/></button>
       <b>{t('office.deniedTitle')}</b>
       <p>{t('office.deniedBody')}</p>
