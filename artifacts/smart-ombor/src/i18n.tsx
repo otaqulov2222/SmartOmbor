@@ -139,6 +139,7 @@ const uz = {
   'assistant.suggest.pachka': 'Pachka qanday yoziladi?',
   'assistant.suggest.nav': 'Sidebar tartibi?',
   'assistant.suggest.office': 'Bugungi davomat?',
+  'assistant.suggest.pdf': 'Davomat PDF ber',
   'assistant.suggest.error': 'Oxirgi xatolar',
 
   // shell
@@ -1532,6 +1533,7 @@ const ru: Record<TKey, string> = {
   'assistant.suggest.pachka': 'Как пишется пачка?',
   'assistant.suggest.nav': 'Порядок меню?',
   'assistant.suggest.office': 'Посещаемость?',
+  'assistant.suggest.pdf': 'Дай PDF посещаемости',
   'assistant.suggest.error': 'Последние ошибки',
 
   'shell.checking': 'Проверка',

@@ -157,12 +157,28 @@ export function listAssistantSessions(login: string): SessionSummary[] {
   return sessions.map(toSummary);
 }
 
+function scrubMsgContent(content: string) {
+  return String(content || "")
+    .replace(/```[\s\S]*?```/g, (block) => (/JVBERi0|UEsDB|base64/i.test(block) || block.length > 500 ? "" : block))
+    .replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "")
+    .replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function getAssistantSession(login: string, sessionId: string): ChatSession | null {
   const store = load();
   const { key, sessions } = ensureUser(store, login);
+  const found = sessions.find((s) => s.id === sessionId) || null;
+  if (found) {
+    found.messages = (found.messages || []).map((m) => ({
+      ...m,
+      content: m.role === "assistant" ? scrubMsgContent(m.content) : m.content,
+    }));
+  }
   store.byUser[key] = { sessions };
   save(store);
-  return sessions.find((s) => s.id === sessionId) || null;
+  return found;
 }
 
 export function createAssistantSession(login: string): ChatSession {

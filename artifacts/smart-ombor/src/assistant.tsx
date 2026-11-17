@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import {
-  AlertTriangle, Download, FileText, LayoutList, LoaderCircle, Menu, Package, PanelLeftClose,
+  AlertTriangle, Download, FileText, LoaderCircle, Menu, Package, PanelLeftClose,
   Plus, Search, SendHorizontal, Trash2, Users, X,
 } from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
@@ -69,19 +69,27 @@ function readSession(): AuthSession | null {
 
 const SUGGEST: Array<{ key: TKey; Icon: typeof Package }> = [
   { key: 'assistant.suggest.pachka', Icon: Package },
-  { key: 'assistant.suggest.nav', Icon: LayoutList },
   { key: 'assistant.suggest.office', Icon: Users },
+  { key: 'assistant.suggest.pdf', Icon: FileText },
   { key: 'assistant.suggest.error', Icon: AlertTriangle },
 ];
 
 function stripJunk(text: string) {
-  return String(text || '')
-    .replace(/```(?:text|pdf|base64|plaintext)?\s*JVBERi0[\s\S]*?```/gi, '')
-    .replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, '')
-    .replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '')
-    .replace(/data:application\/pdf;base64,[A-Za-z0-9+/=]+/gi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  let out = String(text || '');
+  out = out.replace(/```[\s\S]*?```/g, (block) => {
+    if (/JVBERi0|UEsDB|base64/i.test(block) || block.length > 500) return '';
+    return block;
+  });
+  out = out.replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, '');
+  out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '');
+  out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, '');
+  out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, '');
+  out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
+    return uuidHits >= 1 ? '' : table;
+  });
+  out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'xodim');
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function renderRich(text: string): ReactNode[] {
@@ -119,6 +127,7 @@ function renderRich(text: string): ReactNode[] {
       if (/^\|.*\|$/.test(trimmed)) {
         const cells = trimmed.split('|').map((c) => c.trim()).filter(Boolean);
         if (cells.every((c) => /^[-:]+$/.test(c))) return;
+        if (cells.some((c) => /[0-9a-f]{8}-[0-9a-f]{4}-/i.test(c))) return;
         nodes.push(
           <span key={`row-${key++}`} className="assistant-row">
             {cells.map((cell, i) => <em key={i}>{inlineBold(cell)}</em>)}
@@ -548,21 +557,24 @@ export function AssistantWidget() {
                       <div className="assistant-body">{renderRich(msg.content)}</div>
                       {msg.files && msg.files.length > 0 && (
                         <div className="assistant-files">
-                          {msg.files.map((file) => (
-                            <button
-                              key={file.id || file.name}
-                              type="button"
-                              className="assistant-file"
-                              onClick={() => downloadChatFile(file)}
-                            >
-                              <span className="assistant-file-ico"><FileText size={16} /></span>
-                              <span className="assistant-file-copy">
-                                <b>{file.name}</b>
-                                <small>{t('assistant.download')}</small>
-                              </span>
-                              <Download size={15} />
-                            </button>
-                          ))}
+                          {msg.files.map((file) => {
+                            const ext = (file.name.split('.').pop() || 'file').toUpperCase();
+                            return (
+                              <button
+                                key={file.id || file.name}
+                                type="button"
+                                className="assistant-file"
+                                onClick={() => downloadChatFile(file)}
+                              >
+                                <span className="assistant-file-ico"><FileText size={16} /></span>
+                                <span className="assistant-file-copy">
+                                  <b>{file.name}</b>
+                                  <small>{ext} · {t('assistant.download')}</small>
+                                </span>
+                                <Download size={15} />
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

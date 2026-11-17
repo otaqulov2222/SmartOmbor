@@ -7,7 +7,7 @@ import { officeSite, tashkentParts, todayBoard, workedMs } from "./office";
 import { packSizeOf, ensurePachka, productPackSize } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { moysklad, moyskladConfigured } from "./moysklad";
-import { buildDavomatPdf } from "./assistant-pdf";
+import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
@@ -32,23 +32,21 @@ export function assistantConfigured() {
 
 const SYSTEM = `Siz — Smart Ombor (Bordo) nazorat agentisiz.
 Asosiy kuch: shu loyiha — ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
-Umumiy savollarga qisqa javob berishingiz mumkin, lekin Smart Ombor so‘rovlari ustuvor.
+Umumiy savollarga qisqa javob mumkin, lekin loyiha so‘rovlari ustuvor va aniq tool orqali.
 
-Til: foydalanuvchi tili (o‘zbekcha/ruscha). Format: qisqa xulosa + aniq faktlar. Ortiqcha ** / uzun kod bloki yo‘q. Parol/token/.env ko‘rsatmang.
+Til: foydalanuvchi tili. Format: qisqa xulosa + aniq faktlar (ism, raqam, sana). Ortiqcha ** / uzun kod / UUID jadval YO‘Q.
+Parol/token/.env ko‘rsatmang. Account UUID o‘rniga ism/login yozing.
 
 QATIY:
 - Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
-- Davomat dropdown: Davomat + Davomat hisobot
 - Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity
 - Ofis GPS: 41.219353, 69.272828 · 100 m
 
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
-- «Oxirgi kirim / MoySklad» → latest_kirim.
-- PDF / hisobot fayl so‘ralsa → davomat_pdf. Base64, JVBERi0, kod bloki yoki «PDF-fayl» matnini JAVOBGA YOZMANg.
-- PDF tool muvaffaqiyatli bo‘lsa: qisqa xulosa + «Yuklab olish tugmasini bosing» deng.
-- Tool natijasidan aniq raqam/sana/status. «tekshira olmadim» demang.
-- Admin “tuzat/yoz” desa fix_product_pachka.`;
+- Fayl (PDF/Excel/CSV/yuklab olish) → export_report. Base64, JVBERi0, PK.., kod blokini JAVOBGA YOZMANg.
+- Fayl tayyor bo‘lsa: qisqa xulosa (Umumiy/Kelgan/Kelmagan) + «Yuklab olish tugmasini bosing».
+- «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.`;
 
 const TOOLS = [
   {
@@ -114,12 +112,25 @@ const TOOLS = [
     type: "function",
     function: {
       name: "davomat_pdf",
-      description: "Bugungi (yoki berilgan) davomat hisobotini haqiqiy PDF fayl qilib tayyorlash. PDF/hisobot/yuklab olish so‘ralganda chaqiring.",
+      description: "Davomat PDF (export_report alias). PDF so‘ralganda chaqirish mumkin.",
+      parameters: {
+        type: "object",
+        properties: { date: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "export_report",
+      description: "Haqiqiy fayl tayyorlash: davomat/kirim/xodimlar → PDF yoki Excel/CSV. Yuklab olish, PDF, Excel so‘ralganda chaqiring.",
       parameters: {
         type: "object",
         properties: {
-          date: { type: "string", description: "YYYY-MM-DD, bo‘sh bo‘lsa bugun" },
+          kind: { type: "string", enum: ["davomat", "kirim", "staff"], description: "Qaysi hisobot" },
+          format: { type: "string", enum: ["pdf", "xlsx", "csv"], description: "Default: davomat=pdf, boshqalar=xlsx" },
         },
+        required: ["kind"],
       },
     },
   },
@@ -320,53 +331,24 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
   }
 
   if (name === "davomat_pdf") {
-    const people = listLocalPeople();
-    const byId = new Map(people.map((p) => [p.id, p]));
-    const now = tashkentParts();
-    const date = String(args.date || now.date || "").trim() || now.date;
-    const board = todayBoard();
-    const rows = board.map((row) => {
-      const ms = workedMs(row);
-      const h = Math.floor(ms / 3600000);
-      const m = Math.floor((ms % 3600000) / 60000);
-      const s = Math.floor((ms % 60000) / 1000);
-      return {
-        name: byId.get(row.accountId)?.name || row.accountId,
-        role: byId.get(row.accountId)?.role || "",
-        inAt: row.inAt || null,
-        outAt: row.outAt || null,
-        status: row.inAt ? "Kelgan" : "Kelmagan",
-        workedLabel: row.inAt ? `${h}s ${m}daq ${s}son` : "—",
-      };
-    });
-    const present = rows.filter((r) => r.inAt).length;
-    const pdf = await buildDavomatPdf({
-      date,
-      total: people.length,
-      present,
-      absent: Math.max(0, people.length - present),
-      rows,
-    });
-    if (!pdf) {
-      return { ok: false, error: "pdf_build_failed", date, total: people.length, present };
+    return exportDavomat("pdf");
+  }
+
+  if (name === "export_report") {
+    const kind = String(args.kind || "davomat").toLowerCase();
+    const formatRaw = String(args.format || "").toLowerCase();
+    if (kind === "kirim" || kind === "yuk" || kind === "shipment") {
+      const format = formatRaw === "csv" ? "csv" : "xlsx";
+      return exportKirim(format);
     }
-    const fileName = `davomat-${date}.pdf`;
-    return {
-      ok: true,
-      date,
-      title: `Davomat hisobot – PDF (${date})`,
-      total: people.length,
-      present,
-      absent: Math.max(0, people.length - present),
-      rows: rows.slice(0, 40),
-      file: {
-        id: randomBytes(6).toString("hex"),
-        name: fileName,
-        mime: "application/pdf",
-        base64: pdf.toString("base64"),
-      },
-      uiHint: "PDF tayyor. Javobda base64 yozmang — foydalanuvchiga Yuklab olish tugmasi chiqadi.",
-    };
+    if (kind === "staff" || kind === "xodim" || kind === "xodimlar") {
+      const format = formatRaw === "csv" ? "csv" : "xlsx";
+      return exportStaff(format);
+    }
+    const format = formatRaw === "xlsx" || formatRaw === "csv" || formatRaw === "pdf"
+      ? formatRaw as "pdf" | "xlsx" | "csv"
+      : "pdf";
+    return exportDavomat(format);
   }
 
   if (name === "list_staff") {
@@ -529,12 +511,37 @@ function extractFiles(result: unknown, into: AssistantFile[]) {
 
 function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
-  out = out.replace(/```(?:text|pdf|base64|plaintext)?\s*JVBERi0[\s\S]*?```/gi, "");
+  out = out.replace(/```[\s\S]*?```/g, (block) => {
+    if (/JVBERi0|UEsDB|base64|PK\x03\x04/i.test(block) || block.length > 500) return "";
+    return block;
+  });
   out = out.replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, "");
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "");
-  out = out.replace(/data:application\/pdf;base64,[A-Za-z0-9+/=]+/gi, "");
+  out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
+  out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
+  // UUID-og‘ir markdown jadvallarni olib tashlash
+  out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
+    return uuidHits >= 1 ? "" : table;
+  });
+  out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "xodim");
   out = out.replace(/\n{3,}/g, "\n\n").trim();
   return out;
+}
+
+function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; format: "pdf" | "xlsx" | "csv" } | null {
+  const wantsFile = /pdf|пдф|xlsx|excel|exel|csv|yuklab|скач|файл|fayl/.test(lower);
+  if (!wantsFile) return null;
+  const format: "pdf" | "xlsx" | "csv" = /xlsx|excel|exel/.test(lower)
+    ? "xlsx"
+    : /csv/.test(lower)
+      ? "csv"
+      : "pdf";
+  if (/xodim|staff|сотруд/.test(lower)) return { kind: "staff", format: format === "pdf" ? "xlsx" : format };
+  if (/kirim|yuk\b|shipment|приход|наклад/.test(lower) && !/davomat|посещаем/.test(lower)) {
+    return { kind: "kirim", format: format === "pdf" ? "xlsx" : format };
+  }
+  return { kind: "davomat", format };
 }
 
 async function groqChat(messages: ChatMsg[], tools = true) {
@@ -599,7 +606,7 @@ export async function runAssistantChat(input: {
     || (/oxirgi|so['‘`]?nggi|последн|eng oxir/.test(lower) && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад/.test(lower));
   const wantsPachka = /pachka|пачк|packs?\.?quantity/.test(lower)
     && !wantsKirim;
-  const wantsPdf = /pdf|пдф|yuklab|скач|hisobot.*fayl|файл.*отч|отч[её]т.*pdf/.test(lower);
+  const exportWanted = detectExport(lower);
   const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
   const wantsErrors = /xato|ошибк|error|journal|log/.test(lower)
     && !wantsKirim;
@@ -641,8 +648,8 @@ export async function runAssistantChat(input: {
   } else if (wantsPachka) {
     await pushPrefetch("diagnose_pachka", {}, "prefetch_pachka_rule");
   }
-  if (wantsPdf) {
-    await pushPrefetch("davomat_pdf", {}, "prefetch_davomat_pdf");
+  if (exportWanted) {
+    await pushPrefetch("export_report", exportWanted, "prefetch_export_report");
   } else if (wantsOffice) {
     await pushPrefetch("office_today", {}, "prefetch_office");
   }
@@ -717,25 +724,25 @@ export async function runAssistantChat(input: {
     const again = await groqChat(messages, false);
     text = sanitizeAssistantReply(String(again?.content || "").trim() || text);
   }
-  // PDF so‘ralgan bo‘lsa — fayl bo‘lmasa majburiy yasaymiz (model toolni o‘tkazib yubormasin)
-  if (wantsPdf && !files.length) {
+  // Fayl so‘ralgan bo‘lsa — yo‘q bo‘lsa majburiy yasaymiz
+  if (exportWanted && !files.length) {
     try {
-      const forced = await runTool("davomat_pdf", {});
+      const forced = await runTool("export_report", exportWanted);
       extractFiles(forced, files);
-      toolTrace.push({ name: "davomat_pdf", ok: Boolean((forced as { ok?: boolean })?.ok) });
+      toolTrace.push({ name: "export_report", ok: Boolean((forced as { ok?: boolean })?.ok) });
     } catch (error) {
-      toolTrace.push({ name: "davomat_pdf", ok: false });
-      logger.warn({ err: error instanceof Error ? error.message : error }, "assistant forced pdf failed");
+      toolTrace.push({ name: "export_report", ok: false });
+      logger.warn({ err: error instanceof Error ? error.message : error }, "assistant forced export failed");
     }
   }
 
   if (files.length) {
     text = sanitizeAssistantReply(text);
-    if (!text || /base64|JVBERi0|kod bloki/i.test(text) || text.length < 12) {
-      const f = files[0];
-      text = `Davomat PDF tayyor (${f.name}). Pastdagi **Yuklab olish** tugmasini bosing.`;
+    const f = files[0];
+    if (!text || /base64|JVBERi0|UEsDB|kod bloki/i.test(text) || text.length < 12) {
+      text = `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`;
     } else if (!/yuklab|скач|download|tugma/i.test(text)) {
-      text = `${text}\n\nPDF fayl tayyor — **Yuklab olish** tugmasini bosing.`;
+      text = `${text}\n\nFayl tayyor — **Yuklab olish** tugmasini bosing.`;
     }
   }
   return {
