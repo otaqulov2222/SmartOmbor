@@ -432,7 +432,8 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
 
     let moyskladSupplies: Array<Record<string, unknown>> = [];
     let moyskladError: string | null = null;
-    if (moyskladConfigured()) {
+    const skipMs = Boolean(args.skipMs) || String(args.mode || "") === "fast";
+    if (!skipMs && moyskladConfigured()) {
       try {
         const data = await moysklad<{
           rows?: Array<{
@@ -456,7 +457,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       } catch (error) {
         moyskladError = error instanceof Error ? error.message : String(error);
       }
-    } else {
+    } else if (!skipMs) {
       moyskladError = "MOYSKLAD_TOKEN yo‘q";
     }
 
@@ -862,7 +863,7 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
   const wantsKirim = /kirim|supply|приход|oxirgi yuk|so['‘`]?nggi yuk|oxirgi.*moy|moy\s*sklad.*yuk|yuk.*moy\s*sklad|последн.*(приход|наклад|поставк)/.test(lower)
     || (/oxirgi|so['‘`]?nggi|последн|eng oxir/.test(lower) && /yuk|kirim|supply|moy\s*sklad|moysklad|наклад/.test(lower));
   if (wantsKirim) {
-    const data = await run("latest_kirim", { limit: 6 }) as Record<string, unknown> | null;
+    const data = await run("latest_kirim", { limit: 6, skipMs: true }) as Record<string, unknown> | null;
     if (!data) {
       return { reply: "Kirim ma’lumotini olib bo‘lmadi.", model: "local-fast", tools, files };
     }
@@ -899,10 +900,13 @@ async function tryFastLocalTask(message: string): Promise<AssistantResult | null
     const rows = Array.isArray(board.rows) ? board.rows as Array<Record<string, unknown>> : [];
     const present = rows.filter((r) => r.inAt);
     const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
+    const people = listLocalPeople();
+    const byId = new Map(people.map((p) => [p.id, p.name]));
     const lines = [
       `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}.`,
       ...present.slice(0, 12).map((r) => {
-        const name = String(r.name || "xodim");
+        const rawName = String(r.name || "");
+        const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";
         const inn = clockLabel(String(r.inAt || ""));
         const out = r.outAt ? clockLabel(String(r.outAt)) : "ketmagan";
         return `• ${name}: ${inn} → ${out} (${workedLabel(Number(r.workedMs || 0))})`;
