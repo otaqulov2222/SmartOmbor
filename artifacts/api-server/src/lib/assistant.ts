@@ -737,13 +737,9 @@ export async function runAssistantChat(input: {
   }
 
   if (files.length) {
-    text = sanitizeAssistantReply(text);
     const f = files[0];
-    if (!text || /base64|JVBERi0|UEsDB|kod bloki/i.test(text) || text.length < 12) {
-      text = `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`;
-    } else if (!/yuklab|скач|download|tugma/i.test(text)) {
-      text = `${text}\n\nFayl tayyor — **Yuklab olish** tugmasini bosing.`;
-    }
+    // Model ba’zan noto‘g‘ri sana/UUID yozadi — fayl bo‘lsa qisqa aniq xulosa
+    text = `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`;
   }
   return {
     reply: text || "Tool natijasi bo‘yicha yakuniy javob olinmadi.",
