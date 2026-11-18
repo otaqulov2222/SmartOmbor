@@ -617,12 +617,7 @@ function DashboardPage() {
         <Link href="/products" className="kpi" data-testid="metric-products"><span className="kpi-icon"><Box size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.products')}</span><strong>{fmt(d.productCount)}</strong><small>{t('dash.kpi.products.note')}</small></Link>
         <Link href="/stock" className="kpi" data-testid="metric-units"><span className="kpi-icon tone-green"><Layers size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.units')}</span><strong>{fmt(d.stockUnits)}</strong><small>{t('dash.kpi.units.note', { count: warehouses.data?.length ?? '—' })}</small></Link>
         <div className="kpi" data-testid="metric-value"><span className="kpi-icon tone-amber"><Wallet size={20} strokeWidth={1.75}/></span><span className="kpi-label">{t('dash.kpi.value')}</span><strong>{money(d.stockValue)}</strong><small>{t('dash.kpi.value.note')}</small></div>
-        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{liveReady ? money(chosen.data!.sales) : chosen.isError ? '—' : '…'}</strong><small>{chosen.isError ? t('dash.live.missing') : (() => {
-          const draft = Number(chosen.data?.draftSales || 0);
-          const draftNos = (chosen.data?.draftDocs || []).map(x => x.number).filter(Boolean).slice(0, 3).join(', ');
-          if (draft > 0) return t('dash.kpi.sales.draft', { amount: money(draft), docs: draftNos || '—' });
-          return isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note');
-        })()}</small></Link>
+        <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{liveReady ? money(chosen.data!.sales) : chosen.isError ? '—' : '…'}</strong><small>{chosen.isError ? t('dash.live.missing') : isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note')}</small></Link>
       </section>
       <div className="dash-grid">
         <div className="dash-col">
