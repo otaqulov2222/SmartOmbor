@@ -353,6 +353,7 @@ type DaySnapshot = {
   date: string;
   sales: number;
   draftSales: number;
+  draftDocs: Array<{ number: string; amount: number }>;
   incoming: number;
   trend: Array<{ date: string; amount: number }>;
   documents: DayDocument[];
@@ -451,7 +452,7 @@ function emptyDay(date: string): DaySnapshot {
     trend.push({ date: cursor, amount: 0 });
     cursor = shiftDay(cursor, 1);
   }
-  return { date, sales: 0, draftSales: 0, incoming: 0, trend, documents: [] };
+  return { date, sales: 0, draftSales: 0, draftDocs: [], incoming: 0, trend, documents: [] };
 }
 
 function loadDay(date: string): Promise<DaySnapshot> {
@@ -506,9 +507,12 @@ async function buildDay(date: string): Promise<DaySnapshot> {
     const postedSum = (allDemands.rows || [])
       .filter((row) => row.applicable !== false)
       .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
-    const draftSum = (allDemands.rows || [])
-      .filter((row) => row.applicable === false)
-      .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+    const draftRows = (allDemands.rows || []).filter((row) => row.applicable === false);
+    const draftSum = draftRows.reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+    const draftDocs = draftRows
+      .map((row) => ({ number: String(row.name || "—"), amount: money(row.sum) ?? 0 }))
+      .filter((row) => row.amount > 0)
+      .slice(0, 8);
     // plotseries ba’zan qoralama/kechikkan kunni 0 qiladi — o‘tkazilgan demand bilan to‘ldiramiz
     let sales = amounts.get(date)?.amount ?? 0;
     if (sales <= 0 && postedSum > 0) sales = postedSum;
@@ -520,6 +524,7 @@ async function buildDay(date: string): Promise<DaySnapshot> {
       date,
       sales,
       draftSales: draftSum,
+      draftDocs,
       incoming: supplies.meta.size,
       trend,
       documents,
