@@ -12,6 +12,22 @@ import { compactCode, findProductsByBarcode, findProductsByLabel, foldProductNam
 import { orderRecommendations } from "./recommendations";
 import { listAccounts } from "./partners";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
+import {
+  buildSalesSummaryReply,
+  formatQty,
+  formatStaffListReply,
+  formatSum,
+  isSalesSummaryIntent,
+  isStaffListIntent,
+  isTopSoldIntent,
+  isUnsoldIntent,
+  parseDaysWindow,
+  portalLinksReply,
+  resolveSalesDays,
+  roleLabelUz,
+  sanitizeAssistantReply,
+  wantsPortalLink,
+} from "./assistant-ux";
 
 // Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
 try {
@@ -54,8 +70,11 @@ Asosiy kuch: ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
 
 TIL (QATIY):
 - Foydalanuvchi o‘zbekcha yozsa — FAQAT o‘zbekcha javob.
-- Inglizcha so‘z/status YO‘Q: posted, accepted, lines, status, ok, error, true/false, recent_logs, shipment, supply.
+- Inglizcha so‘z/status YO‘Q: posted, accepted, lines, status, ok, error, true/false, recent_logs, shipment, supply, warehouse_staff, agent, worker, accountant.
+- Lavozimlarni o‘zbekcha yozing: Ombor xodimi, Savdo agenti, Ofis xodimi, Bugalter, Menejer…
 - O‘rniga: yozilgan, qabul qilingan, tovar qatorlari, holat, tayyor, xato, ha/yo‘q, oxirgi jurnal, yuk xati, kirim.
+- «o‘rtacha / kunlik o‘rtacha» so‘ralganda jami bilan birga kunlik o‘rtachani ham yozing (jami ÷ kunlar).
+- Portal/kirish so‘ralganda to‘liq havolani yozing (asosiy /, agent /agent, zavod /zavod) — gapni yarim ochiq qoldirmang.
 - Markdown keng jadval YO‘Q (tor oynada buziladi). Faqat qisqa xulosa + bullet ro‘yxat.
 - UUID / uzun id ko‘rsatmang. Ortiqcha ** kam. Parol/token/.env yo‘q.
 
@@ -498,6 +517,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         name: p.name,
         login: p.login,
         role: p.role,
+        roleLabel: roleLabelUz(p.role),
       })),
     };
   }
@@ -1234,59 +1254,6 @@ function extractFiles(result: unknown, into: AssistantFile[]) {
   });
 }
 
-function localizeUzbekReply(text: string): string {
-  let out = String(text || "");
-  const pairs: Array<[RegExp, string]> = [
-    [/\brecent[_ ]?logs?\b/gi, "oxirgi jurnal"],
-    [/\blocalShipments?\b/gi, "mahalliy yuklar"],
-    [/\bmoyskladLatest\b/gi, "MoySklad oxirgi kirim"],
-    [/\bmoyskladSupplies\b/gi, "MoySklad kirimlar"],
-    [/\blatestLocalPosted\b/gi, "oxirgi yozilgan yuk"],
-    [/\blatestLocalAny\b/gi, "oxirgi yuk"],
-    [/\bposted\b/gi, "yozilgan"],
-    [/\baccepted\b/gi, "qabul qilingan"],
-    [/\bpending\b/gi, "kutilmoqda"],
-    [/\bdraft\b/gi, "qoralama"],
-    [/\bstatus\b/gi, "holat"],
-    [/\blines\b/gi, "tovar qatorlari"],
-    [/\bshipment\b/gi, "yuk xati"],
-    [/\bsupply\b/gi, "kirim"],
-    [/\berror\b/gi, "xato"],
-    [/\bfailed\b/gi, "xato"],
-    [/\bsuccess(ful)?\b/gi, "muvaffaqiyatli"],
-    [/\btrue\b/gi, "ha"],
-    [/\bfalse\b/gi, "yo‘q"],
-    [/\bok\b/gi, "tayyor"],
-    [/\bnull\b/gi, "yo‘q"],
-    [/\bundefined\b/gi, "yo‘q"],
-  ];
-  for (const [re, to] of pairs) out = out.replace(re, to);
-  return out;
-}
-
-function sanitizeAssistantReply(text: string): string {
-  let out = String(text || "");
-  out = out.replace(/```[\s\S]*?```/g, (block) => {
-    if (/JVBERi0|UEsDB|base64|PK\x03\x04/i.test(block) || block.length > 500) return "";
-    return block;
-  });
-  out = out.replace(/###\s*PDF[- ]?fayl[^\n]*\n?/gi, "");
-  out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "");
-  out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
-  out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
-  // Tor UI da buziladigan keng markdown jadvallarni olib tashlash
-  out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
-    const first = table.split("\n").find((l) => l.includes("|")) || "";
-    const cols = first.split("|").map((c) => c.trim()).filter(Boolean).length;
-    const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
-    if (uuidHits >= 1 || cols >= 4) return "";
-    return table;
-  });
-  out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "xodim");
-  out = localizeUzbekReply(out);
-  out = out.replace(/\n{3,}/g, "\n\n").trim();
-  return out;
-}
 
 function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; format: "pdf" | "xlsx" | "csv" } | null {
   const wantsDavomat = /davomat|посещаем/.test(lower);
@@ -1396,12 +1363,17 @@ function localGuideReply(lower: string): string | null {
       "Ofis GPS (davomat): 41.258556, 69.150964 · 150 m.",
     ].join("\n");
   }
+  if (wantsPortalLink(lower)) {
+    return portalLinksReply();
+  }
   if (/xodim|login|parol|lavozim|ruxsat/.test(lower) && ask) {
     return [
       "Xodimlar — akkauntlar (ism, login, parol, lavozim, ruxsat).",
       "",
       "• Qo‘shish / tahrirlash / o‘chirish shu yerda.",
       "• Agentlar ham shu ro‘yxatda; KPI raqamlari KPI bo‘limida.",
+      "",
+      portalLinksReply(),
     ].join("\n");
   }
   if (/meny|sidebar|bo['‘`]?limlar|qayerda|navigats/.test(lower)
@@ -1499,39 +1471,6 @@ function workedLabel(ms: number) {
   return `${m} daq`;
 }
 
-function parseDaysWindow(lower: string, fallback = 15) {
-  const m = lower.match(/(\d{1,3})\s*(kun|day|дн|дня|дней)/i)
-    || lower.match(/(?:oxirgi|so['‘`]?nggi|last|за)\s*(\d{1,3})/i);
-  if (m) return Math.min(365, Math.max(1, Number(m[1])));
-  if (/hafta|week|недел/.test(lower)) return 7;
-  if (/\boy\b|month|месяц/.test(lower)) return 30;
-  return fallback;
-}
-
-function isUnsoldIntent(lower: string) {
-  if (/sotilmay|sotilmayotgan|sotuvsiz|harakatsiz|yotib\s*qol|non.?mov|не\s*прод|без\s*продаж|неликвид|idle\s*stock/.test(lower)) {
-    return true;
-  }
-  if (/sotilmagan|sotilmay\s*turgan/.test(lower) && /tovar|mahsulot|товар/.test(lower)) return true;
-  return false;
-}
-
-function isTopSoldIntent(lower: string) {
-  if (isUnsoldIntent(lower)) return false;
-  if (/(eng\s*ko['‘`]?p|top|reyting|лидер).{0,40}(sot|savdo|tovar|продаж)/.test(lower)) return true;
-  if (/(sotilgan|продаж).{0,40}(tovar|mahsulot|товар)/.test(lower)) return true;
-  if (/(ko['‘`]?p\s*sotil|best.?sell|хит\s*продаж)/.test(lower)) return true;
-  if (/savdo\s*(reyting|top|hisobot)/.test(lower)) return true;
-  return false;
-}
-
-function isSalesSummaryIntent(lower: string) {
-  if (isTopSoldIntent(lower) || isUnsoldIntent(lower)) return false;
-  if (/bugungi\s*savdo|kechagi\s*savdo|savdo\s*summa|qancha\s*savdo|tushum|оборот|выручк/.test(lower)) return true;
-  if (/savdo/.test(lower) && /(bugun|kecha|hafta|oy|kun|summa|jami|necha|qancha)/.test(lower)) return true;
-  return false;
-}
-
 function isLowStockIntent(lower: string) {
   return /qoldiq\s*past|kam\s*qol|tugab|tugagan|low\s*stock|out\s*of\s*stock|мало\s*остат|закончил/.test(lower)
     || (/qoldiq|stock/.test(lower) && /(past|kam|tug|oz|мало)/.test(lower));
@@ -1573,16 +1512,6 @@ function extractSearchQuery(message: string, lower: string) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80) || lower.slice(0, 80);
-}
-
-function formatQty(n: number) {
-  const v = Number(n) || 0;
-  return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
-function formatSum(n: number | null | undefined) {
-  if (n == null || !Number.isFinite(Number(n))) return null;
-  return new Intl.NumberFormat("uz-UZ", { maximumFractionDigits: 0 }).format(Math.round(Number(n)));
 }
 
 function formatTopSoldReply(data: Record<string, unknown>) {
@@ -1912,40 +1841,23 @@ async function tryFastLocalTask(
     return { reply: formatTopSoldReply(data), model: "local-fast", tools, files };
   }
 
-  // 5c) Savdo summasi
+  // 5c) Savdo summasi / kunlik o‘rtacha
   if (isSalesSummaryIntent(lower)) {
-    let days = 1;
-    if (/kecha|вчера/.test(lower)) days = 1; // kecha → 1 kunlik oynada bugun emas — soddalashtirish: 2
-    if (/kecha|вчера/.test(lower)) days = 2;
-    else if (/hafta|week|7\s*kun/.test(lower)) days = 7;
-    else if (/\boy\b|month|30\s*kun/.test(lower)) days = 30;
-    else days = parseDaysWindow(lower, /bugun|сегодня/.test(lower) ? 1 : 7);
+    const days = resolveSalesDays(lower);
     const data = await run("sales_summary", { days }) as Record<string, unknown> | null;
     if (!data) return { reply: "Savdo summasini olib bo‘lmadi.", model: "local-fast", tools, files };
-    const amount = data.salesAmount != null ? formatSum(Number(data.salesAmount)) : null;
-    const qty = data.salesQty != null ? formatQty(Number(data.salesQty)) : null;
-    if (days <= 1) {
-      const draftAmt = data.draftSalesAmount != null ? formatSum(Number(data.draftSalesAmount)) : null;
-      const draftNums = Array.isArray(data.draftNumbers) ? (data.draftNumbers as string[]).join(", ") : "";
-      return {
-        reply: [
-          `Bugungi savdo: ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"} (o‘tkazilgan).`,
-          draftAmt && Number(data.draftSalesAmount) > 0
-            ? `Qoralama: ${draftAmt} so‘m${draftNums ? ` · № ${draftNums}` : ""}.`
-            : "",
-          data.incomingToday != null ? `Bugungi kirim: ${formatQty(Number(data.incomingToday))} dona.` : "",
-        ].filter(Boolean).join("\n"),
-        model: "local-fast",
-        tools,
-        files,
-      };
-    }
     return {
-      reply: [
-        `Oxirgi ${days} kun (${data.from} — ${data.to}) savdo:`,
-        amount != null ? `• Summa: ${amount} so‘m` : "• Summa olinmadi",
-        qty != null ? `• Dona: ${qty}` : "",
-      ].filter(Boolean).join("\n"),
+      reply: buildSalesSummaryReply({
+        lower,
+        days,
+        from: data.from != null ? String(data.from) : undefined,
+        to: data.to != null ? String(data.to) : undefined,
+        salesAmount: data.salesAmount != null ? Number(data.salesAmount) : null,
+        salesQty: data.salesQty != null ? Number(data.salesQty) : null,
+        draftSalesAmount: data.draftSalesAmount != null ? Number(data.draftSalesAmount) : null,
+        draftNumbers: Array.isArray(data.draftNumbers) ? (data.draftNumbers as string[]) : undefined,
+        incomingToday: data.incomingToday != null ? Number(data.incomingToday) : null,
+      }),
       model: "local-fast",
       tools,
       files,
@@ -2135,17 +2047,19 @@ async function tryFastLocalTask(
     };
   }
 
+  // 8a) Portal / kirish havolasi
+  if (wantsPortalLink(lower)) {
+    return { reply: portalLinksReply(), model: "local-fast", tools, files };
+  }
+
   // 8) Xodimlar
-  if (/xodimlar ro.?yxat|kimlar bor|staff list|loginlar|barcha xodim|agentlar ro.?yxat/.test(lower)) {
+  if (isStaffListIntent(lower)) {
     const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
     const items = data?.items || [];
-    const onlyAgents = /agent/.test(lower);
+    const onlyAgents = /\bagent/.test(lower) && !/xodim/.test(lower);
     const rows = onlyAgents ? items.filter((p) => /agent/i.test(String(p.role || ""))) : items;
     return {
-      reply: [
-        `${onlyAgents ? "Agentlar" : "Xodimlar"}: ${rows.length} ta.`,
-        ...rows.slice(0, 30).map((p) => `• ${p.name} — ${p.login} (${p.role})`),
-      ].join("\n"),
+      reply: formatStaffListReply(rows, onlyAgents),
       model: "local-fast",
       tools,
       files,
