@@ -14,8 +14,10 @@ import {
   resolveSalesDays,
   roleLabelUz,
   sanitizeAssistantReply,
+  finalizeAssistantReply,
   looksLikeFakeKpiDownload,
   stripFakeDownloadLinks,
+  vagueGiveReply,
   wantsDailyAverage,
   wantsPortalLink,
   wantsVagueGive,
@@ -172,7 +174,15 @@ describe("localize + sanitize", () => {
 describe("KPI follow-ups", () => {
   it("kere ber ni vague give deb biladi", () => {
     assert.equal(wantsVagueGive("kere ber"), true);
+    assert.equal(wantsVagueGive("kerak"), true);
     assert.equal(wantsVagueGive("yuklab ber"), true);
+    assert.match(vagueGiveReply("Bugungi KPI agentlar"), /Dashboard → KPI/);
+    assert.match(vagueGiveReply(""), /aniq yozing/i);
+  });
+
+  it("finalize **** ni yo‘q qiladi", () => {
+    const out = finalizeAssistantReply("KPI ma’lumotlarini PDF shaklida yuklab olish uchun ****");
+    assert.equal(out, kpiFollowupReply());
   });
 
   it("KPI agentlar intent", () => {

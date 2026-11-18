@@ -28,7 +28,9 @@ import {
   portalLinksReply,
   resolveSalesDays,
   roleLabelUz,
+  finalizeAssistantReply,
   sanitizeAssistantReply,
+  vagueGiveReply,
   wantsPortalLink,
   wantsVagueGive,
 } from "./assistant-ux";
@@ -1454,15 +1456,20 @@ function offlineAssistantReply(input: {
   }
   const guided = localGuideReply(lower);
   if (guided) {
-    return { reply: guided, model: "local-offline", tools: input.tools, files: input.files };
+    return {
+      reply: finalizeAssistantReply(guided, false),
+      model: "local-offline",
+      tools: input.tools,
+      files: input.files,
+    };
   }
   return {
-    reply: [
+    reply: finalizeAssistantReply([
       "Hozir AI ulanishi sekin edi — lekin asosiy yordam mahalliy ishlayapti.",
       "",
       "So‘rashingiz mumkin: yuk tekshiruvi, davomat, savdo, sotilmagan/qoldiq past, ombor, buyurtma tavsiya, mahsulot qidiruv, hisobot.",
       "Xabarni qisqa qilib qayta yuboring.",
-    ].join("\n"),
+    ].join("\n"), false),
     model: "local-offline",
     tools: input.tools,
     files: input.files,
@@ -1623,37 +1630,25 @@ async function tryFastLocalTask(
     return { reply, model: "local-fast", tools, files };
   }
 
-  // 0a) «kere ber» / soxta PDF — KPI kontekstida
-  if (wantsVagueGive(lower) && prevWasKpi) {
-    if (/excel|xlsx|fayl/.test(lower)) {
+  // 0a) «kere ber» / qisqa buyruq — Groq ga UMUMAN ketmaydi (soxta PDF yo‘q)
+  if (wantsVagueGive(lower)) {
+    if (/excel|xlsx/.test(lower) || (/fayl/.test(lower) && (prevWasKpi || /agent/i.test(prevAssistant)))) {
       await run("export_report", { kind: "staff", format: "xlsx" });
       if (files.length) {
         return {
-          reply: `${files[0].name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`,
+          reply: finalizeAssistantReply(`${files[0].name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`, true),
           model: "local-fast",
           tools,
           files,
         };
       }
     }
-    return { reply: kpiFollowupReply(), model: "local-fast", tools, files };
-  }
-  if (wantsVagueGive(lower) && /pdf|yuklab|hisobot|havola/.test(lower + " " + prevAssistant.slice(0, 200))) {
-    // Umumiy soxta so‘rov — export turini bilmasak uydirma link bermaymiz
-    if (!detectExport(lower)) {
-      return {
-        reply: [
-          "Qaysi fayl kerakligini aniq yozing:",
-          "• davomat PDF",
-          "• kirim excel",
-          "• xodimlar / agentlar excel",
-          "KPI raqamlari uchun: Dashboard → KPI",
-        ].join("\n"),
-        model: "local-fast",
-        tools,
-        files,
-      };
-    }
+    return {
+      reply: vagueGiveReply(prevAssistant || (prevWasKpi ? "KPI" : "")),
+      model: "local-fast",
+      tools,
+      files,
+    };
   }
 
   // 0a2) KPI agentlar ro‘yxati (Groq uydirma + «— agent» bo‘lmasin)
@@ -2265,7 +2260,12 @@ export async function runAssistantChat(input: {
 
   // Avvalo tez mahalliy yo‘l: buyruq/vazifa/tushuntirish — Groq kutmaydi.
   const fast = await tryFastLocalTask(message, history);
-  if (fast) return fast;
+  if (fast) {
+    return {
+      ...fast,
+      reply: finalizeAssistantReply(fast.reply, Array.isArray(fast.files) && fast.files.length > 0),
+    };
+  }
 
   const messages: ChatMsg[] = [
     { role: "system", content: SYSTEM },
@@ -2346,13 +2346,13 @@ export async function runAssistantChat(input: {
     if (files.length) {
       const f = files[0];
       return {
-        reply: `${f.name} tayyor. Pastdagi **Yuklab olish** tugmasini bosing.`,
+        reply: finalizeAssistantReply(`${f.name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`, true),
         model,
         tools: toolTrace,
         files,
       };
     }
-    return { reply: text, model, tools: toolTrace, files };
+    return { reply: finalizeAssistantReply(text, false), model, tools: toolTrace, files };
   };
 
   try {

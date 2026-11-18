@@ -324,7 +324,38 @@ export function sanitizeAssistantReply(text: string): string {
 
 export function wantsVagueGive(lower: string): boolean {
   const t = String(lower || "").toLowerCase().trim();
-  return /^(kere|kerak)\s*ber\b|^ber\b|^yubor\b|yuklab\s*ber|pdf\s*ber|excel\s*ber|xlsx\s*ber|fayl\s*ber|hisobot\s*ber|kere\s*ber|kerak\s*ber/.test(t);
+  // «kere ber», «kerak», qisqa buyruqlar — Groq ga umuman ketmasin
+  if (/^(kere|kerak)(\s*ber)?[!?.]*$/.test(t)) return true;
+  if (/^(ber|yubor|yoz|chiqar)[!?.]*$/.test(t)) return true;
+  return /yuklab\s*ber|pdf\s*ber|excel\s*ber|xlsx\s*ber|fayl\s*ber|hisobot\s*ber|kere\s*ber|kerak\s*ber/.test(t);
+}
+
+export function vagueGiveReply(prevAssistant = ""): string {
+  if (/kpi|agent|savdo agenti|dashboard/i.test(prevAssistant)) {
+    return kpiFollowupReply();
+  }
+  return [
+    "Nima kerakligini aniq yozing:",
+    "• KPI raqamlari → Dashboard → KPI",
+    "• agentlar excel",
+    "• davomat PDF",
+    "• kirim excel",
+    "• xodimlar excel",
+  ].join("\n");
+}
+
+/** Oxirgi to‘siq: soxta PDF / **** / uydirma havola hech qachon chiqmasin */
+export function finalizeAssistantReply(text: string, hasFiles = false): string {
+  let out = sanitizeAssistantReply(String(text || ""));
+  if (hasFiles) return out;
+  if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /pdf|yuklab\s*olish\s*uchun|\*{2,}/i.test(out))) {
+    return kpiFollowupReply();
+  }
+  // Bo‘sh yoki faqat **** qolgan javob
+  if (!out.trim() || /^\*{2,}$/.test(out.trim()) || /yuklab\s*olish\s*uchun\s*\*{0,8}\s*$/i.test(out)) {
+    return kpiFollowupReply();
+  }
+  return out;
 }
 
 export function isKpiAgentsIntent(lower: string): boolean {
