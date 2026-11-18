@@ -2,17 +2,22 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildSalesSummaryReply,
+  formatKpiAgentsReply,
   formatStaffListReply,
+  isKpiAgentsIntent,
   isSalesSummaryIntent,
   isStaffListIntent,
+  kpiFollowupReply,
   localizeUzbekReply,
   parseDaysWindow,
   portalLinksReply,
   resolveSalesDays,
   roleLabelUz,
   sanitizeAssistantReply,
+  stripFakeDownloadLinks,
   wantsDailyAverage,
   wantsPortalLink,
+  wantsVagueGive,
 } from "../src/lib/assistant-ux.ts";
 
 describe("roleLabelUz", () => {
@@ -122,6 +127,10 @@ describe("localize + sanitize", () => {
     assert.match(localizeUzbekReply("Gayrat (warehouse_staff)"), /Ombor xodimi/);
   });
 
+  it("Javohir — agent ni Savdo agentiga aylantiradi", () => {
+    assert.match(localizeUzbekReply("• Javohir — agent"), /Savdo agenti/);
+  });
+
   it("/agent URL ni buzmaydi", () => {
     const out = sanitizeAssistantReply("Kirish: /agent va https://demo.uz/agent");
     assert.match(out, /\/agent/);
@@ -140,5 +149,44 @@ describe("localize + sanitize", () => {
     const out = sanitizeAssistantReply(table);
     assert.match(out, /\/agent/);
     assert.match(out, /https:\/\/x\.uz\//);
+  });
+
+  it("soxta KPI yuklab olish havolasini olib tashlaydi", () => {
+    const fake = "KPI ma'lumotlarini PDF shaklida yuklab olish uchun quyidagi havolani bosing: [KPI hisobotini yuklab olish]";
+    const out = sanitizeAssistantReply(fake);
+    assert.doesNotMatch(out, /\[KPI hisobotini yuklab olish\]/);
+    assert.match(out, /Dashboard → KPI|davomat PDF|agentlar excel/i);
+  });
+});
+
+describe("KPI follow-ups", () => {
+  it("kere ber ni vague give deb biladi", () => {
+    assert.equal(wantsVagueGive("kere ber"), true);
+    assert.equal(wantsVagueGive("yuklab ber"), true);
+  });
+
+  it("KPI agentlar intent", () => {
+    assert.equal(isKpiAgentsIntent("bugungi kunga kpi yozilgan agentlar"), true);
+  });
+
+  it("KPI agentlar javobida inglizcha agent yo‘q", () => {
+    const reply = formatKpiAgentsReply(
+      [{ name: "Javohir", login: "javohir", role: "agent" }],
+      "2026-11-18",
+    );
+    assert.match(reply, /Savdo agenti/);
+    assert.doesNotMatch(reply, /— agent$/m);
+    assert.match(reply, /Dashboard → KPI/);
+  });
+
+  it("kpiFollowupReply soxta havola bermaydi", () => {
+    const reply = kpiFollowupReply();
+    assert.doesNotMatch(reply, /\[.*yuklab/);
+    assert.match(reply, /Dashboard → KPI/);
+  });
+
+  it("stripFakeDownloadLinks ishlaydi", () => {
+    const out = stripFakeDownloadLinks("Bosing: [yuklab olish](http://fake)");
+    assert.doesNotMatch(out, /\[yuklab olish\]/);
   });
 });

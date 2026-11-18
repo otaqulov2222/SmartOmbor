@@ -232,6 +232,8 @@ export function localizeUzbekReply(text: string): string {
     [/\(\s*analyst\s*\)/gi, "(Tahlilchi)"],
     [/\(\s*marketolog\s*\)/gi, "(Marketolog)"],
     [/\(\s*cashier\s*\)/gi, "(Kassir)"],
+    // «Javohir — agent» kabi qatorlar
+    [/([—\-–•]|\s)\s*agent\b/gi, "$1 Savdo agenti"],
     [/\bposted\b/gi, "yozilgan"],
     [/\baccepted\b/gi, "qabul qilingan"],
     [/\bpending\b/gi, "kutilmoqda"],
@@ -253,6 +255,21 @@ export function localizeUzbekReply(text: string): string {
   return out;
 }
 
+/** Soxta «yuklab olish» markdown havolalarini olib tashlash */
+export function stripFakeDownloadLinks(text: string): string {
+  let out = String(text || "");
+  const before = out;
+  // [KPI hisobotini yuklab olish](...) yoki [yuklab olish]
+  out = out.replace(/\[[^\]]*?(yuklab|download|hisobot|pdf|excel|csv)[^\]]*?\]\([^)]*\)/gi, "");
+  out = out.replace(/\[[^\]]*?(yuklab\s*olish|KPI\s*hisobot|download)[^\]]*?\](?!\()/gi, "");
+  out = out.replace(/KPI\s*ma['‘`]?lumotlarini\s*PDF[^\n.]*(?:\.[^\n]*)?/gi, "");
+  out = out.replace(/quyidagi\s*havolani\s*bosing\s*:?\s*/gi, "");
+  if (out !== before && /yuklab|pdf|hisobot|havola/i.test(before) && !/Yuklab olish tugmasini/i.test(out)) {
+    out = `${out.trim()}\n\nFayl kerak bo‘lsa aniq yozing: «davomat PDF», «xodimlar excel» yoki KPI raqamlari uchun Dashboard → KPI ga kiring.`;
+  }
+  return out;
+}
+
 export function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
   out = out.replace(/```[\s\S]*?```/g, (block) => {
@@ -263,6 +280,7 @@ export function sanitizeAssistantReply(text: string): string {
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, "");
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
+  out = stripFakeDownloadLinks(out);
   // Tor UI: keng jadvalni olib tashlash — lekin login/portal/http jadvallarini saqlash
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
     if (/https?:\/\/|\/agent|\/zavod|login|portal|havola/i.test(table)) return table;
@@ -280,9 +298,42 @@ export function sanitizeAssistantReply(text: string): string {
   return out;
 }
 
+export function wantsVagueGive(lower: string): boolean {
+  const t = String(lower || "").toLowerCase().trim();
+  return /^(kere|kerak)\s*ber\b|^ber\b|^yubor\b|yuklab\s*ber|pdf\s*ber|excel\s*ber|xlsx\s*ber|fayl\s*ber|hisobot\s*ber|kere\s*ber|kerak\s*ber/.test(t);
+}
+
+export function isKpiAgentsIntent(lower: string): boolean {
+  const t = String(lower || "").toLowerCase();
+  if (!/kpi/.test(t)) return false;
+  return /agent|ro.?yxat|kim|bugun|yozilgan|bor|qaysi/.test(t);
+}
+
+export function formatKpiAgentsReply(rows: Array<{ name?: unknown; login?: unknown; role?: unknown }>, today: string): string {
+  if (!rows.length) {
+    return `Bugungi (${today}) kunga agentlar topilmadi. KPI raqamlari: Dashboard → KPI.`;
+  }
+  return [
+    `Bugungi (${today}) agentlar (${rows.length} ta):`,
+    ...rows.slice(0, 40).map((p) => `• ${p.name}${p.login ? ` — ${p.login}` : ""} — ${roleLabelUz(p.role)}`),
+    "",
+    "Aniq KPI raqamlari: Dashboard → KPI → Boshqaruv / Agentlar.",
+    "Chatda soxta PDF havola bermayman. Excel kerak bo‘lsa: «agentlar excel» deb yozing.",
+  ].join("\n");
+}
+
+export function kpiFollowupReply(): string {
+  return [
+    "KPI uchun soxta yuklab olish havolasi yo‘q.",
+    "Aniq raqamlar: Dashboard → KPI → Boshqaruv / Agentlar.",
+    "Ro‘yxatni Excel qilib bersam: «agentlar excel» deb yozing.",
+  ].join("\n");
+}
+
 /** Staff ro‘yxati so‘rovi (loginlar, kimlar bor…) */
 export function isStaffListIntent(lower: string): boolean {
   const t = String(lower || "").toLowerCase();
   if (wantsPortalLink(t)) return false;
-  return /xodimlar\s*ro.?yxat|kimlar\s*bor|staff\s*list|loginlar|barcha\s*xodim|agentlar\s*ro.?yxat|xodimlar\s*login|login\s*parol|xodimlar\s*va\s*login/.test(t);
+  if (isKpiAgentsIntent(t)) return false;
+  return /xodimlar\s*ro.?yxat|kimlar\s*bor|staff\s*list|loginlar|barcha\s*xodim|agentlar\s*ro.?yxat|xodimlar\s*login|login\s*parol|xodimlar\s*va\s*login|agentlar\s*excel/.test(t);
 }

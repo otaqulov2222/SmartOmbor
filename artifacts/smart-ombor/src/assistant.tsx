@@ -71,6 +71,10 @@ function localizeUz(text: string) {
   let out = String(text || '');
   const pairs: Array<[RegExp, string]> = [
     [/\brecent[_ ]?logs?\b/gi, 'oxirgi jurnal'],
+    [/\bwarehouse_staff\b/gi, 'Ombor xodimi'],
+    [/\bwarehouse_manager\b/gi, 'Ombor mudiri'],
+    [/\(\s*agent\s*\)/gi, '(Savdo agenti)'],
+    [/([—\-–•]|\s)\s*agent\b/gi, '$1 Savdo agenti'],
     [/\bposted\b/gi, 'yozilgan'],
     [/\baccepted\b/gi, 'qabul qilingan'],
     [/\bpending\b/gi, 'kutilmoqda'],
@@ -97,14 +101,20 @@ function stripJunk(text: string) {
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, '');
+  // Soxta yuklab olish havolalari
+  out = out.replace(/\[[^\]]*?(yuklab|download|hisobot|pdf|excel|csv)[^\]]*?\]\([^)]*\)/gi, '');
+  out = out.replace(/\[[^\]]*?(yuklab\s*olish|KPI\s*hisobot|download)[^\]]*?\](?!\()/gi, '');
+  out = out.replace(/KPI\s*ma['‘`]?lumotlarini\s*PDF[^\n.]*(?:\.[^\n]*)?/gi, '');
+  out = out.replace(/quyidagi\s*havolani\s*bosing\s*:?\s*/gi, '');
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
+    if (/https?:\/\/|\/agent|\/zavod|login|portal|havola/i.test(table)) return table;
     const first = table.split('\n').find((l) => l.includes('|')) || '';
     const cols = first.split('|').map((c) => c.trim()).filter(Boolean).length;
     const uuidHits = (table.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []).length;
     if (uuidHits >= 1 || cols >= 4) return '';
     return table;
   });
-  out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'xodim');
+  out = out.replace(/(?<![\/\w-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\/\w-])/gi, 'xodim');
   out = localizeUz(out);
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }

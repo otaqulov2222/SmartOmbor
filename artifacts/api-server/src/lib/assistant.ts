@@ -14,19 +14,23 @@ import { listAccounts } from "./partners";
 import { exportDavomat, exportKirim, exportStaff } from "./assistant-export";
 import {
   buildSalesSummaryReply,
+  formatKpiAgentsReply,
   formatQty,
   formatStaffListReply,
   formatSum,
+  isKpiAgentsIntent,
   isSalesSummaryIntent,
   isStaffListIntent,
   isTopSoldIntent,
   isUnsoldIntent,
+  kpiFollowupReply,
   parseDaysWindow,
   portalLinksReply,
   resolveSalesDays,
   roleLabelUz,
   sanitizeAssistantReply,
   wantsPortalLink,
+  wantsVagueGive,
 } from "./assistant-ux";
 
 // Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
@@ -93,7 +97,9 @@ KPI bo‘limi (foydalanuvchi so‘rasa shu bilan tushuntiring):
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
 - Fayl (PDF/Excel/CSV) → export_report. Base64 yozmang.
-- Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing».
+- Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing» (faqat haqiqiy fayl bo‘lsa).
+- Soxta markdown havola YO‘Q: [KPI hisobotini yuklab olish], [yuklab olish](...) — umuman yozmang.
+- KPI raqamlari uchun: Dashboard → KPI. Chatda uydirma PDF link bermang.
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
 - Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.
 - Foydalanuvchi misol keltirmasa ham: oxirgi yuk, davomat, hisobot, xato, MS solishtirish, eng ko‘p/sotilmagan tovar, qoldiq past, ombor, savdo summasi, mahsulot qidiruv, buyurtma tavsiya, zavodlar — o‘zingiz tanlab bajaring.
@@ -1586,6 +1592,7 @@ async function tryFastLocalTask(
   const prevAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content || "";
   const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|savdo hisobot/i.test(prevAssistant);
   const prevWasUnsold = /sotilmagan \(qoldiq bor\)|harakatsiz/i.test(prevAssistant);
+  const prevWasKpi = /KPI|Dashboard\s*→\s*KPI|agentlar\s*\(|Bugungi\s*\(.*\)\s*agent/i.test(prevAssistant);
 
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     try {
@@ -1614,6 +1621,66 @@ async function tryFastLocalTask(
       ? "Ha. Bu belgilangan kun ichida sotuvi bo‘lmagan, lekin qoldig‘i bor tovarlar."
       : "Ha. Bu MoySklad savdo hisobotidan olingan eng ko‘p sotilgan tovarlar — yuk xati yoki kirim emas.";
     return { reply, model: "local-fast", tools, files };
+  }
+
+  // 0a) «kere ber» / soxta PDF — KPI kontekstida
+  if (wantsVagueGive(lower) && prevWasKpi) {
+    if (/excel|xlsx|fayl/.test(lower)) {
+      await run("export_report", { kind: "staff", format: "xlsx" });
+      if (files.length) {
+        return {
+          reply: `${files[0].name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`,
+          model: "local-fast",
+          tools,
+          files,
+        };
+      }
+    }
+    return { reply: kpiFollowupReply(), model: "local-fast", tools, files };
+  }
+  if (wantsVagueGive(lower) && /pdf|yuklab|hisobot|havola/.test(lower + " " + prevAssistant.slice(0, 200))) {
+    // Umumiy soxta so‘rov — export turini bilmasak uydirma link bermaymiz
+    if (!detectExport(lower)) {
+      return {
+        reply: [
+          "Qaysi fayl kerakligini aniq yozing:",
+          "• davomat PDF",
+          "• kirim excel",
+          "• xodimlar / agentlar excel",
+          "KPI raqamlari uchun: Dashboard → KPI",
+        ].join("\n"),
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+  }
+
+  // 0a2) KPI agentlar ro‘yxati (Groq uydirma + «— agent» bo‘lmasin)
+  if (isKpiAgentsIntent(lower) || (/agentlar/.test(lower) && /kpi|bugun|ro.?yxat/.test(lower))) {
+    const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
+    const items = data?.items || [];
+    const agents = items.filter((p) => /agent/i.test(String(p.role || "")));
+    const today = tashkentParts().date;
+    return {
+      reply: formatKpiAgentsReply(agents, today),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // agentlar excel
+  if (/agentlar?\s*(excel|xlsx|fayl)|excel.*agent/.test(lower)) {
+    await run("export_report", { kind: "staff", format: "xlsx" });
+    if (files.length) {
+      return {
+        reply: `Agentlar/xodimlar fayli tayyor (${files[0].name}). Pastdagi Yuklab olish tugmasini bosing.`,
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
   }
 
   // 0b) Bugungi tizim hisoboti (davomat PDF emas!)
