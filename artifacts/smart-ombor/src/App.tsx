@@ -620,12 +620,7 @@ function DashboardPage() {
         <Link href="/analytics" className="kpi" data-testid="metric-sales"><span className="kpi-icon tone-blue"><ChartColumn size={20} strokeWidth={1.75}/></span><span className="kpi-label">{isToday ? t('dash.kpi.sales') : t('dash.kpi.salesOn', { date: shownDay })}</span><strong>{liveReady ? money(chosen.data!.sales) : chosen.isError ? '—' : '…'}</strong><small>{chosen.isError ? t('dash.live.missing') : (() => {
           const draft = Number(chosen.data?.draftSales || 0);
           const draftNos = (chosen.data?.draftDocs || []).map(x => x.number).filter(Boolean).slice(0, 3).join(', ');
-          if (draft > 0) {
-            return [
-              t('dash.kpi.sales.postedNote'),
-              t('dash.kpi.sales.draft', { amount: money(draft), docs: draftNos || '—' }),
-            ].join(' · ');
-          }
+          if (draft > 0) return t('dash.kpi.sales.draft', { amount: money(draft), docs: draftNos || '—' });
           return isToday ? t('dash.kpi.sales.note') : t('dash.kpi.salesOn.note');
         })()}</small></Link>
       </section>

@@ -1737,9 +1737,9 @@ async function tryFastLocalTask(
         : "• Bugun yuk xati yo‘q.",
       "",
       "2) Savdo",
-      `• O‘tkazilgan (asosiy ko‘rsatkich): ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
+      `• O‘tkazilgan: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
       sales?.draftSalesAmount != null && Number(sales.draftSalesAmount) > 0
-        ? `• Qoralama (o‘tkazilmagan, asosiyga kirmaydi): ${formatSum(Number(sales.draftSalesAmount))} so‘m${Array.isArray(sales.draftNumbers) && sales.draftNumbers.length ? ` — № ${(sales.draftNumbers as string[]).join(", ")}` : ""}`
+        ? `• Qoralama: ${formatSum(Number(sales.draftSalesAmount))} so‘m${Array.isArray(sales.draftNumbers) && sales.draftNumbers.length ? ` · № ${(sales.draftNumbers as string[]).join(", ")}` : ""}`
         : "",
       sales?.incomingToday != null ? `• Bugungi kirim: ${formatQty(Number(sales.incomingToday))} dona` : "",
       "",
@@ -1929,9 +1929,9 @@ async function tryFastLocalTask(
       const draftNums = Array.isArray(data.draftNumbers) ? (data.draftNumbers as string[]).join(", ") : "";
       return {
         reply: [
-          `Bugungi savdo (o‘tkazilgan): ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"}.`,
+          `Bugungi savdo: ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"} (o‘tkazilgan).`,
           draftAmt && Number(data.draftSalesAmount) > 0
-            ? `Qoralama (o‘tkazilmagan, asosiy savdoga kirmaydi): ${draftAmt} so‘m${draftNums ? ` — № ${draftNums}` : ""}.`
+            ? `Qoralama: ${draftAmt} so‘m${draftNums ? ` · № ${draftNums}` : ""}.`
             : "",
           data.incomingToday != null ? `Bugungi kirim: ${formatQty(Number(data.incomingToday))} dona.` : "",
         ].filter(Boolean).join("\n"),
