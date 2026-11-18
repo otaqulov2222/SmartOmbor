@@ -70,6 +70,8 @@ export interface Catalog {
   stockRows: CatalogStockRow[];
   documents: CatalogDocument[];
   salesToday: number;
+  /** O‘tkazilmagan (qoralama) bugungi demand summasi */
+  draftSalesToday: number;
   incomingToday: number;
   pendingTransfers: number;
   error: string | null;
@@ -215,7 +217,11 @@ async function recall(): Promise<Catalog | null> {
     const text = await readFile(CACHE_FILE, "utf8");
     const raw = JSON.parse(text) as Catalog & { imageHrefs: Array<[string, string]> };
     if (!raw?.loadedAt || !Array.isArray(raw.products)) return null;
-    const catalog = { ...raw, imageHrefs: new Map(raw.imageHrefs ?? []) };
+    const catalog = {
+      ...raw,
+      draftSalesToday: Number(raw.draftSalesToday || 0),
+      imageHrefs: new Map(raw.imageHrefs ?? []),
+    };
     alignStoreStock(catalog);
     return catalog;
   } catch {
@@ -439,15 +445,19 @@ async function build(): Promise<Catalog> {
     }
   }
 
-  const today = new Date();
-  const day = today.toISOString().slice(0, 10);
+  const day = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
   const filter = encodeURIComponent(`moment>=${day} 00:00:00;moment<=${day} 23:59:59`);
   const skipDenied = (label: string) => (error: unknown) => {
     logger.warn({ err: error }, `MoySklad ${label} skipped`);
     return null;
   };
   const [demands, supplies, moves, suppliesRecent, movesRecent, inventories] = await Promise.all([
-    moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/demand?limit=100&filter=${filter}`).catch(skipDenied("demands")),
+    moyskladAll<{ sum?: number; applicable?: boolean } & DocRow>(`/entity/demand?filter=${filter}`).catch(() => ({ rows: [] as DocRow[], size: 0 })),
     moysklad<{ meta: { size: number }; rows: DocRow[] }>(`/entity/supply?limit=100&filter=${filter}`).catch(skipDenied("supplies")),
     moysklad<{ meta: { size: number } }>("/entity/move?limit=1&filter=applicable=false").catch(skipDenied("moves")),
     moysklad<{ rows: DocRow[] }>("/entity/supply?limit=100&order=moment,desc&expand=agent").catch(skipDenied("supply-list")),
@@ -461,6 +471,14 @@ async function build(): Promise<Catalog> {
     ...(inventories?.rows ?? []).map((row) => toDocument(row, "inventory", warehouseById)),
   ].sort((a, b) => b.date.localeCompare(a.date));
 
+  const demandRows = demands?.rows ?? [];
+  const postedSales = demandRows
+    .filter((row) => row.applicable !== false)
+    .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+  const draftSales = demandRows
+    .filter((row) => row.applicable === false)
+    .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+
   const catalog: Catalog = {
     companyName: organization.rows[0]?.name ?? null,
     loadedAt: new Date().toISOString(),
@@ -469,7 +487,8 @@ async function build(): Promise<Catalog> {
     warehouses,
     stockRows,
     documents,
-    salesToday: (demands?.rows ?? []).reduce((sum, row) => sum + (money(row.sum) ?? 0), 0),
+    salesToday: postedSales,
+    draftSalesToday: draftSales,
     incomingToday: supplies?.meta.size ?? 0,
     pendingTransfers: moves?.meta.size ?? 0,
     error: null,
@@ -627,6 +646,7 @@ export async function loadCatalogForSupply(): Promise<Catalog> {
     stockRows: [],
     documents: [],
     salesToday: 0,
+    draftSalesToday: 0,
     incomingToday: 0,
     pendingTransfers: 0,
     error: null,

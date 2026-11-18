@@ -954,12 +954,41 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     fromDate.setDate(fromDate.getDate() - (days - 1));
     const from = tashkentParts(fromDate).date;
     if (days === 1) {
+      // Katalog ba’zan qoralamani ham qo‘shardi — bugun uchun MS dan jonli o‘qiymiz
+      if (moyskladConfigured()) {
+        try {
+          const filter = encodeURIComponent(`moment>=${to} 00:00:00;moment<=${to} 23:59:59`);
+          const demands = await moyskladAll<{ name?: string; sum?: number; applicable?: boolean }>(
+            `/entity/demand?filter=${filter}`,
+          );
+          const posted = (demands.rows || []).filter((r) => r.applicable !== false);
+          const drafts = (demands.rows || []).filter((r) => r.applicable === false);
+          const salesAmount = posted.reduce((s, r) => s + (money(r.sum) || 0), 0);
+          const draftSalesAmount = drafts.reduce((s, r) => s + (money(r.sum) || 0), 0);
+          return {
+            ok: true,
+            days: 1,
+            from: to,
+            to,
+            salesAmount,
+            draftSalesAmount,
+            draftCount: drafts.length,
+            draftNumbers: drafts.map((r) => r.name).filter(Boolean).slice(0, 8),
+            incomingToday: catalog?.incomingToday ?? null,
+            pendingTransfers: catalog?.pendingTransfers ?? null,
+            source: "moysklad_demand",
+          };
+        } catch (error) {
+          /* fall through to catalog */
+        }
+      }
       return {
         ok: true,
         days: 1,
         from: to,
         to,
         salesAmount: catalog?.salesToday ?? null,
+        draftSalesAmount: catalog?.draftSalesToday ?? null,
         incomingToday: catalog?.incomingToday ?? null,
         pendingTransfers: catalog?.pendingTransfers ?? null,
         source: catalog ? "katalog" : "yoq",
@@ -1708,8 +1737,11 @@ async function tryFastLocalTask(
         : "• Bugun yuk xati yo‘q.",
       "",
       "2) Savdo",
-      `• Bugungi savdo: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
-      sales?.incomingToday != null ? `• Bugungi kirim (katalog): ${formatQty(Number(sales.incomingToday))} dona` : "",
+      `• O‘tkazilgan: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
+      sales?.draftSalesAmount != null && Number(sales.draftSalesAmount) > 0
+        ? `• Qoralama: ${formatSum(Number(sales.draftSalesAmount))} so‘m${Array.isArray(sales.draftNumbers) && sales.draftNumbers.length ? ` (${(sales.draftNumbers as string[]).join(", ")})` : ""}`
+        : "",
+      sales?.incomingToday != null ? `• Bugungi kirim: ${formatQty(Number(sales.incomingToday))} dona` : "",
       "",
       "3) Davomat",
       `• Xodimlar: ${board?.total ?? people.length} · kelgan: ${board?.present ?? present.length} · kelmagan: ${board?.absent ?? "—"} · kechikkan: ${late.length}`,
@@ -1893,9 +1925,14 @@ async function tryFastLocalTask(
     const amount = data.salesAmount != null ? formatSum(Number(data.salesAmount)) : null;
     const qty = data.salesQty != null ? formatQty(Number(data.salesQty)) : null;
     if (days <= 1) {
+      const draftAmt = data.draftSalesAmount != null ? formatSum(Number(data.draftSalesAmount)) : null;
+      const draftNums = Array.isArray(data.draftNumbers) ? (data.draftNumbers as string[]).join(", ") : "";
       return {
         reply: [
-          `Bugungi savdo: ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"}.`,
+          `Bugungi o‘tkazilgan savdo: ${amount != null ? `${amount} so‘m` : "ma’lumot yo‘q"}.`,
+          draftAmt && Number(data.draftSalesAmount) > 0
+            ? `Qoralama savdo: ${draftAmt} so‘m${draftNums ? ` (${draftNums})` : ""} — hali o‘tkazilmagan.`
+            : "",
           data.incomingToday != null ? `Bugungi kirim: ${formatQty(Number(data.incomingToday))} dona.` : "",
         ].filter(Boolean).join("\n"),
         model: "local-fast",

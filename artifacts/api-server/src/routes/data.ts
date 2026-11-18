@@ -352,6 +352,7 @@ type DayDocument = {
 type DaySnapshot = {
   date: string;
   sales: number;
+  draftSales: number;
   incoming: number;
   trend: Array<{ date: string; amount: number }>;
   documents: DayDocument[];
@@ -450,7 +451,7 @@ function emptyDay(date: string): DaySnapshot {
     trend.push({ date: cursor, amount: 0 });
     cursor = shiftDay(cursor, 1);
   }
-  return { date, sales: 0, incoming: 0, trend, documents: [] };
+  return { date, sales: 0, draftSales: 0, incoming: 0, trend, documents: [] };
 }
 
 function loadDay(date: string): Promise<DaySnapshot> {
@@ -480,9 +481,10 @@ async function buildDay(date: string): Promise<DaySnapshot> {
     const from = shiftDay(date, -6);
     const dayFilter = encodeURIComponent(`moment>=${date} 00:00:00;moment<=${date} 23:59:59`);
     type Row = { id?: string; name?: string; moment?: string; sum?: number; applicable?: boolean; agent?: { name?: string }; store?: { name?: string }; sourceStore?: { name?: string }; targetStore?: { name?: string } };
-    const [amounts, supplies, dayDemands, daySupplies, dayMoves] = await Promise.all([
+    const [amounts, supplies, allDemands, dayDemands, daySupplies, dayMoves] = await Promise.all([
       salesByDay(from, date),
       moysklad<{ meta: { size: number } }>(`/entity/supply?limit=1&filter=${dayFilter}`),
+      moyskladAll<Row>(`/entity/demand?filter=${dayFilter}`).catch(() => ({ rows: [] as Row[], size: 0 })),
       moysklad<{ rows: Row[] }>(`/entity/demand?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
       moysklad<{ rows: Row[] }>(`/entity/supply?limit=8&order=moment,desc&filter=${dayFilter}&expand=agent,store`),
       moysklad<{ rows: Row[] }>(`/entity/move?limit=8&order=moment,desc&filter=${dayFilter}&expand=sourceStore,targetStore`).catch(() => ({ rows: [] as Row[] })),
@@ -501,11 +503,25 @@ async function buildDay(date: string): Promise<DaySnapshot> {
       ...dayDemands.rows.map((row) => asDoc(row, "sale", row.agent?.name || null, row.store?.name || null)),
       ...(dayMoves?.rows ?? []).map((row) => asDoc(row, "transfer", row.sourceStore?.name || null, row.targetStore?.name || null)),
     ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    const postedSum = (allDemands.rows || [])
+      .filter((row) => row.applicable !== false)
+      .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+    const draftSum = (allDemands.rows || [])
+      .filter((row) => row.applicable === false)
+      .reduce((sum, row) => sum + (money(row.sum) ?? 0), 0);
+    // plotseries ba’zan qoralama/kechikkan kunni 0 qiladi — o‘tkazilgan demand bilan to‘ldiramiz
+    let sales = amounts.get(date)?.amount ?? 0;
+    if (sales <= 0 && postedSum > 0) sales = postedSum;
+    const trend = [...amounts.entries()].map(([key, value]) => ({
+      date: key,
+      amount: key === date && (value.amount <= 0 && sales > 0) ? sales : value.amount,
+    }));
     return {
       date,
-      sales: amounts.get(date)?.amount ?? 0,
+      sales,
+      draftSales: draftSum,
       incoming: supplies.meta.size,
-      trend: [...amounts.entries()].map(([key, value]) => ({ date: key, amount: value.amount })),
+      trend,
       documents,
     };
 }
