@@ -1922,6 +1922,30 @@ async function tryFastLocalTask(
     };
   }
 
+  // 6a) Bugungi yuklar ro‘yxati (faqat shu kun — Groq aralashtirmasin)
+  if (!auditAsk && /bugun|сегодня/.test(lower) && /yuk|kirim|наклад/.test(lower)) {
+    const data = await run("latest_kirim", { limit: 20, skipMs: true }) as Record<string, unknown> | null;
+    const local = Array.isArray(data?.localShipments) ? data!.localShipments as Array<Record<string, unknown>> : [];
+    const today = tashkentParts().date;
+    const todays = local.filter((s) => String(s.date || "") === today);
+    if (!todays.length) {
+      return { reply: `Bugun (${today}) yuk xati yo‘q.`, model: "local-fast", tools, files };
+    }
+    return {
+      reply: [
+        `Bugungi yuklar (${today}): ${todays.length} ta.`,
+        ...todays.slice(0, 15).map((s) => {
+          const posted = s.moySkladgaYozilgan ?? s.posted;
+          const holat = posted === true || posted === "ha" || posted === "yozilgan" ? "MS ga yozilgan" : "MS yo‘q";
+          return `• ${s.number} · ${localizeStatus(s.status)} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
+        }),
+      ].join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
   // 6) Oxirgi kirim ro‘yxati (tekshir emas)
   const wantsKirimList = /oxirgi|so['‘`]?nggi|последн|eng oxir|list|ro.?yxat/.test(lower)
     && /yuk|kirim|supply|наклад|moy\s*sklad|moysklad/.test(lower)
