@@ -364,13 +364,20 @@ const dayInflight = new Map<string, Promise<DaySnapshot>>();
 const DAY_CACHE_FILE = dataFile("day-view.json");
 let dayDiskRead = false;
 
+function dayBodyReady(body: DaySnapshot | undefined | null): body is DaySnapshot {
+  return Boolean(body && body.date && typeof body.sales === "number" && Array.isArray(body.draftDocs) && typeof body.draftSales === "number");
+}
+
 function readDayDisk() {
   if (dayDiskRead) return;
   dayDiskRead = true;
   try {
     const parsed = JSON.parse(readFileSync(DAY_CACHE_FILE, "utf8")) as Record<string, { savedAt: number; body: DaySnapshot }>;
     for (const [key, entry] of Object.entries(parsed)) {
-      if (entry?.body?.date === key && typeof entry.savedAt === "number") dayCache.set(key, entry);
+      // Eski cache (draftDocs yo‘q) chalkashlik qilmasin
+      if (entry?.body?.date === key && typeof entry.savedAt === "number" && dayBodyReady(entry.body)) {
+        dayCache.set(key, entry);
+      }
     }
   } catch {
     // The first visit builds the snapshot.
@@ -541,13 +548,15 @@ router.get("/dashboard/day", async (req, res, next) => {
     }
     readDayDisk();
     const cached = dayCache.get(date);
+    if (cached && !dayBodyReady(cached.body)) dayCache.delete(date);
+    const fresh = dayCache.get(date);
     const freshFor = date === today ? 2 * 60_000 : 6 * 60 * 60_000;
-    if (cached && (catalogSyncing() || Date.now() - cached.savedAt < freshFor)) {
-      res.json(cached.body);
+    if (fresh && dayBodyReady(fresh.body) && (catalogSyncing() || Date.now() - fresh.savedAt < freshFor)) {
+      res.json(fresh.body);
       return;
     }
-    if (cached) {
-      res.json(cached.body);
+    if (fresh && dayBodyReady(fresh.body)) {
+      res.json(fresh.body);
       if (!catalogSyncing()) void loadDay(date).catch(() => undefined);
       return;
     }
