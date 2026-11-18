@@ -1592,7 +1592,7 @@ async function tryFastLocalTask(
   const prevAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content || "";
   const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|savdo hisobot/i.test(prevAssistant);
   const prevWasUnsold = /sotilmagan \(qoldiq bor\)|harakatsiz/i.test(prevAssistant);
-  const prevWasKpi = /KPI|Dashboard\s*→\s*KPI|agentlar\s*\(|Bugungi\s*\(.*\)\s*agent/i.test(prevAssistant);
+  const prevWasKpi = /KPI|Dashboard\s*→\s*KPI|agentlar\s*\(|Bugungi\s*\(.*\)\s*(kunga\s*)?agent|Savdo agenti/i.test(prevAssistant);
 
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     try {

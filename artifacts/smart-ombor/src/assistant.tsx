@@ -101,11 +101,23 @@ function stripJunk(text: string) {
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, '');
-  // Soxta yuklab olish havolalari
+  // Soxta KPI PDF / bo‘sh **** — butun javobni almashtiramiz
+  const fakeKpi = /kpi/i.test(out)
+    && (/pdf\s*shaklida|yuklab\s*olish\s*uchun|quyidagi\s*havola|hisobotini\s*yuklab/i.test(out)
+      || (/\*{2,}/.test(out) && /yuklab|pdf|havola/i.test(out)));
+  if (fakeKpi && !/Yuklab olish tugmasini/i.test(out)) {
+    return [
+      'KPI uchun soxta yuklab olish havolasi yo‘q.',
+      'Aniq raqamlar: Dashboard → KPI → Boshqaruv / Agentlar.',
+      'Ro‘yxatni Excel qilib bersam: «agentlar excel» deb yozing.',
+    ].join('\n');
+  }
   out = out.replace(/\[[^\]]*?(yuklab|download|hisobot|pdf|excel|csv)[^\]]*?\]\([^)]*\)/gi, '');
   out = out.replace(/\[[^\]]*?(yuklab\s*olish|KPI\s*hisobot|download)[^\]]*?\](?!\()/gi, '');
-  out = out.replace(/KPI\s*ma['‘`]?lumotlarini\s*PDF[^\n.]*(?:\.[^\n]*)?/gi, '');
+  out = out.replace(/KPI[\s\S]{0,40}PDF[\s\S]{0,160}/gi, '');
   out = out.replace(/quyidagi\s*havolani\s*bosing\s*:?\s*/gi, '');
+  out = out.replace(/yuklab\s*olish\s*uchun\s*\*{0,8}/gi, '');
+  out = out.replace(/\*{2,}/g, '');
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
     if (/https?:\/\/|\/agent|\/zavod|login|portal|havola/i.test(table)) return table;
     const first = table.split('\n').find((l) => l.includes('|')) || '';

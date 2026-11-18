@@ -14,6 +14,7 @@ import {
   resolveSalesDays,
   roleLabelUz,
   sanitizeAssistantReply,
+  looksLikeFakeKpiDownload,
   stripFakeDownloadLinks,
   wantsDailyAverage,
   wantsPortalLink,
@@ -155,7 +156,16 @@ describe("localize + sanitize", () => {
     const fake = "KPI ma'lumotlarini PDF shaklida yuklab olish uchun quyidagi havolani bosing: [KPI hisobotini yuklab olish]";
     const out = sanitizeAssistantReply(fake);
     assert.doesNotMatch(out, /\[KPI hisobotini yuklab olish\]/);
-    assert.match(out, /Dashboard → KPI|davomat PDF|agentlar excel/i);
+    assert.doesNotMatch(out, /\*{2,}/);
+    assert.match(out, /Dashboard → KPI/);
+  });
+
+  it("**** qolgan soxta PDF javobini to‘liq almashtiradi", () => {
+    const fake = "KPI ma’lumotlarini PDF shaklida yuklab olish uchun ****\nAgar boshqa format (Excel/CSV) kerak bo‘lsa, xabar bering.";
+    assert.equal(looksLikeFakeKpiDownload(fake), true);
+    const out = sanitizeAssistantReply(fake);
+    assert.equal(out, kpiFollowupReply());
+    assert.doesNotMatch(out, /\*{2,}|PDF shaklida/);
   });
 });
 

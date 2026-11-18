@@ -255,23 +255,44 @@ export function localizeUzbekReply(text: string): string {
   return out;
 }
 
+/** Soxta KPI PDF / bo‘sh **** havola javobi */
+export function looksLikeFakeKpiDownload(text: string): boolean {
+  const t = String(text || "");
+  if (/Yuklab olish tugmasini/i.test(t)) return false;
+  const low = t.toLowerCase();
+  if (!/kpi/.test(low)) return false;
+  if (/pdf\s*shaklida|yuklab\s*olish\s*uchun|quyidagi\s*havola|hisobotini\s*yuklab/.test(low)) return true;
+  if (/yuklab|pdf|havola/.test(low) && /\*{2,}|\[[^\]]*yuklab/i.test(t)) return true;
+  return false;
+}
+
 /** Soxta «yuklab olish» markdown havolalarini olib tashlash */
 export function stripFakeDownloadLinks(text: string): string {
   let out = String(text || "");
+  if (looksLikeFakeKpiDownload(out)) {
+    return kpiFollowupReply();
+  }
   const before = out;
   // [KPI hisobotini yuklab olish](...) yoki [yuklab olish]
   out = out.replace(/\[[^\]]*?(yuklab|download|hisobot|pdf|excel|csv)[^\]]*?\]\([^)]*\)/gi, "");
   out = out.replace(/\[[^\]]*?(yuklab\s*olish|KPI\s*hisobot|download)[^\]]*?\](?!\()/gi, "");
-  out = out.replace(/KPI\s*ma['‘`]?lumotlarini\s*PDF[^\n.]*(?:\.[^\n]*)?/gi, "");
+  out = out.replace(/KPI[\s\S]{0,40}PDF[\s\S]{0,160}/gi, "");
   out = out.replace(/quyidagi\s*havolani\s*bosing\s*:?\s*/gi, "");
-  if (out !== before && /yuklab|pdf|hisobot|havola/i.test(before) && !/Yuklab olish tugmasini/i.test(out)) {
-    out = `${out.trim()}\n\nFayl kerak bo‘lsa aniq yozing: «davomat PDF», «xodimlar excel» yoki KPI raqamlari uchun Dashboard → KPI ga kiring.`;
+  out = out.replace(/yuklab\s*olish\s*uchun\s*\*{0,8}/gi, "");
+  out = out.replace(/\*{2,}/g, "");
+  out = out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (out !== before.trim() && /yuklab|pdf|hisobot|havola/i.test(before) && !/Yuklab olish tugmasini/i.test(out)) {
+    if (!out || out.length < 40) return kpiFollowupReply();
+    out = `${out}\n\nFayl kerak bo‘lsa aniq yozing: «davomat PDF», «xodimlar excel» yoki KPI raqamlari uchun Dashboard → KPI ga kiring.`;
   }
   return out;
 }
 
 export function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
+  if (looksLikeFakeKpiDownload(out)) {
+    return kpiFollowupReply();
+  }
   out = out.replace(/```[\s\S]*?```/g, (block) => {
     if (/JVBERi0|UEsDB|base64|PK\x03\x04/i.test(block) || block.length > 500) return "";
     return block;
@@ -281,6 +302,9 @@ export function sanitizeAssistantReply(text: string): string {
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, "");
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
   out = stripFakeDownloadLinks(out);
+  if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /\*{2,}|yuklab\s*olish\s*uchun/i.test(out))) {
+    return kpiFollowupReply();
+  }
   // Tor UI: keng jadvalni olib tashlash — lekin login/portal/http jadvallarini saqlash
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
     if (/https?:\/\/|\/agent|\/zavod|login|portal|havola/i.test(table)) return table;
