@@ -1260,19 +1260,37 @@ function sanitizeAssistantReply(text: string): string {
 }
 
 function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; format: "pdf" | "xlsx" | "csv" } | null {
-  const wantsFile = /pdf|пдф|xlsx|excel|exel|csv|yuklab|скач|файл|fayl|hisobot\s*(ber|chiqar|tayyor)|export|скачать/.test(lower);
-  if (!wantsFile) return null;
+  const wantsDavomat = /davomat|посещаем/.test(lower);
+  const wantsStaff = /xodim|staff|сотруд/.test(lower);
+  const wantsKirim = /kirim\s*hisobot|yuk\s*(hisobot|excel|pdf)|shipment|приход|наклад/.test(lower)
+    || (/kirim|yuklar|yuk\b/.test(lower) && /pdf|xlsx|excel|csv|yuklab|fayl|hisobot/.test(lower) && !wantsDavomat);
+  // «bugungi kun hisobot / tizim hisobot» — fayl emas, kunlik brifing
+  if (/hisobot/.test(lower) && /bugun|kun\s*buyicha|tizim|umumiy|nima\s*boldi|holat/.test(lower)
+    && !wantsDavomat && !wantsKirim && !wantsStaff
+    && !/pdf|пдф|xlsx|excel|csv/.test(lower)) {
+    return null;
+  }
+  const explicitFile = /pdf|пдф|xlsx|excel|exel|csv|yuklab|скач|файл|fayl|export|скачать/.test(lower);
+  const hisobotFile = /hisobot\s*(ber|chiqar|tayyor|ol)/.test(lower) && (wantsDavomat || wantsKirim || wantsStaff);
+  if (!explicitFile && !hisobotFile) return null;
   const format: "pdf" | "xlsx" | "csv" = /xlsx|excel|exel/.test(lower)
     ? "xlsx"
     : /csv/.test(lower)
       ? "csv"
       : "pdf";
-  if (/xodim|staff|сотруд/.test(lower)) return { kind: "staff", format: format === "pdf" ? "xlsx" : format };
-  if (/kirim|yuk\b|shipment|приход|наклад/.test(lower) && !/davomat|посещаем/.test(lower)) {
-    return { kind: "kirim", format: format === "pdf" ? "xlsx" : format };
-  }
-  // «hisobot» / «pdf» yolg‘iz → odatda davomat
-  return { kind: "davomat", format };
+  if (wantsStaff) return { kind: "staff", format: format === "pdf" ? "xlsx" : format };
+  if (wantsKirim && !wantsDavomat) return { kind: "kirim", format: format === "pdf" ? "xlsx" : format };
+  if (wantsDavomat) return { kind: "davomat", format };
+  // Aniq fayl so‘ralgan, lekin turi yo‘q — taxmin qilmaymiz
+  return null;
+}
+
+function isDailyBriefIntent(lower: string) {
+  if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa)|umumiy\s*hisobot/.test(lower)) return true;
+  if (/bugungi?\s*kun|kun\s*buyicha|bugun\s*nima\s*boldi|bugun\s*holat/.test(lower) && /hisobot|xulosa|nima\s*boldi|ayt|ber/.test(lower)) return true;
+  if (/hisobot\s*(ber|chiqar|ayt|ol)/.test(lower) && /bugun|kun|tizim|umumiy/.test(lower) && !/davomat|посещаем|pdf|xlsx|excel/.test(lower)) return true;
+  if (/^salom\b/.test(lower) && /bugun|kun/.test(lower) && /hisobot/.test(lower) && !/davomat|pdf|xlsx/.test(lower)) return true;
+  return false;
 }
 
 function isShipmentTopic(lower: string): boolean {
@@ -1640,7 +1658,78 @@ async function tryFastLocalTask(
     return { reply, model: "local-fast", tools, files };
   }
 
-  // 1) Fayl / hisobot
+  // 0b) Bugungi tizim hisoboti (davomat PDF emas!)
+  if (isDailyBriefIntent(lower)) {
+    const today = tashkentParts().date;
+    const sales = await run("sales_summary", { days: 1 }) as Record<string, unknown> | null;
+    const board = await run("office_today", {}) as Record<string, unknown> | null;
+    const kirim = await run("latest_kirim", { limit: 20, skipMs: true }) as Record<string, unknown> | null;
+    const local = Array.isArray(kirim?.localShipments) ? kirim!.localShipments as Array<Record<string, unknown>> : [];
+    const todays = local.filter((s) => String(s.date || "") === today);
+    const posted = todays.filter((s) => {
+      const p = s.moySkladgaYozilgan ?? s.posted;
+      return p === true || p === "ha" || p === "yozilgan";
+    });
+    const unposted = todays.filter((s) => !posted.includes(s));
+    const people = listLocalPeople();
+    const tabel = tabelDay(today, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
+    const present = Array.isArray(board?.rows) ? (board!.rows as Array<Record<string, unknown>>).filter((r) => r.inAt) : [];
+    const logs = await run("recent_logs", { minutes: 180 }) as { lines?: string[] } | null;
+    const logLines = (logs?.lines || []).slice(-5);
+    const salesAmt = sales?.salesAmount != null ? formatSum(Number(sales.salesAmount)) : null;
+
+    // Tezkor audit faqat bugungi yuklar uchun (qisqa)
+    const auditLines: string[] = [];
+    for (const s of todays.slice(0, 6)) {
+      const audit = await run("audit_shipment", { number: String(s.number) }) as Record<string, unknown> | null;
+      if (!audit || audit.error) {
+        auditLines.push(`• ${s.number}: tekshirib bo‘lmadi`);
+        continue;
+      }
+      const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
+      auditLines.push(`• ${audit.number}: ${issues.length ? `kamchilik ${issues.length}` : "OK"}`);
+    }
+
+    const reply = [
+      `Bugungi hisobot — ${today}`,
+      "",
+      "1) Yuk / kirim",
+      todays.length
+        ? [
+          `• Jami: ${todays.length} ta · MS ga yozilgan: ${posted.length} · yozilmagan: ${unposted.length}`,
+          ...todays.map((s) => {
+            const p = s.moySkladgaYozilgan ?? s.posted;
+            const holat = p === true || p === "ha" || p === "yozilgan" ? "MS ga yozilgan" : "MS yo‘q";
+            return `  – ${s.number} · ${localizeStatus(s.status)} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
+          }),
+          auditLines.length ? `• Tekshiruv:\n${auditLines.join("\n")}` : "",
+        ].filter(Boolean).join("\n")
+        : "• Bugun yuk xati yo‘q.",
+      "",
+      "2) Savdo",
+      `• Bugungi savdo: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
+      sales?.incomingToday != null ? `• Bugungi kirim (katalog): ${formatQty(Number(sales.incomingToday))} dona` : "",
+      "",
+      "3) Davomat",
+      `• Xodimlar: ${board?.total ?? people.length} · kelgan: ${board?.present ?? present.length} · kelmagan: ${board?.absent ?? "—"} · kechikkan: ${late.length}`,
+      "",
+      "4) Ogohlantirishlar",
+      logLines.length
+        ? logLines.map((l) => `• ${l.slice(0, 140)}`).join("\n")
+        : "• Oxirgi 3 soatda ogohlantirish/xato yo‘q.",
+      "",
+      unposted.length
+        ? `Diqqat: ${unposted.length} ta yuk hali MS ga yozilmagan.`
+        : todays.length
+          ? "Xulosa: bugungi yuklar MS ga yozilgan, asosiy tekshiruvlar OK."
+          : "Xulosa: kunlik holat yig‘ildi.",
+    ].filter((line, i, arr) => !(line === "" && arr[i - 1] === "")).join("\n");
+
+    return { reply, model: "local-fast", tools, files };
+  }
+
+  // 1) Fayl / hisobot (faqat aniq davomat/kirim/xodim + fayl)
   const exportWanted = detectExport(lower);
   if (exportWanted) {
     await run("export_report", exportWanted);
