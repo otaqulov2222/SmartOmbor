@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, Trash2, Wallet, X } from 'lucide-react';
+import {
+  AlertTriangle, Banknote, CalendarDays, ChevronLeft, ChevronRight, CircleAlert,
+  Pencil, Percent, Plus, RefreshCw, Search, Trash2, Wallet, X,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/i18n';
 import { officeHeaders } from '@/office';
@@ -66,6 +69,23 @@ function shiftMonth(month: string, by: number) {
 }
 function money(n: number) {
   return new Intl.NumberFormat('uz-UZ').format(Math.round(n || 0));
+}
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const a = parts[0]?.[0] || '?';
+  const b = parts.length > 1 ? parts[parts.length - 1][0] : (parts[0]?.[1] || '');
+  return (a + b).toUpperCase();
+}
+function MoneyCell({ value, emptyLabel }: { value: number; emptyLabel?: string }) {
+  if (!value && emptyLabel) {
+    return <span className="pay-edit is-empty">{emptyLabel}</span>;
+  }
+  return (
+    <span>
+      {money(value)}
+      <span className="pay-som">so‘m</span>
+    </span>
+  );
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -191,60 +211,110 @@ export function OfficePayrollPage() {
     onSuccess: () => invalidate(),
   });
 
+  const fund = data?.summary.salaryFund || 0;
+  const needSalary = !query.isLoading && fund <= 0 && (data?.people.length || 0) > 0;
+
   return (
     <div className="pay">
       <div className="pay-head">
         <div>
-          <h1><Wallet size={22} /> {t('nav.officePayroll')}</h1>
+          <div className="pay-head-title">
+            <h1><Wallet size={22} strokeWidth={2.1} /> {t('nav.officePayroll')}</h1>
+            <span className="pay-badge"><CalendarDays size={13} /> {month}</span>
+          </div>
           <p className="pay-sub">{t('pay.sub')}</p>
         </div>
         <div className="pay-month">
-          <button type="button" className="btn" onClick={() => setMonth((m) => shiftMonth(m, -1))} aria-label="prev">
+          <button type="button" onClick={() => setMonth((m) => shiftMonth(m, -1))} aria-label="prev">
             <ChevronLeft size={16} />
           </button>
           <b>{month}</b>
-          <button type="button" className="btn" onClick={() => setMonth((m) => shiftMonth(m, 1))} aria-label="next">
+          <button type="button" onClick={() => setMonth((m) => shiftMonth(m, 1))} aria-label="next">
             <ChevronRight size={16} />
           </button>
-          <button type="button" className="btn" onClick={() => query.refetch()} disabled={query.isFetching}>
+          <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} aria-label="refresh">
             <RefreshCw size={15} className={query.isFetching ? 'pay-spin' : undefined} />
           </button>
         </div>
       </div>
 
-      <div className="pay-settings">
-        <label>
-          <span>{t('pay.latePct')}</span>
-          <div className="pay-settings-row">
-            <input
-              className="input"
-              type="number"
-              min={0}
-              max={100}
-              value={latePct}
-              onChange={(e) => setLatePct(e.target.value)}
-            />
-            <button type="button" className="btn primary" disabled={saveSettings.isPending} onClick={() => saveSettings.mutate()}>
-              {t('pay.save')}
-            </button>
+      <div className="pay-panel">
+        <div className="pay-panel-grid">
+          <div>
+            <div className="pay-label"><Percent size={13} /> {t('pay.latePct')}</div>
+            <div className="pay-settings-row">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={100}
+                value={latePct}
+                onChange={(e) => setLatePct(e.target.value)}
+              />
+              <button type="button" className="btn primary" disabled={saveSettings.isPending} onClick={() => saveSettings.mutate()}>
+                {t('pay.save')}
+              </button>
+            </div>
+            <p className="pay-hint">{t('pay.latePctHint')}</p>
           </div>
-          <small>{t('pay.latePctHint')}</small>
-        </label>
-        <div className="pay-meta">
-          <span>{t('pay.workdays')}: <b>{data?.workdays ?? '—'}</b></span>
-          <span>{data?.from} → {data?.to}</span>
+          <div className="pay-meta">
+            <div className="pay-meta-card">
+              <span>{t('pay.workdays')}</span>
+              <b>{data?.workdays ?? '—'}</b>
+              <small>{data?.from || '—'} → {data?.to || '—'}</small>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="pay-stats">
-        <article><span>{t('pay.fund')}</span><b>{money(data?.summary.salaryFund || 0)}</b></article>
-        <article className="is-bad"><span>{t('pay.fines')}</span><b>{money(data?.summary.fineTotal || 0)}</b></article>
-        <article className="is-warn"><span>{t('pay.advances')}</span><b>{money(data?.summary.advancesTotal || 0)}</b></article>
-        <article className="is-ok"><span>{t('pay.net')}</span><b>{money(data?.summary.netTotal || 0)}</b></article>
+        <article className="pay-stat is-blue">
+          <div className="pay-stat-head">
+            <span>{t('pay.fund')}</span>
+            <span className="pay-stat-ico"><Banknote size={16} /></span>
+          </div>
+          <strong>{money(data?.summary.salaryFund || 0)}<span className="pay-som">so‘m</span></strong>
+          <small>{data?.summary.headcount || 0} {t('pay.employee').toLowerCase()}</small>
+        </article>
+        <article className="pay-stat is-red">
+          <div className="pay-stat-head">
+            <span>{t('pay.fines')}</span>
+            <span className="pay-stat-ico"><CircleAlert size={16} /></span>
+          </div>
+          <strong>{money(data?.summary.fineTotal || 0)}<span className="pay-som">so‘m</span></strong>
+          <small>{t('pay.absent')} / {t('pay.late')}</small>
+        </article>
+        <article className="pay-stat is-amber">
+          <div className="pay-stat-head">
+            <span>{t('pay.advances')}</span>
+            <span className="pay-stat-ico"><Wallet size={16} /></span>
+          </div>
+          <strong>{money(data?.summary.advancesTotal || 0)}<span className="pay-som">so‘m</span></strong>
+          <small>{t('pay.advances')}</small>
+        </article>
+        <article className="pay-stat is-green">
+          <div className="pay-stat-head">
+            <span>{t('pay.net')}</span>
+            <span className="pay-stat-ico"><Banknote size={16} /></span>
+          </div>
+          <strong>{money(data?.summary.netTotal || 0)}<span className="pay-som">so‘m</span></strong>
+          <small>{t('pay.net')}</small>
+        </article>
       </div>
 
+      {needSalary ? (
+        <p className="pay-banner">
+          <AlertTriangle size={15} />
+          <span>{t('pay.needSalary')}</span>
+        </p>
+      ) : null}
+
       <div className="pay-tools">
-        <input className="input search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('pay.search')} />
+        <label className="pay-search">
+          <Search size={15} />
+          <input className="input search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('pay.search')} />
+        </label>
+        <span className="pay-count">{people.length} / {data?.people.length || 0}</span>
       </div>
 
       {query.isError ? <p className="pay-err">{(query.error as Error).message}</p> : null}
@@ -254,13 +324,13 @@ export function OfficePayrollPage() {
           <thead>
             <tr>
               <th>{t('pay.employee')}</th>
-              <th>{t('pay.monthly')}</th>
-              <th>{t('pay.daily')}</th>
-              <th>{t('pay.absent')}</th>
-              <th>{t('pay.late')}</th>
-              <th>{t('pay.fines')}</th>
-              <th>{t('pay.advances')}</th>
-              <th>{t('pay.net')}</th>
+              <th className="is-num">{t('pay.monthly')}</th>
+              <th className="is-num">{t('pay.daily')}</th>
+              <th className="is-num">{t('pay.absent')}</th>
+              <th className="is-num">{t('pay.late')}</th>
+              <th className="is-num">{t('pay.fines')}</th>
+              <th className="is-num">{t('pay.advances')}</th>
+              <th className="is-num">{t('pay.net')}</th>
               <th />
             </tr>
           </thead>
@@ -268,10 +338,15 @@ export function OfficePayrollPage() {
             {people.map((p) => (
               <tr key={p.accountId}>
                 <td data-label={t('pay.employee')}>
-                  <b>{p.name}</b>
-                  <div className="pay-muted">{p.login}</div>
+                  <div className="pay-person">
+                    <span className="pay-avatar">{initials(p.name)}</span>
+                    <span>
+                      <b>{p.name}</b>
+                      <small>{p.login}</small>
+                    </span>
+                  </div>
                 </td>
-                <td data-label={t('pay.monthly')}>
+                <td className="is-num" data-label={t('pay.monthly')}>
                   {salaryEdit?.id === p.accountId ? (
                     <span className="pay-inline">
                       <input
@@ -295,21 +370,37 @@ export function OfficePayrollPage() {
                   ) : (
                     <button
                       type="button"
-                      className="pay-edit"
+                      className={`pay-edit ${p.monthly ? '' : 'is-empty'}`}
                       onClick={() => setSalaryEdit({ id: p.accountId, value: String(p.monthly || '') })}
                     >
-                      {money(p.monthly)} <Pencil size={13} />
+                      {p.monthly ? <>{money(p.monthly)} <span className="pay-som">so‘m</span></> : t('pay.setSalary')}
+                      {' '}<Pencil size={13} />
                     </button>
                   )}
                 </td>
-                <td data-label={t('pay.daily')}>{money(p.daily)}</td>
-                <td data-label={t('pay.absent')}>{p.absentDays}</td>
-                <td data-label={t('pay.late')}>{p.lateDays}</td>
-                <td data-label={t('pay.fines')}>{money(p.fineTotal)}</td>
-                <td data-label={t('pay.advances')}>{money(p.advancesTotal)}</td>
-                <td data-label={t('pay.net')}><b>{money(p.net)}</b></td>
+                <td className="is-num" data-label={t('pay.daily')}>
+                  <MoneyCell value={p.daily} emptyLabel="—" />
+                </td>
+                <td className="is-num" data-label={t('pay.absent')}>
+                  <span className={`pay-chip ${p.absentDays ? 'is-bad' : ''}`}>{p.absentDays}</span>
+                </td>
+                <td className="is-num" data-label={t('pay.late')}>
+                  <span className={`pay-chip ${p.lateDays ? 'is-warn' : ''}`}>{p.lateDays}</span>
+                </td>
+                <td className="is-num" data-label={t('pay.fines')}>
+                  <MoneyCell value={p.fineTotal} />
+                </td>
+                <td className="is-num" data-label={t('pay.advances')}>
+                  <MoneyCell value={p.advancesTotal} />
+                </td>
+                <td className="is-num" data-label={t('pay.net')}>
+                  <span className={`pay-net ${p.net < 0 ? 'is-neg' : p.net === 0 ? 'is-zero' : ''}`}>
+                    {money(p.net)}
+                    <span className="pay-som">so‘m</span>
+                  </span>
+                </td>
                 <td>
-                  <button type="button" className="btn" onClick={() => setDetailId(p.accountId)}>
+                  <button type="button" className="pay-detail-btn" onClick={() => setDetailId(p.accountId)}>
                     {t('pay.detail')}
                   </button>
                 </td>
@@ -326,13 +417,30 @@ export function OfficePayrollPage() {
         <div className="pay-drawer-bg" onClick={() => setDetailId(null)}>
           <aside className="pay-drawer" onClick={(e) => e.stopPropagation()}>
             <div className="pay-drawer-top">
-              <div>
-                <h2>{selected.name}</h2>
-                <p className="pay-muted">{selected.login} · {t('pay.net')}: {money(selected.net)}</p>
+              <div className="pay-person">
+                <span className="pay-avatar">{initials(selected.name)}</span>
+                <span>
+                  <h2>{selected.name}</h2>
+                  <p className="pay-muted">{selected.login}</p>
+                </span>
               </div>
               <button type="button" className="icon-btn" onClick={() => setDetailId(null)} aria-label="close">
                 <X size={18} />
               </button>
+            </div>
+            <div className="pay-drawer-summary">
+              <article>
+                <span>{t('pay.monthly')}</span>
+                <b>{money(selected.monthly)}</b>
+              </article>
+              <article>
+                <span>{t('pay.fines')}</span>
+                <b>{money(selected.fineTotal)}</b>
+              </article>
+              <article>
+                <span>{t('pay.net')}</span>
+                <b className={selected.net < 0 ? 'pay-net is-neg' : 'pay-net'}>{money(selected.net)}</b>
+              </article>
             </div>
 
             <section>
