@@ -436,36 +436,36 @@ export function OfficePayrollPage() {
 
       {setupOpen ? (
         <div className="pay-setup">
-          <div className="pay-setup-cards">
-            <div className="pay-setup-card">
-              <div className="pay-setup-card-title">{t('pay.workHours')}</div>
+          <div className="pay-setup-row">
+            <div className="pay-setup-field">
+              <span className="pay-setup-label">{t('pay.workHours')}</span>
               <div className="pay-setup-times">
-                <label>
-                  <em>{t('pay.from')}</em>
-                  <input
-                    className="input"
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="06:00"
-                    maxLength={5}
-                    value={siteStart}
-                    onChange={(e) => setSiteStart(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
-                  />
-                </label>
+                <input
+                  className="input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="06:00"
+                  maxLength={5}
+                  aria-label={t('pay.from')}
+                  value={siteStart}
+                  onChange={(e) => setSiteStart(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
+                />
                 <span className="pay-setup-dash">—</span>
-                <label>
-                  <em>{t('pay.to')}</em>
-                  <input
-                    className="input"
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="18:00"
-                    maxLength={5}
-                    value={siteEnd}
-                    onChange={(e) => setSiteEnd(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
-                  />
-                </label>
+                <input
+                  className="input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="18:00"
+                  maxLength={5}
+                  aria-label={t('pay.to')}
+                  value={siteEnd}
+                  onChange={(e) => setSiteEnd(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
+                />
               </div>
+            </div>
+
+            <div className="pay-setup-field pay-setup-field-days">
+              <span className="pay-setup-label">{t('pay.workdays')}</span>
               <div className="pay-days" role="group" aria-label={t('pay.workdays')}>
                 {DAY_OPTS.map((d) => {
                   const off = siteOffDays.includes(d.id);
@@ -490,11 +490,10 @@ export function OfficePayrollPage() {
                   );
                 })}
               </div>
-              <p className="pay-hint">{t('pay.workHoursHintShort')}</p>
             </div>
 
-            <div className="pay-setup-card">
-              <div className="pay-setup-card-title">{t('pay.latePctShort')}</div>
+            <div className="pay-setup-field">
+              <span className="pay-setup-label">{t('pay.latePctShort')}</span>
               <div className="pay-setup-late">
                 <input
                   className="input"
@@ -506,10 +505,8 @@ export function OfficePayrollPage() {
                 />
                 <span className="pay-setup-unit">%</span>
               </div>
-              <p className="pay-hint">{t('pay.latePctHint')}</p>
             </div>
-          </div>
-          <div className="pay-setup-foot">
+
             <button
               type="button"
               className="pay-setup-save"
@@ -522,6 +519,9 @@ export function OfficePayrollPage() {
               {saveSiteHours.isPending || saveSettings.isPending ? t('pay.saving') : t('pay.save')}
             </button>
           </div>
+          <p className="pay-hint">
+            {t('pay.workHoursHintShort')} · {t('pay.latePctHint')}
+          </p>
         </div>
       ) : null}
 
