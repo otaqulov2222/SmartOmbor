@@ -6,6 +6,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { clearAgentToken, kpiFetch, readAgentToken, readStaffToken, saveAgentToken, uzs } from './api';
+import { AgentLiveGpsTracker } from './agent-live-gps';
+import { orderStopsByNearest } from './route-order';
 import { RouteMap, type RouteStop } from './route-map';
 import './kpi.css';
 
@@ -203,118 +205,33 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
     setMapFullscreen(true);
   };
 
+  // Asosiy tizimda LocalShell GPS yozadi; kabinet faqat xarita UI uchun o‘qiydi.
+  // /agent loginida esa shu yerda to‘liq tracker ishlaydi.
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setGpsHint('Telefon GPS qo‘llab-quvvatlamaydi.');
-      return;
-    }
-    let lastPosted = 0;
-    let locked: {
-      lat: number;
-      lng: number;
-      accuracy: number;
-      heading: number | null;
-      speed: number | null;
-      at: number;
-    } | null = null;
-    // Yurish kechikmasin: kichik qadam ham o‘tsin; faqat mikro-shovqin ushlansin
-    const NOISE_M = 0.45;
-    const STEP_M = 0.7;
-    const BAD_ACC_M = 80;
-    const rad = (n: number) => (n * Math.PI) / 180;
-    const distM = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
-      const dLat = rad(b.lat - a.lat);
-      const dLng = rad(b.lng - a.lng);
-      const x =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
-      return 2 * 6371000 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-    };
-    const onGpsFail = () => {
-      setGpsHint('GPS ruxsati yo‘q yoki o‘chiq. Sozlamadan GPS ni yoqing.');
-    };
-    const sendLoc = (pos: GeolocationPosition) => {
+    if (mode === 'agent') return;
+    if (!navigator.geolocation) return;
+    const onPos = (pos: GeolocationPosition) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
       const accuracy = Number(pos.coords.accuracy);
-      const speed = pos.coords.speed != null && Number.isFinite(pos.coords.speed) ? Math.max(0, pos.coords.speed) : null;
-      const rawHeading =
-        pos.coords.heading != null && Number.isFinite(pos.coords.heading) && pos.coords.heading >= 0
-          ? pos.coords.heading
-          : null;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      if (!Number.isFinite(accuracy) || accuracy <= 0) return;
-      if (accuracy > BAD_ACC_M && locked && locked.accuracy + 10 < accuracy) return;
-
-      const moved = locked ? distM(locked, { lat, lng }) : Infinity;
-      const speedWalk = speed != null && speed >= 0.25;
-      const walking = speedWalk || moved >= STEP_M;
-
-      // Tinch: faqat ±0.45 m ichidagi tebranishni yutamiz
-      if (locked && !walking && moved < NOISE_M) {
-        if (accuracy + 0.5 < locked.accuracy) {
-          locked = { ...locked, accuracy, at: Date.now() };
-          setCoords({
-            lat: locked.lat,
-            lng: locked.lng,
-            accuracy: locked.accuracy,
-            heading: null,
-            speed: 0,
-          });
-        }
-        setGpsHint(null);
-        return;
-      }
-
-      // Aniq yomonlashgan accuracy + kichik sakrash = shovqin (yurishni bloklamaydi)
-      if (
-        locked &&
-        !speedWalk &&
-        moved < 1.5 &&
-        accuracy > locked.accuracy + 30
-      ) {
-        setGpsHint(null);
-        return;
-      }
-
-      const next = {
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(accuracy)) return;
+      setCoords({
         lat,
         lng,
         accuracy,
-        heading: walking ? rawHeading : null,
-        speed: speedWalk ? speed : walking ? Math.max(speed ?? 0, 0.5) : 0,
-      };
-      locked = { ...next, at: Date.now() };
+        heading:
+          pos.coords.heading != null && Number.isFinite(pos.coords.heading) && pos.coords.heading >= 0
+            ? pos.coords.heading
+            : null,
+        speed: pos.coords.speed != null && Number.isFinite(pos.coords.speed) ? Math.max(0, pos.coords.speed) : null,
+      });
       setGpsHint(null);
-      setCoords(next);
-      const now = Date.now();
-      // Yurishda serverga tezroq yozamiz — admin ham kam kechiksin
-      const postEvery = walking ? 3_500 : 8_000;
-      if (now - lastPosted < postEvery) return;
-      lastPosted = now;
-      void kpiFetch('/kpi/agent/location', {
-        method: 'POST',
-        body: JSON.stringify({
-          lat: next.lat,
-          lng: next.lng,
-          accuracy: next.accuracy,
-          heading: next.heading,
-          source: 'live',
-        }),
-      }, mode).catch(() => undefined);
     };
-    navigator.geolocation.getCurrentPosition(sendLoc, onGpsFail, {
-      enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 0,
-    });
-    const watchId = navigator.geolocation.watchPosition(sendLoc, onGpsFail, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 10000,
-    });
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [mode, cache]);
+    const onFail = () => setGpsHint('GPS ruxsati yo‘q yoki o‘chiq. Sozlamadan GPS ni yoqing.');
+    navigator.geolocation.getCurrentPosition(onPos, onFail, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
+    const id = navigator.geolocation.watchPosition(onPos, onFail, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+    return () => navigator.geolocation.clearWatch(id);
+  }, [mode]);
 
   const readFreshGps = () =>
     new Promise<{ lat: number; lng: number; accuracy: number; heading: number | null }>((resolve, reject) => {
@@ -388,8 +305,15 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   const d = q.data;
   const s = d?.summary;
-  // Full day route = ALL assigned customers (1→2→3…), server already nearest-neighbor ordered
-  const routeStops = useMemo(() => d?.customers || [], [d?.customers]);
+  // Jonli GPS dan yaqinlik bo‘yicha qayta tartib — yo‘nalish ham shunga bog‘lanadi
+  const routeStops = useMemo(() => {
+    const origin = coords ? { lat: coords.lat, lng: coords.lng } : (
+      d?.agent?.lat != null && d?.agent?.lng != null
+        ? { lat: Number(d.agent.lat), lng: Number(d.agent.lng) }
+        : null
+    );
+    return orderStopsByNearest(d?.customers || [], origin);
+  }, [d?.customers, d?.agent?.lat, d?.agent?.lng, coords?.lat, coords?.lng]);
   const nextStop = routeStops.find((c) => c.isNext) || routeStops.find((c) => !c.visitedToday) || null;
   const targetCount = s ? (s.visitPlanCount || s.customersCount || 1) : 1;
   const visitPct = s
@@ -465,6 +389,15 @@ function AgentCabinetView({ standalone, onLogout }: { standalone: boolean; onLog
 
   return (
     <div className="ag-wrap" data-testid="page-agent-portal">
+      {mode === 'agent' ? (
+        <AgentLiveGpsTracker
+          mode="agent"
+          onCoords={(c) => {
+            if (c) setCoords(c);
+          }}
+          onHint={setGpsHint}
+        />
+      ) : null}
       <section className="ag-hero">
         <div className="ag-hero-main">
           <div className="ag-avatar">{(d?.agent.fullName || 'A').slice(0, 1).toUpperCase()}</div>

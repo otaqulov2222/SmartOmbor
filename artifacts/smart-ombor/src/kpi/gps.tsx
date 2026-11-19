@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { kpiFetch, uzs } from '@/kpi/api';
+import { orderStopsByNearest } from './route-order';
 import { RouteMap, type RouteStop } from './route-map';
 import './kpi.css';
 
@@ -179,10 +180,16 @@ export function GpsPage() {
     const s = agentWatch(a, workActive);
     return s === 'silent' || s === 'no_signal';
   });
-  const visitedCount = (d?.points || []).filter((p) => p.visitedToday).length;
   const selectedAgent = (d?.agents || []).find((a) => a.id === currentAgentId);
   const selectedLive = selectedAgent ? isAgentLive(selectedAgent, workActive) : false;
   const selectedHasPos = selectedAgent ? hasDayPosition(selectedAgent) : false;
+  // Jadval + xarita + OSRM — agent joyidan yaqinlik bo‘yicha qayta tartib
+  const routeOrigin =
+    selectedHasPos && selectedAgent?.lat != null && selectedAgent?.lng != null
+      ? { lat: selectedAgent.lat, lng: selectedAgent.lng }
+      : null;
+  const orderedPoints = orderStopsByNearest(d?.points || [], routeOrigin);
+  const visitedCount = orderedPoints.filter((p) => p.visitedToday).length;
 
   const focusStop = (stopId: string) => {
     setSelectedStopId(stopId);
@@ -305,15 +312,11 @@ export function GpsPage() {
 
       {/* Live navigator-style map for selected agent (admin sees same trail) */}
       <RouteMap
-        stops={(d?.points || []) as RouteStop[]}
+        stops={orderedPoints as RouteStop[]}
         agents={selectedAgent && selectedHasPos ? [selectedAgent] : []}
         agentName={selectedAgent?.fullName}
         viewer="admin"
-        agentPos={
-          selectedHasPos && selectedAgent?.lat != null && selectedAgent?.lng != null
-            ? { lat: selectedAgent.lat, lng: selectedAgent.lng }
-            : null
-        }
+        agentPos={routeOrigin}
         follow={selectedLive}
         track={d?.agentTrack || []}
         selectedStopId={selectedStopId}
@@ -327,7 +330,7 @@ export function GpsPage() {
 
       <div className="kpi-seg">
         <button type="button" className={sub === 'points' ? 'active' : ''} onClick={() => setSub('points')}>
-          <MapPin size={14} /> Marshrut nuqtalari 1 → {d?.points.length || 0}
+          <MapPin size={14} /> Marshrut nuqtalari 1 → {orderedPoints.length}
         </button>
         <button type="button" className={sub === 'agents' ? 'active' : ''} onClick={() => setSub('agents')}>
           <Users size={14} /> Agentlar holati ({d?.agents.length || 0})
@@ -352,10 +355,10 @@ export function GpsPage() {
               </tr>
             </thead>
             <tbody>
-              {(d?.points || []).map((p) => {
+              {orderedPoints.map((p) => {
                 const isEd = coordEdit?.id === p.id;
                 return (
-                  <tr key={p.id} onClick={() => setSelectedStopId(p.id)} style={{ cursor: 'pointer' }}>
+                  <tr key={p.id} onClick={() => { setSelectedStopId(p.id); focusStop(p.id); }} style={{ cursor: 'pointer' }}>
                     <td data-label="#">
                       <span className={`ag-stop-num ${p.visitedToday ? 'is-done' : p.isNext ? 'is-next' : ''}`}>
                         {p.visitedToday ? '✓' : p.step}

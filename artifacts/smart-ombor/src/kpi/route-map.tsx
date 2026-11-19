@@ -1,6 +1,7 @@
 import { CheckCircle2, Crosshair, Maximize2, Minimize2, Map as MapIcon, Navigation, Route, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { kpiFetch, readAgentToken } from './api';
+import { orderStopsByNearest } from './route-order';
 
 export type RouteStop = {
   id: string;
@@ -310,13 +311,6 @@ export function RouteMap({
     }
   }, [follow]);
 
-  const doneCount = stops.filter((s) => s.visitedToday).length;
-  const nextStop = useMemo(
-    () => stops.find((s) => s.isNext) || stops.find((s) => !s.visitedToday) || null,
-    [stops],
-  );
-  const progressPct = stops.length ? Math.round((doneCount / stops.length) * 100) : 0;
-
   const primaryAgent = agents.find((a) => a.lat != null && a.lng != null);
   const livePos: LatLng | null = useMemo(() => {
     if (agentPos?.lat != null && agentPos?.lng != null) {
@@ -345,10 +339,25 @@ export function RouteMap({
   const hasLiveGps = Boolean(livePos);
   livePosRef.current = livePos;
 
+  // Masofa bo‘yicha qayta tartib — yo‘nalish/OSRM shu ketma-ketlikka bog‘lanadi
+  const orderedStops = useMemo(() => {
+    const origin = livePos
+      ? { lat: livePos.lat, lng: livePos.lng }
+      : null;
+    return orderStopsByNearest(stops, origin) as RouteStop[];
+  }, [stops, livePos?.lat, livePos?.lng]);
+
+  const doneCount = orderedStops.filter((s) => s.visitedToday).length;
+  const nextStop = useMemo(
+    () => orderedStops.find((s) => s.isNext) || orderedStops.find((s) => !s.visitedToday) || null,
+    [orderedStops],
+  );
+  const progressPct = orderedStops.length ? Math.round((doneCount / orderedStops.length) * 100) : 0;
+
   useEffect(() => {
     if (!mapReady || !focusStopId || !focusNonce) return;
     if (lastFocusNonceRef.current === focusNonce) return;
-    const stop = stops.find((s) => s.id === focusStopId);
+    const stop = orderedStops.find((s) => s.id === focusStopId);
     if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return;
     lastFocusNonceRef.current = focusNonce;
     const map = mapRef.current;
@@ -360,7 +369,7 @@ export function RouteMap({
     if (live) pts.push([live.lat, live.lng]);
     if (pts.length > 1) map.fitBounds(pts, { padding: [56, 56], maxZoom: 15 });
     else map.setView(pts[0], Math.max(map.getZoom?.() || 14, 15), { animate: true });
-  }, [mapReady, focusStopId, focusNonce, stops]);
+  }, [mapReady, focusStopId, focusNonce, orderedStops]);
 
   useEffect(() => {
     let alive = true;
@@ -503,7 +512,7 @@ export function RouteMap({
     const layer = stopsLayerRef.current;
     if (!L || !layer) return;
     layer.clearLayers();
-    for (const s of stops) {
+    for (const s of orderedStops) {
       if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
       const cls = s.visitedToday ? 'is-done' : s.isNext ? 'is-next' : 'is-wait';
       const label = s.visitedToday ? `${s.step}✓` : String(s.step);
@@ -517,7 +526,7 @@ export function RouteMap({
       const marker = L.marker([s.lat, s.lng], { icon }).addTo(layer);
       marker.on('click', () => onSelectStopRef.current?.(s));
     }
-  }, [mapReady, stops, selectedStopId]);
+  }, [mapReady, orderedStops, selectedStopId]);
 
   // Track
   useEffect(() => {
@@ -702,12 +711,14 @@ export function RouteMap({
     }
   }, [mapReady, livePos, nextStop, compassHeading, agentName, primaryAgent]);
 
-  const stopsKey = useMemo(
-    () => stops.map((s) => `${s.id}:${s.visitedToday ? 1 : 0}:${s.lat.toFixed(5)},${s.lng.toFixed(5)}`).join('|'),
-    [stops],
-  );
+  const stopsKey = useMemo(() => {
+    const originKey = livePos
+      ? `${livePos.lat.toFixed(4)},${livePos.lng.toFixed(4)}`
+      : 'none';
+    return `${originKey}|${orderedStops.map((s) => `${s.step}:${s.id}:${s.visitedToday ? 1 : 0}`).join('|')}`;
+  }, [orderedStops, livePos?.lat, livePos?.lng]);
 
-  // Done (yashil) + plan (oltingugurt) — kamroq yangilanadi
+  // Done (yashil) + plan (oltingugurt) — tartib o‘zgarsa OSRM qayta chiziladi
   useEffect(() => {
     if (!mapReady) return;
     let alive = true;
@@ -718,7 +729,7 @@ export function RouteMap({
 
     const timer = window.setTimeout(() => {
       void (async () => {
-        const valid = stops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+        const valid = orderedStops.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
         if (!valid.length) {
           if (runId !== routeDrawGenRef.current) return;
           layer.clearLayers();
@@ -732,6 +743,15 @@ export function RouteMap({
             a: [doneStops[i].lat, doneStops[i].lng],
             b: [doneStops[i + 1].lat, doneStops[i + 1].lng],
             kind: 'done',
+          });
+        }
+        // Agent → 1-chi nuqta (yo‘nalish boshlanishi)
+        const live = livePosRef.current;
+        if (live && pending.length) {
+          pairs.push({
+            a: [live.lat, live.lng],
+            b: [pending[0].lat, pending[0].lng],
+            kind: 'plan',
           });
         }
         for (let i = 0; i < pending.length - 1; i += 1) {
@@ -767,7 +787,7 @@ export function RouteMap({
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [mapReady, stopsKey, stops]);
+  }, [mapReady, stopsKey, orderedStops]);
 
   // Active live→next: OSRM faqat yangi nuqta / off-route / katta siljishda
   useEffect(() => {
@@ -850,12 +870,12 @@ export function RouteMap({
     if (followOn && hasLiveGps && !userPanRef.current) return;
     const bounds: Array<[number, number]> = [];
     if (livePos) bounds.push([livePos.lat, livePos.lng]);
-    for (const s of stops) {
+    for (const s of orderedStops) {
       if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
     }
     if (bounds.length === 1) map.setView(bounds[0], 14);
     else if (bounds.length > 1) map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14 });
-  }, [mapReady, stops.length, agentName, followOn, hasLiveGps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, orderedStops.length, agentName, followOn, hasLiveGps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fitWholeRoute = () => {
     const map = mapRef.current;
@@ -864,7 +884,7 @@ export function RouteMap({
     setFollowOn(false);
     const bounds: Array<[number, number]> = [];
     if (livePos) bounds.push([livePos.lat, livePos.lng]);
-    for (const s of stops) {
+    for (const s of orderedStops) {
       if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
     }
     if (bounds.length === 1) map.setView(bounds[0], 14);
@@ -905,7 +925,7 @@ export function RouteMap({
         setFollowOn(false);
         const bounds: Array<[number, number]> = [];
         if (livePos) bounds.push([livePos.lat, livePos.lng]);
-        for (const s of stops) {
+        for (const s of orderedStops) {
           if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) bounds.push([s.lat, s.lng]);
         }
         if (bounds.length === 1) map.setView(bounds[0], 14);
@@ -919,7 +939,7 @@ export function RouteMap({
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFullscreen]);
+  }, [isFullscreen, orderedStops]);
 
   // Esc closes fullscreen navigator
   useEffect(() => {
@@ -951,7 +971,7 @@ export function RouteMap({
         <div className="rm-fs-top">
           <div>
             <b>{agentName || 'Navigator'}</b>
-            <span>{doneCount}/{stops.length} · {nextStop ? `#${nextStop.step} ${nextStop.name}` : 'tugadi'}</span>
+            <span>{doneCount}/{orderedStops.length} · {nextStop ? `#${nextStop.step} ${nextStop.name}` : 'tugadi'}</span>
           </div>
           <button type="button" className="btn btn-primary" onClick={() => setFullscreen(false)}>
             <X size={16} /> Yopish
@@ -960,13 +980,13 @@ export function RouteMap({
       ) : agentName ? (
         <div className="rm-agent-banner">
           <b>{agentName}</b>
-          <span>{hasLiveGps ? 'Jonli' : 'GPS yo‘q'} · {doneCount}/{stops.length}</span>
+          <span>{hasLiveGps ? 'Jonli' : 'GPS yo‘q'} · {doneCount}/{orderedStops.length}</span>
         </div>
       ) : null}
       <div className="rm-chain-bar">
         <div className="rm-chain-meta">
           <div className="rm-progress-block">
-            <b>{doneCount} / {stops.length}</b>
+            <b>{doneCount} / {orderedStops.length}</b>
             <div className="rm-progress"><i style={{ width: `${progressPct}%` }} /></div>
           </div>
           {nextStop ? (
@@ -975,7 +995,7 @@ export function RouteMap({
               {roadHint.distanceM != null ? ` · ${fmtDistance(roadHint.distanceM)}` : ''}
               {roadHint.durationSec != null ? ` · ${fmtEta(roadHint.durationSec)}` : ''}
             </span>
-          ) : stops.length ? (
+          ) : orderedStops.length ? (
             <span className="rm-next-hint is-ok">Tugadi ✓</span>
           ) : null}
         </div>
@@ -983,7 +1003,7 @@ export function RouteMap({
           <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
             <Crosshair size={14} /> <span className="rm-btn-label">{followOn ? 'Kuzatuv' : 'Menga qarat'}</span>
           </button>
-          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
+          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!orderedStops.length}>
             <Route size={14} /> <span className="rm-btn-label">Butun marshrut</span>
           </button>
           {nextStop ? (
@@ -1002,9 +1022,9 @@ export function RouteMap({
         </div>
       </div>
 
-      {stops.length > 0 ? (
+      {orderedStops.length > 0 ? (
         <div className="rm-steps" role="list">
-          {stops.map((s, idx) => (
+          {orderedStops.map((s, idx) => (
             <div className="rm-step-item" key={s.id} role="listitem">
               <button
                 type="button"
@@ -1017,7 +1037,7 @@ export function RouteMap({
                 </span>
                 <span className="rm-node-name">{s.name}</span>
               </button>
-              {idx < stops.length - 1 ? (
+              {idx < orderedStops.length - 1 ? (
                 <span className={`rm-connector ${s.visitedToday ? 'is-done' : ''}`} />
               ) : null}
             </div>
@@ -1040,8 +1060,8 @@ export function RouteMap({
           <button type="button" className={`btn ${followOn ? 'btn-primary' : ''}`} onClick={recenter} disabled={!hasLiveGps}>
             <Crosshair size={16} /> Men
           </button>
-          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!stops.length}>
-            <Route size={16} /> 1→{stops.length}
+          <button type="button" className="btn" onClick={fitWholeRoute} disabled={!orderedStops.length}>
+            <Route size={16} /> 1→{orderedStops.length}
           </button>
           {nextStop ? (
             <button type="button" className="btn btn-primary" onClick={focusNext}>
