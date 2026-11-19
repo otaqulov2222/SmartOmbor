@@ -29,6 +29,7 @@ import {
   resolveSalesDays,
   roleLabelUz,
   finalizeAssistantReply,
+  isDailyBriefIntent,
   sanitizeAssistantReply,
   vagueGiveReply,
   wantsPortalLink,
@@ -1289,14 +1290,6 @@ function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; for
   return null;
 }
 
-function isDailyBriefIntent(lower: string) {
-  if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa)|umumiy\s*hisobot/.test(lower)) return true;
-  if (/bugungi?\s*kun|kun\s*buyicha|bugun\s*nima\s*boldi|bugun\s*holat/.test(lower) && /hisobot|xulosa|nima\s*boldi|ayt|ber/.test(lower)) return true;
-  if (/hisobot\s*(ber|chiqar|ayt|ol)/.test(lower) && /bugun|kun|tizim|umumiy/.test(lower) && !/davomat|посещаем|pdf|xlsx|excel/.test(lower)) return true;
-  if (/^salom\b/.test(lower) && /bugun|kun/.test(lower) && /hisobot/.test(lower) && !/davomat|pdf|xlsx/.test(lower)) return true;
-  return false;
-}
-
 function isShipmentTopic(lower: string): boolean {
   return /yuklar|yuk\b|yuk\s*xati|kirim|supply|moy\s*sklad|moysklad|наклад|отгруз|pachka|пачк|otgruz|prihod/.test(lower);
 }
@@ -1630,55 +1623,7 @@ async function tryFastLocalTask(
     return { reply, model: "local-fast", tools, files };
   }
 
-  // 0a) «kere ber» / qisqa buyruq — Groq ga UMUMAN ketmaydi (soxta PDF yo‘q)
-  if (wantsVagueGive(lower)) {
-    if (/excel|xlsx/.test(lower) || (/fayl/.test(lower) && (prevWasKpi || /agent/i.test(prevAssistant)))) {
-      await run("export_report", { kind: "staff", format: "xlsx" });
-      if (files.length) {
-        return {
-          reply: finalizeAssistantReply(`${files[0].name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`, true),
-          model: "local-fast",
-          tools,
-          files,
-        };
-      }
-    }
-    return {
-      reply: vagueGiveReply(prevAssistant || (prevWasKpi ? "KPI" : "")),
-      model: "local-fast",
-      tools,
-      files,
-    };
-  }
-
-  // 0a2) KPI agentlar ro‘yxati (Groq uydirma + «— agent» bo‘lmasin)
-  if (isKpiAgentsIntent(lower) || (/agentlar/.test(lower) && /kpi|bugun|ro.?yxat/.test(lower))) {
-    const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
-    const items = data?.items || [];
-    const agents = items.filter((p) => /agent/i.test(String(p.role || "")));
-    const today = tashkentParts().date;
-    return {
-      reply: formatKpiAgentsReply(agents, today),
-      model: "local-fast",
-      tools,
-      files,
-    };
-  }
-
-  // agentlar excel
-  if (/agentlar?\s*(excel|xlsx|fayl)|excel.*agent/.test(lower)) {
-    await run("export_report", { kind: "staff", format: "xlsx" });
-    if (files.length) {
-      return {
-        reply: `Agentlar/xodimlar fayli tayyor (${files[0].name}). Pastdagi Yuklab olish tugmasini bosing.`,
-        model: "local-fast",
-        tools,
-        files,
-      };
-    }
-  }
-
-  // 0b) Bugungi tizim hisoboti (davomat PDF emas!)
+  // 0a) Bugungi tizim hisoboti — «hisobot ber» vague/KPI yo‘liga tushmasin
   if (isDailyBriefIntent(lower)) {
     const today = tashkentParts().date;
     const sales = await run("sales_summary", { days: 1 }) as Record<string, unknown> | null;
@@ -1750,6 +1695,54 @@ async function tryFastLocalTask(
     ].filter((line, i, arr) => !(line === "" && arr[i - 1] === "")).join("\n");
 
     return { reply, model: "local-fast", tools, files };
+  }
+
+  // 0b) «kere ber» / qisqa buyruq — Groq ga UMUMAN ketmaydi (soxta PDF yo‘q)
+  if (wantsVagueGive(lower)) {
+    if (/excel|xlsx/.test(lower) || (/fayl/.test(lower) && (prevWasKpi || /agent/i.test(prevAssistant)))) {
+      await run("export_report", { kind: "staff", format: "xlsx" });
+      if (files.length) {
+        return {
+          reply: finalizeAssistantReply(`${files[0].name} tayyor. Pastdagi Yuklab olish tugmasini bosing.`, true),
+          model: "local-fast",
+          tools,
+          files,
+        };
+      }
+    }
+    return {
+      reply: vagueGiveReply(prevAssistant || (prevWasKpi ? "KPI" : "")),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // 0c) KPI agentlar ro‘yxati (Groq uydirma + «— agent» bo‘lmasin)
+  if (isKpiAgentsIntent(lower) || (/agentlar/.test(lower) && /kpi|bugun|ro.?yxat/.test(lower))) {
+    const data = await run("list_staff", {}) as { items?: Array<Record<string, unknown>> } | null;
+    const items = data?.items || [];
+    const agents = items.filter((p) => /agent/i.test(String(p.role || "")));
+    const today = tashkentParts().date;
+    return {
+      reply: formatKpiAgentsReply(agents, today),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
+  // agentlar excel
+  if (/agentlar?\s*(excel|xlsx|fayl)|excel.*agent/.test(lower)) {
+    await run("export_report", { kind: "staff", format: "xlsx" });
+    if (files.length) {
+      return {
+        reply: `Agentlar/xodimlar fayli tayyor (${files[0].name}). Pastdagi Yuklab olish tugmasini bosing.`,
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
   }
 
   // 1) Fayl / hisobot (faqat aniq davomat/kirim/xodim + fayl)

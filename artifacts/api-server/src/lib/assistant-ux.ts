@@ -322,11 +322,36 @@ export function sanitizeAssistantReply(text: string): string {
   return out;
 }
 
+/** Bugungi / kunlik tizim hisoboti — «hisobot ber» vague emas. */
+export function isDailyBriefIntent(lower: string): boolean {
+  const t = String(lower || "").toLowerCase();
+  if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa)|umumiy\s*hisobot/.test(t)) return true;
+  if (
+    /bugungi?\s*kun|kun\s*bo?['‘`]?yicha|bugun\s*nima\s*boldi|bugun\s*holat|qanday\s*holat/.test(t)
+    && /hisobot|xulosa|nima\s*boldi|ayt|ber|toliq|holat/.test(t)
+  ) {
+    return true;
+  }
+  if (
+    /hisobot\s*(ber|chiqar|ayt|ol)/.test(t)
+    && /bugun|kun|tizim|umumiy|toliq|holat|nima/.test(t)
+    && !/davomat|посещаем|pdf|xlsx|excel/.test(t)
+  ) {
+    return true;
+  }
+  if (/^salom\b/.test(t) && /bugun|kun/.test(t) && /hisobot/.test(t) && !/davomat|pdf|xlsx/.test(t)) return true;
+  return false;
+}
+
 export function wantsVagueGive(lower: string): boolean {
   const t = String(lower || "").toLowerCase().trim();
+  // Kunlik hisobotni «hisobot ber» deb KPI javobiga aylantirmaslik
+  if (isDailyBriefIntent(t)) return false;
   // «kere ber», «kerak», qisqa buyruqlar — Groq ga umuman ketmasin
   if (/^(kere|kerak)(\s*ber)?[!?.]*$/.test(t)) return true;
   if (/^(ber|yubor|yoz|chiqar)[!?.]*$/.test(t)) return true;
+  // Faqat qisqa/noaniq «hisobot ber» — batafsil so‘rov emas
+  if (/hisobot\s*ber/.test(t) && t.length > 48) return false;
   return /yuklab\s*ber|pdf\s*ber|excel\s*ber|xlsx\s*ber|fayl\s*ber|hisobot\s*ber|kere\s*ber|kerak\s*ber/.test(t);
 }
 
@@ -346,7 +371,12 @@ export function vagueGiveReply(prevAssistant = ""): string {
 
 /** Oxirgi to‘siq: soxta PDF / **** / uydirma havola hech qachon chiqmasin */
 export function finalizeAssistantReply(text: string, hasFiles = false): string {
-  let out = sanitizeAssistantReply(String(text || ""));
+  const raw = String(text || "");
+  // Haqiqiy kunlik brifingni KPI “soxta havola” matniga almashtirmaymiz
+  if (/^Bugungi hisobot\s*—/i.test(raw.trim()) || /^Bugungi\s*\(\d{4}-\d{2}-\d{2}\)\s*agentlar/i.test(raw.trim())) {
+    return sanitizeAssistantReply(raw);
+  }
+  let out = sanitizeAssistantReply(raw);
   if (hasFiles) return out;
   if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /pdf|yuklab\s*olish\s*uchun|\*{2,}/i.test(out))) {
     return kpiFollowupReply();
