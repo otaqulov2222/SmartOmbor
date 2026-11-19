@@ -38,7 +38,7 @@ export const ACCESS_MODULES: AccessModule[] = [
   /** Shaxsiy: rol bo‘yicha agent UI yoki o‘z davomat belgilashi. */
   { id: 'my_cabinet', label: 'Mening kabinetim', paths: ['/office', '/my-kpi'] },
   /** Faqat rahbar: jamoa hisoboti, QR, Excel/PDF. */
-  { id: 'office', label: 'Davomat hisoboti', paths: ['/office/report'] },
+  { id: 'office', label: 'Davomat hisoboti', paths: ['/office/report', '/office/payroll'] },
   { id: 'kpi', label: 'KPI', paths: ['/kpi', '/kpi/agents', '/kpi/customers', '/kpi/orders', '/kpi/payments', '/kpi/settings'] },
   { id: 'gps', label: 'GPS va marshrut', paths: ['/gps'] },
   { id: 'analytics', label: 'Tahlil', paths: ['/analytics', '/non-moving', '/factories', '/branches', '/recommendations'] },
@@ -146,7 +146,10 @@ export function moduleForPath(path: string): AccessModuleId | null {
   if (PATH_TO_MODULE.has(path)) return PATH_TO_MODULE.get(path)!;
   if (path.startsWith('/kpi')) return 'kpi';
   if (path.startsWith('/my-kpi')) return 'my_cabinet';
-  if (path.startsWith('/office')) return path.includes('/report') ? 'office' : 'my_cabinet';
+  if (path.startsWith('/office')) {
+    if (path.includes('/report') || path.includes('/payroll')) return 'office';
+    return 'my_cabinet';
+  }
   return null;
 }
 

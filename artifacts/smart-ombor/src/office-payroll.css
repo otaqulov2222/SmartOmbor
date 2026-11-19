@@ -1,0 +1,84 @@
+.pay { display: grid; gap: 14px; }
+.pay-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.pay-head h1 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.35rem; }
+.pay-sub { margin: 6px 0 0; color: var(--muted); font-size: .92rem; }
+.pay-month { display: flex; align-items: center; gap: 8px; }
+.pay-month b { min-width: 5.5rem; text-align: center; }
+.pay-spin { animation: pay-spin 1s linear infinite; }
+@keyframes pay-spin { to { transform: rotate(360deg); } }
+
+.pay-settings {
+  display: grid; grid-template-columns: 1.4fr .8fr; gap: 14px;
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px;
+}
+.pay-settings label { display: grid; gap: 6px; }
+.pay-settings span { font-size: .82rem; color: var(--muted); }
+.pay-settings small { color: var(--muted); font-size: .8rem; }
+.pay-settings-row { display: flex; gap: 8px; align-items: center; }
+.pay-settings-row .input { max-width: 120px; }
+.pay-meta { display: grid; gap: 6px; align-content: end; color: var(--muted); font-size: .9rem; }
+
+.pay-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pay-stats article {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px;
+}
+.pay-stats span { display: block; color: var(--muted); font-size: .78rem; }
+.pay-stats b { display: block; font-size: 1.25rem; margin-top: 4px; }
+.pay-stats .is-bad { border-color: #fca5a5; }
+.pay-stats .is-warn { border-color: #fcd34d; }
+.pay-stats .is-ok { border-color: #86efac; }
+
+.pay-tools .search { max-width: 320px; }
+.pay-err { color: #b42318; background: #fee2e2; border-radius: 12px; padding: 10px 12px; }
+.pay-empty { text-align: center; color: var(--muted); padding: 18px; }
+.pay-muted { color: var(--muted); font-size: .82rem; }
+
+.pay-table-wrap {
+  background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: auto;
+}
+.pay-table { width: 100%; border-collapse: collapse; }
+.pay-table th, .pay-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.pay-table th { font-size: .78rem; color: var(--muted); font-weight: 600; }
+.pay-edit {
+  display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; cursor: pointer; font: inherit;
+}
+.pay-inline { display: inline-flex; gap: 6px; align-items: center; }
+.pay-inline .input { width: 110px; }
+
+.pay-drawer-bg {
+  position: fixed; inset: 0; background: rgb(15 23 42 / .35); z-index: 40;
+  display: flex; justify-content: flex-end;
+}
+.pay-drawer {
+  width: min(440px, 100%); height: 100%; background: #fff; overflow: auto;
+  padding: 18px 16px 40px; display: grid; gap: 18px; align-content: start;
+  box-shadow: -8px 0 30px rgb(15 23 42 / .12);
+}
+.pay-drawer-top { display: flex; justify-content: space-between; gap: 10px; }
+.pay-drawer h2 { margin: 0; font-size: 1.15rem; }
+.pay-drawer h3 { margin: 0 0 8px; font-size: .95rem; }
+.pay-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pay-list li {
+  display: flex; justify-content: space-between; gap: 10px; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+}
+.pay-pill {
+  display: inline-flex; border-radius: 999px; padding: 2px 8px; font-size: .72rem; font-weight: 700;
+}
+.pay-pill.is-absent { background: #fee2e2; color: #b42318; }
+.pay-pill.is-late { background: #fef3c7; color: #92400e; }
+.pay-form { display: grid; gap: 8px; margin-top: 10px; }
+.pay-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 900px) {
+  .pay-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pay-settings { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .pay-table thead { display: none; }
+  .pay-table tr { display: grid; gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
+  .pay-table td { border: 0; padding: 0; white-space: normal; }
+  .pay-table td::before {
+    content: attr(data-label); display: block; color: var(--muted); font-size: .72rem; margin-bottom: 2px;
+  }
+}

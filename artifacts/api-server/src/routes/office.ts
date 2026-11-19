@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
 import { listLocalPeople, requireLocalUser, requireOfficeDirector } from "./local-auth";
 import {
+  addAdjustment,
+  addAdvance,
   currentQrToken,
+  deleteAdjustment,
+  deleteAdvance,
   enrollFace,
   faceEnrolled,
   faceMatchDistance,
@@ -10,11 +14,16 @@ import {
   insideOffice,
   officeDistance,
   officeSite,
+  payrollForAccount,
+  payrollMonth,
   pruneOrphanFaces,
   punch,
   punchesFor,
   rangeDays,
+  setFineOverride,
   setOfficeSite,
+  setPayrollSettings,
+  setSalary,
   setTabelMark,
   tashkentParts,
   tabelDay,
@@ -56,6 +65,7 @@ router.get("/office/me", (req, res) => {
     face: faceEnrolled(user.id),
     today: punchView(todayPunch(user.id)),
     fiksa: fiksaOf(user.id),
+    monthlySalary: fiksaOf(user.id),
   });
 });
 
@@ -246,6 +256,179 @@ router.get("/office/people", (req, res) => {
   res.json({
     items: listLocalPeople(),
   });
+});
+
+function monthParam(raw: unknown) {
+  const value = String(raw || "").trim();
+  if (/^\d{4}-\d{2}$/.test(value)) return value;
+  return tashkentParts().date.slice(0, 7);
+}
+
+router.get("/office/payroll", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    const month = monthParam(req.query.month);
+    const people = listLocalPeople();
+    res.json(payrollMonth(month, people));
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "payroll" });
+  }
+});
+
+router.get("/office/payroll/me", (req, res) => {
+  const user = requireLocalUser(req, res);
+  if (!user) return;
+  try {
+    const month = monthParam(req.query.month);
+    res.json(
+      payrollForAccount(month, {
+        id: user.id,
+        name: user.name,
+        login: user.login,
+        role: user.role,
+      }),
+    );
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "payroll" });
+  }
+});
+
+router.put("/office/payroll/settings", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    const settings = setPayrollSettings({ latePenaltyPct: Number(req.body?.latePenaltyPct) });
+    res.json({ settings });
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "settings" });
+  }
+});
+
+router.put("/office/payroll/salary", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    const accountId = String(req.body?.accountId || "");
+    const known = listLocalPeople().some((p) => p.id === accountId);
+    if (!known) {
+      res.status(404).json({ error: "person" });
+      return;
+    }
+    const row = setSalary({
+      accountId,
+      monthly: Number(req.body?.monthly),
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+    });
+    res.json({ salary: row });
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "salary" });
+  }
+});
+
+router.post("/office/payroll/advances", (req, res) => {
+  const director = requireOfficeDirector(req, res);
+  if (!director) return;
+  try {
+    const accountId = String(req.body?.accountId || "");
+    if (!listLocalPeople().some((p) => p.id === accountId)) {
+      res.status(404).json({ error: "person" });
+      return;
+    }
+    const row = addAdvance({
+      accountId,
+      amount: Number(req.body?.amount),
+      date: String(req.body?.date || tashkentParts().date),
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+      createdBy: director.login,
+    });
+    res.status(201).json({ advance: row });
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "advance" });
+  }
+});
+
+router.delete("/office/payroll/advances/:id", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    res.json(deleteAdvance(String(req.params.id)));
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "advance" });
+  }
+});
+
+router.put("/office/payroll/fine-override", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    const kind = String(req.body?.kind || "") === "late" ? "late" : "absent";
+    const amountRaw = req.body?.amount;
+    const amount =
+      amountRaw === null || amountRaw === undefined || amountRaw === ""
+        ? null
+        : Number(amountRaw);
+    const row = setFineOverride({
+      accountId: String(req.body?.accountId || ""),
+      date: String(req.body?.date || ""),
+      kind,
+      amount,
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+    });
+    res.json({ override: row });
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "override" });
+  }
+});
+
+router.post("/office/payroll/adjustments", (req, res) => {
+  const director = requireOfficeDirector(req, res);
+  if (!director) return;
+  try {
+    const accountId = String(req.body?.accountId || "");
+    if (!listLocalPeople().some((p) => p.id === accountId)) {
+      res.status(404).json({ error: "person" });
+      return;
+    }
+    const kindRaw = String(req.body?.kind || "");
+    const kind =
+      kindRaw === "bonus" || kindRaw === "deduct" || kindRaw === "other"
+        ? kindRaw
+        : undefined;
+    const row = addAdjustment({
+      accountId,
+      month: String(req.body?.month || monthParam(undefined)),
+      amount: Number(req.body?.amount),
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+      kind,
+      createdBy: director.login,
+    });
+    res.status(201).json({ adjustment: row });
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "adjustment" });
+  }
+});
+
+router.delete("/office/payroll/adjustments/:id", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  try {
+    res.json(deleteAdjustment(String(req.params.id)));
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "adjustment" });
+  }
 });
 
 export default router;

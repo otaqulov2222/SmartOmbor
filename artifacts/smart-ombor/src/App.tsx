@@ -30,6 +30,7 @@ import { ExportButton, ReportsHub } from '@/export-dialog';
 import { FactoryPortal } from '@/factory-portal';
 import { OfficePage } from '@/office';
 import { OfficeReportPage } from '@/office-report';
+import { OfficePayrollPage } from '@/office-payroll';
 import { ScannerPage } from '@/scanner';
 import { PartnersPage } from '@/partners';
 import { BORDO_SIZES } from '@/bordo-sizes';
@@ -37,6 +38,7 @@ import {
   KpiAgentsPage, KpiCustomersPage, KpiDashboardPage, KpiOrdersPage, KpiPaymentsPage, KpiSettingsPage,
 } from '@/kpi/admin';
 import { AgentCabinetPage, AgentPortal } from '@/kpi/agent-portal';
+import { AgentLiveGpsTracker } from '@/kpi/agent-live-gps';
 import { EmployeesPage } from '@/kpi/employees';
 import {
   cabinetHomeForRole,
@@ -78,6 +80,7 @@ const navigation: NavItem[] = [
   { key: 'nav.office', href: '/office', icon: Fingerprint, group: 'nav.group.workspace' },
   { key: 'nav.myCabinet', href: '/my-kpi', icon: Gauge, group: 'nav.group.workspace' },
   { key: 'nav.officeReport', href: '/office/report', icon: FileBarChart, group: 'nav.group.workspace' },
+  { key: 'nav.officePayroll', href: '/office/payroll', icon: Wallet, group: 'nav.group.workspace' },
   { key: 'nav.products', href: '/products', icon: Package, group: 'nav.group.workspace' },
   { key: 'nav.stock', href: '/stock', icon: Warehouse, group: 'nav.group.workspace' },
   { key: 'nav.scanner', href: '/scanner', icon: ScanBarcode, group: 'nav.group.workspace' },
@@ -366,7 +369,15 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
 function LocalShell({ children, title }: { children: ReactNode; title: string }) {
   const [, setLocation] = useLocation(); const { t } = useI18n();
   const session = readLocalSession();
-  return <WorkspaceChrome title={title} userName={session?.name || t('shell.localUser')} onSignOut={() => { sessionStorage.removeItem(LOCAL_SESSION); setLocation('/'); }}>{children}<AssistantWidget/></WorkspaceChrome>;
+  // Agent kabinetga kirmasa ham: tizimga login = GPS kuzatuvi (har qanday sahifa).
+  const trackGps = isAgentRole(session?.role);
+  return (
+    <WorkspaceChrome title={title} userName={session?.name || t('shell.localUser')} onSignOut={() => { sessionStorage.removeItem(LOCAL_SESSION); setLocation('/'); }}>
+      {trackGps ? <AgentLiveGpsTracker mode="admin" enabled /> : null}
+      {children}
+      <AssistantWidget/>
+    </WorkspaceChrome>
+  );
 }
 function WorkspaceChrome({ children, title, userName, onSignOut }: { children: ReactNode; title: string; userName: string; onSignOut: () => void }) {
   const { t, fmt } = useI18n();
@@ -389,7 +400,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     .filter((group) => group.hrefs.length > 0);
   const moreHrefsVisible = moreGroupsVisible.flatMap((g) => g.hrefs);
   const inMore = moreHrefsVisible.includes(path);
-  const inOfficeNav = path === '/office' || path === '/office/report';
+  const inOfficeNav = path === '/office' || path === '/office/report' || path === '/office/payroll';
   const inKpiNav = path === '/kpi' || path.startsWith('/kpi/');
   const showOfficeMenu = isOfficeAdmin(role) && (has('office') || has('my_cabinet'));
   const [moreOpen, setMoreOpen] = useState(inMore);
@@ -433,7 +444,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             NAV LOCK (foydalanuvchi ruxsatisiz o‘zgartirmang):
             1) Tartib: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
             2) Rahbar (super_admin/manager): Davomat = KPI kabi dropdown
-               ichida: Davomat (/office) + Davomat hisobot (/office/report)
+               ichida: Davomat (/office) + hisobot + Oylik (/office/payroll)
                — flat «Mening kabinetim» + alohida hisobot YO‘Q
             3) Oddiy xodim/agent: faqat Mening kabinetim (rol → /office yoki /my-kpi)
             4) Hisobot/QR/Excel/PDF faqat rahbar (office moduli + requireOfficeDirector)
@@ -451,6 +462,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
             {officeOpen && <div className="nav-office-sub">
               {navItem('/office')}
               {navItem('/office/report')}
+              {navItem('/office/payroll')}
             </div>}
           </> : null}
           {has('kpi') ? <>
@@ -1746,6 +1758,7 @@ const pageRoutes: Array<{ path?: string; titleKey: TKey; element: ReactNode }> =
   { path: '/recommendations', titleKey: 'nav.recommendations', element: <RecommendationsPage/> },
   { path: '/tasks', titleKey: 'nav.dashboard', element: <Redirect to="/dashboard"/> },
   { path: '/office/report', titleKey: 'nav.officeReport', element: <OfficeReportPage/> },
+  { path: '/office/payroll', titleKey: 'nav.officePayroll', element: <OfficePayrollPage/> },
   { path: '/office/tasks', titleKey: 'nav.office', element: <Redirect to="/office"/> },
   { path: '/office/hisobot', titleKey: 'nav.officeReport', element: <Redirect to="/office/report"/> },
   { path: '/office', titleKey: 'nav.office', element: <StaffCabinetRoute/> },

@@ -107,13 +107,61 @@ const FACE_HASH_KEEP = 6;
 const FACE_DESC_MATCH = 0.48;
 const FACE_DESC_UNIQUE = 0.42;
 const FACE_DESC_KEEP = 8;
+export type PayrollSettings = {
+  /** Kechikish jarimasi — kunlikning foizi (0–100). Default 100. */
+  latePenaltyPct: number;
+};
+
+export type SalaryRow = {
+  monthly: number;
+  note: string;
+  updatedAt: string;
+};
+
+export type PayrollAdvance = {
+  id: string;
+  accountId: string;
+  amount: number;
+  date: string;
+  note: string;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type FineOverride = {
+  id: string;
+  accountId: string;
+  date: string;
+  kind: "absent" | "late";
+  amount: number;
+  note: string;
+  updatedAt: string;
+};
+
+export type PayrollAdjustment = {
+  id: string;
+  accountId: string;
+  month: string; // YYYY-MM
+  amount: number; // +bonus / −ushlanma
+  note: string;
+  kind: "bonus" | "deduct" | "other";
+  createdBy: string;
+  createdAt: string;
+};
+
 type Store = {
   secret: string;
   site: OfficeSite;
   punches: OfficePunch[];
   faces: Record<string, FaceRow>;
   tasks: OfficeTask[];
+  /** @deprecated — salaries.monthly ga migratsiya */
   fiksa: Record<string, number>;
+  payrollSettings: PayrollSettings;
+  salaries: Record<string, SalaryRow>;
+  advances: PayrollAdvance[];
+  fineOverrides: FineOverride[];
+  adjustments: PayrollAdjustment[];
 };
 
 const FILE = dataFile("office.json");
@@ -137,6 +185,10 @@ function normalizeSite(raw: Partial<OfficeSite> | undefined): OfficeSite {
   };
 }
 
+function defaultPayrollSettings(): PayrollSettings {
+  return { latePenaltyPct: 100 };
+}
+
 function empty(): Store {
   return {
     secret: randomBytes(24).toString("hex"),
@@ -145,6 +197,29 @@ function empty(): Store {
     faces: {},
     tasks: [],
     fiksa: {},
+    payrollSettings: defaultPayrollSettings(),
+    salaries: {},
+    advances: [],
+    fineOverrides: [],
+    adjustments: [],
+  };
+}
+
+function migrateFiksaToSalaries(fiksa: Record<string, number>, salaries: Record<string, SalaryRow>) {
+  const next = { ...salaries };
+  const now = new Date().toISOString();
+  for (const [accountId, raw] of Object.entries(fiksa || {})) {
+    const monthly = Math.max(0, Math.round(Number(raw) || 0));
+    if (!monthly || next[accountId]?.monthly) continue;
+    next[accountId] = { monthly, note: "migratsiya: fiksa", updatedAt: now };
+  }
+  return next;
+}
+
+function normalizePayrollSettings(raw: Partial<PayrollSettings> | undefined): PayrollSettings {
+  const pct = Number(raw?.latePenaltyPct);
+  return {
+    latePenaltyPct: Number.isFinite(pct) ? Math.min(100, Math.max(0, Math.round(pct))) : 100,
   };
 }
 
@@ -181,6 +256,16 @@ function load(): Store {
           }))
         : [],
       fiksa: parsed.fiksa && typeof parsed.fiksa === "object" ? parsed.fiksa : {},
+      payrollSettings: normalizePayrollSettings(parsed.payrollSettings),
+      salaries: migrateFiksaToSalaries(
+        parsed.fiksa && typeof parsed.fiksa === "object" ? parsed.fiksa : {},
+        parsed.salaries && typeof parsed.salaries === "object"
+          ? (parsed.salaries as Record<string, SalaryRow>)
+          : {},
+      ),
+      advances: Array.isArray(parsed.advances) ? (parsed.advances as PayrollAdvance[]) : [],
+      fineOverrides: Array.isArray(parsed.fineOverrides) ? (parsed.fineOverrides as FineOverride[]) : [],
+      adjustments: Array.isArray(parsed.adjustments) ? (parsed.adjustments as PayrollAdjustment[]) : [],
     };
   } catch {
     memory = empty();
@@ -856,7 +941,361 @@ export function updateOfficeTask(id: string, accountId: string, director: boolea
 }
 
 export function fiksaOf(accountId: string) {
-  return Math.max(0, Number(load().fiksa[accountId]) || 0);
+  // Backward compat: monthly salary (alias)
+  return salaryOf(accountId);
+}
+
+export function salaryOf(accountId: string) {
+  const store = load();
+  const fromSalaries = Math.max(0, Math.round(Number(store.salaries[accountId]?.monthly) || 0));
+  if (fromSalaries > 0) return fromSalaries;
+  return Math.max(0, Math.round(Number(store.fiksa[accountId]) || 0));
+}
+
+export function payrollSettingsOf(): PayrollSettings {
+  return normalizePayrollSettings(load().payrollSettings);
+}
+
+export function setPayrollSettings(input: { latePenaltyPct: number }): PayrollSettings {
+  const store = load();
+  store.payrollSettings = normalizePayrollSettings({ latePenaltyPct: input.latePenaltyPct });
+  save(store);
+  return store.payrollSettings;
+}
+
+export function setSalary(input: { accountId: string; monthly: number; note?: string }) {
+  const accountId = String(input.accountId || "").trim();
+  if (!accountId) throw Object.assign(new Error("account"), { status: 400 });
+  const monthly = Math.max(0, Math.round(Number(input.monthly) || 0));
+  const store = load();
+  store.salaries[accountId] = {
+    monthly,
+    note: String(input.note || store.salaries[accountId]?.note || "").trim().slice(0, 200),
+    updatedAt: new Date().toISOString(),
+  };
+  // sync legacy mirror
+  store.fiksa[accountId] = monthly;
+  save(store);
+  return store.salaries[accountId];
+}
+
+export function addAdvance(input: {
+  accountId: string;
+  amount: number;
+  date: string;
+  note?: string;
+  createdBy: string;
+}) {
+  const accountId = String(input.accountId || "").trim();
+  const amount = Math.round(Number(input.amount) || 0);
+  const date = String(input.date || "").trim();
+  if (!accountId || amount <= 0) throw Object.assign(new Error("advance"), { status: 400 });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw Object.assign(new Error("date"), { status: 400 });
+  const store = load();
+  const row: PayrollAdvance = {
+    id: randomUUID(),
+    accountId,
+    amount,
+    date,
+    note: String(input.note || "").trim().slice(0, 300),
+    createdBy: String(input.createdBy || "").slice(0, 80),
+    createdAt: new Date().toISOString(),
+  };
+  store.advances.push(row);
+  save(store);
+  return row;
+}
+
+export function deleteAdvance(id: string) {
+  const store = load();
+  const before = store.advances.length;
+  store.advances = store.advances.filter((row) => row.id !== id);
+  if (store.advances.length === before) throw Object.assign(new Error("not_found"), { status: 404 });
+  save(store);
+  return { ok: true };
+}
+
+export function setFineOverride(input: {
+  accountId: string;
+  date: string;
+  kind: "absent" | "late";
+  amount: number | null;
+  note?: string;
+}) {
+  const accountId = String(input.accountId || "").trim();
+  const date = String(input.date || "").trim();
+  const kind = input.kind === "late" ? "late" : "absent";
+  if (!accountId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw Object.assign(new Error("override"), { status: 400 });
+  }
+  const store = load();
+  store.fineOverrides = store.fineOverrides.filter(
+    (row) => !(row.accountId === accountId && row.date === date && row.kind === kind),
+  );
+  // null amount = clear override (auto hisob)
+  if (input.amount == null || !Number.isFinite(Number(input.amount))) {
+    save(store);
+    return { cleared: true as const };
+  }
+  const row: FineOverride = {
+    id: randomUUID(),
+    accountId,
+    date,
+    kind,
+    amount: Math.max(0, Math.round(Number(input.amount))),
+    note: String(input.note || "").trim().slice(0, 300),
+    updatedAt: new Date().toISOString(),
+  };
+  store.fineOverrides.push(row);
+  save(store);
+  return row;
+}
+
+export function addAdjustment(input: {
+  accountId: string;
+  month: string;
+  amount: number;
+  note?: string;
+  kind?: "bonus" | "deduct" | "other";
+  createdBy: string;
+}) {
+  const accountId = String(input.accountId || "").trim();
+  const month = String(input.month || "").trim();
+  const amount = Math.round(Number(input.amount) || 0);
+  if (!accountId || !/^\d{4}-\d{2}$/.test(month) || amount === 0) {
+    throw Object.assign(new Error("adjustment"), { status: 400 });
+  }
+  let kind: PayrollAdjustment["kind"] = "other";
+  if (input.kind === "bonus" || input.kind === "deduct" || input.kind === "other") kind = input.kind;
+  else kind = amount > 0 ? "bonus" : "deduct";
+  const store = load();
+  const row: PayrollAdjustment = {
+    id: randomUUID(),
+    accountId,
+    month,
+    amount,
+    note: String(input.note || "").trim().slice(0, 300),
+    kind,
+    createdBy: String(input.createdBy || "").slice(0, 80),
+    createdAt: new Date().toISOString(),
+  };
+  store.adjustments.push(row);
+  save(store);
+  return row;
+}
+
+export function deleteAdjustment(id: string) {
+  const store = load();
+  const before = store.adjustments.length;
+  store.adjustments = store.adjustments.filter((row) => row.id !== id);
+  if (store.adjustments.length === before) throw Object.assign(new Error("not_found"), { status: 404 });
+  save(store);
+  return { ok: true };
+}
+
+function monthBounds(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month)) throw Object.assign(new Error("month"), { status: 400 });
+  const [y, m] = month.split("-").map(Number);
+  const from = `${month}-01`;
+  const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const today = tashkentParts().date;
+  const to = last > today && month === today.slice(0, 7) ? today : last;
+  return { from, to: to < from ? from : to, last };
+}
+
+/** Oy ichidagi Du–Ju ish kunlari soni (Shanba/Yakshanba chiqariladi). */
+export function workdaysInMonth(month: string) {
+  const { from, last } = monthBounds(month);
+  let count = 0;
+  let cursor = from;
+  while (cursor <= last) {
+    if (!weekendOf(cursor)) count += 1;
+    cursor = shiftDay(cursor, 1);
+  }
+  return Math.max(1, count); // 0 bo‘lmasin — bo‘linish xavfsiz
+}
+
+export type PayrollFineLine = {
+  date: string;
+  kind: "absent" | "late";
+  status: string;
+  lateMin: number;
+  autoAmount: number;
+  amount: number;
+  overridden: boolean;
+  note: string;
+};
+
+export type PayrollPerson = {
+  accountId: string;
+  name: string;
+  login: string;
+  role: string;
+  monthly: number;
+  daily: number;
+  workdays: number;
+  absentDays: number;
+  lateDays: number;
+  presentDays: number;
+  excusedDays: number;
+  absentFine: number;
+  lateFine: number;
+  fineTotal: number;
+  advancesTotal: number;
+  adjustmentsTotal: number;
+  net: number;
+  fines: PayrollFineLine[];
+  advances: PayrollAdvance[];
+  adjustments: PayrollAdjustment[];
+};
+
+export function payrollMonth(month: string, people: TabelPerson[]): {
+  month: string;
+  from: string;
+  to: string;
+  workdays: number;
+  settings: PayrollSettings;
+  site: { start: string; end: string };
+  summary: {
+    headcount: number;
+    salaryFund: number;
+    fineTotal: number;
+    advancesTotal: number;
+    adjustmentsTotal: number;
+    netTotal: number;
+  };
+  people: PayrollPerson[];
+} {
+  const { from, to } = monthBounds(month);
+  const site = officeSite();
+  const settings = payrollSettingsOf();
+  const workdays = workdaysInMonth(month);
+  const range = tabelRange(from, to, people, site.start, site.end);
+  const store = load();
+
+  const peopleOut: PayrollPerson[] = people.map((person) => {
+    const monthly = salaryOf(person.id);
+    const daily = monthly > 0 ? Math.round(monthly / workdays) : 0;
+    const rows = range.items.filter((row) => row.accountId === person.id);
+    const fines: PayrollFineLine[] = [];
+
+    for (const row of rows) {
+      const isAbsent = row.status === "absent";
+      const isLate = row.status === "late" || (row.lateIn > 0 && (row.status === "present" || row.status === "late" || row.status === "out_missing"));
+      // excused / weekend — jarima yo‘q
+      if (row.status === "off" || row.status === "sick" || row.status === "vacation" || row.status === "trip" || row.status === "permit") {
+        continue;
+      }
+      if (isAbsent) {
+        const autoAmount = daily;
+        const ov = store.fineOverrides.find(
+          (o) => o.accountId === person.id && o.date === row.date && o.kind === "absent",
+        );
+        fines.push({
+          date: row.date,
+          kind: "absent",
+          status: row.status,
+          lateMin: 0,
+          autoAmount,
+          amount: ov ? ov.amount : autoAmount,
+          overridden: Boolean(ov),
+          note: ov?.note || "",
+        });
+      } else if (isLate && row.lateIn > 0) {
+        const autoAmount = Math.round((daily * settings.latePenaltyPct) / 100);
+        const ov = store.fineOverrides.find(
+          (o) => o.accountId === person.id && o.date === row.date && o.kind === "late",
+        );
+        fines.push({
+          date: row.date,
+          kind: "late",
+          status: row.status,
+          lateMin: row.lateIn,
+          autoAmount,
+          amount: ov ? ov.amount : autoAmount,
+          overridden: Boolean(ov),
+          note: ov?.note || "",
+        });
+      }
+    }
+
+    const advances = store.advances.filter(
+      (a) => a.accountId === person.id && a.date >= from && a.date <= `${month}-31`,
+    );
+    const adjustments = store.adjustments.filter((a) => a.accountId === person.id && a.month === month);
+
+    const absentFine = fines.filter((f) => f.kind === "absent").reduce((s, f) => s + f.amount, 0);
+    const lateFine = fines.filter((f) => f.kind === "late").reduce((s, f) => s + f.amount, 0);
+    const fineTotal = absentFine + lateFine;
+    const advancesTotal = advances.reduce((s, a) => s + a.amount, 0);
+    const adjustmentsTotal = adjustments.reduce((s, a) => s + a.amount, 0);
+    const net = monthly - fineTotal - advancesTotal + adjustmentsTotal;
+
+    return {
+      accountId: person.id,
+      name: person.name,
+      login: person.login,
+      role: person.role,
+      monthly,
+      daily,
+      workdays,
+      absentDays: fines.filter((f) => f.kind === "absent").length,
+      lateDays: fines.filter((f) => f.kind === "late").length,
+      presentDays: rows.filter(
+        (r) => r.status === "present" || r.status === "late" || r.status === "out_missing",
+      ).length,
+      excusedDays: rows.filter(
+        (r) =>
+          r.status === "off" ||
+          r.status === "sick" ||
+          r.status === "vacation" ||
+          r.status === "trip" ||
+          r.status === "permit",
+      ).length,
+      absentFine,
+      lateFine,
+      fineTotal,
+      advancesTotal,
+      adjustmentsTotal,
+      net,
+      fines,
+      advances,
+      adjustments,
+    };
+  });
+
+  const summary = {
+    headcount: peopleOut.length,
+    salaryFund: peopleOut.reduce((s, p) => s + p.monthly, 0),
+    fineTotal: peopleOut.reduce((s, p) => s + p.fineTotal, 0),
+    advancesTotal: peopleOut.reduce((s, p) => s + p.advancesTotal, 0),
+    adjustmentsTotal: peopleOut.reduce((s, p) => s + p.adjustmentsTotal, 0),
+    netTotal: peopleOut.reduce((s, p) => s + p.net, 0),
+  };
+
+  return {
+    month,
+    from,
+    to,
+    workdays,
+    settings,
+    site: { start: site.start, end: site.end },
+    summary,
+    people: peopleOut,
+  };
+}
+
+export function payrollForAccount(month: string, person: TabelPerson) {
+  const full = payrollMonth(month, [person]);
+  return {
+    month: full.month,
+    from: full.from,
+    to: full.to,
+    workdays: full.workdays,
+    settings: full.settings,
+    site: full.site,
+    person: full.people[0] || null,
+  };
 }
 
 function hmOf(iso: string | null) {

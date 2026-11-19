@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import {
-  ChevronLeft, Clock, LogIn, LogOut, Moon, QrCode, ScanFace, Sun, SwitchCamera, X,
+  ChevronLeft, Clock, LogIn, LogOut, Moon, QrCode, ScanFace, Sun, SwitchCamera, Wallet, X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useI18n, type TKey } from '@/i18n';
@@ -36,6 +36,64 @@ function session() {
 }
 export function officeHeaders() {
   return { authorization: `Bearer ${session()?.token || ''}`, 'content-type': 'application/json' };
+}
+
+function MyPayrollCard() {
+  const { t } = useI18n();
+  const [month] = useState(() =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()).slice(0, 7),
+  );
+  const [person, setPerson] = useState<{
+    monthly: number;
+    daily: number;
+    fineTotal: number;
+    advancesTotal: number;
+    net: number;
+    absentDays: number;
+    lateDays: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/office/payroll/me?month=${month}`, { headers: officeHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled || !body?.person) return;
+        setPerson(body.person);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [month]);
+
+  const fmt = (n: number) => new Intl.NumberFormat('uz-UZ').format(Math.round(n || 0));
+
+  return (
+    <div id="office-pay" className="office-card office-block">
+      <div className="office-card-top">
+        <div className="office-card-title">
+          <span className="is-clock"><Wallet size={16} /></span>
+          <div>
+            <b>{t('pay.myTitle')}</b>
+            <small>{month}</small>
+          </div>
+        </div>
+      </div>
+      {!person || !person.monthly ? (
+        <p className="office-empty">{t('pay.myEmpty')}</p>
+      ) : (
+        <>
+          <div className="office-row"><span>{t('pay.monthly')}</span><b>{fmt(person.monthly)}</b></div>
+          <div className="office-row"><span>{t('pay.daily')}</span><b>{fmt(person.daily)}</b></div>
+          <div className="office-row"><span>{t('pay.absent')} / {t('pay.late')}</span><b>{person.absentDays} / {person.lateDays}</b></div>
+          <div className="office-row"><span>{t('office.fine')}</span><b>{fmt(person.fineTotal)}</b></div>
+          <div className="office-row"><span>{t('pay.advances')}</span><b>{fmt(person.advancesTotal)}</b></div>
+          <div className="office-row"><span>{t('office.left')}</span><b>{fmt(person.net)}</b></div>
+        </>
+      )}
+    </div>
+  );
 }
 function tashkentClock(date = new Date()) {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tashkent', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(date);
@@ -1084,6 +1142,7 @@ export function OfficePage() {
         </div>
         {history.length ? history.map(row => <div className="office-row" key={row.date}><span>{date(row.date)}</span><b>{row.inAt ? time(row.inAt) : '—'} → {row.outAt ? time(row.outAt) : '—'}</b></div>) : <p className="office-empty">{t('office.noRows')}</p>}
       </div>
+      <MyPayrollCard />
       <div ref={settingsRef} id="office-settings" className="office-card office-block">
         <div className="office-card-top">
           <div className="office-card-title">
