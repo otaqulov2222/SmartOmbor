@@ -86,13 +86,25 @@ function fmtTime(iso: string | null) {
   }
 }
 
+/** Oxirgi GPS qancha oldin — admin uchun tushunarli */
+function fmtAgo(iso: string | null, now = Date.now()) {
+  if (!iso) return 'bugun umuman yo‘q';
+  const at = new Date(iso).getTime();
+  if (!Number.isFinite(at)) return 'noma’lum';
+  const sec = Math.max(0, Math.round((now - at) / 1000));
+  if (sec < 60) return `${sec} soniya oldin`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} daqiqa oldin`;
+  if (sec < 86_400) return `${Math.floor(sec / 3600)} soat oldin`;
+  return `${Math.floor(sec / 86_400)} kun oldin`;
+}
+
 function agentWatch(a: AgentPin, workActive?: boolean): WatchStatus {
   if (workActive === false) return 'off_hours';
   if (a.watchStatus) return a.watchStatus;
   if (a.lat == null || a.lng == null || !a.lastSeenAt) return 'no_signal';
   const age = Date.now() - new Date(a.lastSeenAt).getTime();
-  if (Number.isFinite(age) && age >= 0 && age <= 3 * 60_000) return 'live';
-  if (Number.isFinite(age) && age >= 0 && age <= 15 * 60_000) return 'away';
+  if (Number.isFinite(age) && age >= 0 && age <= 5 * 60_000) return 'live';
+  if (Number.isFinite(age) && age >= 0 && age <= 20 * 60_000) return 'away';
   return a.pingCountToday ? 'silent' : 'no_signal';
 }
 
@@ -196,9 +208,32 @@ export function GpsPage() {
       </header>
 
       {d?.workHours?.active && silentAgents.length ? (
-        <p className="kpi-status-banner">
-          Ish soatida aloqa yo‘q / uzilgan: {silentAgents.map((a) => a.fullName).join(', ')}
-        </p>
+        <div className="kpi-status-banner kpi-status-banner-block" role="status">
+          <b>
+            GPS kelmayapti — telefon signal yubormayapti ({silentAgents.length}/{d?.agents.length || 0})
+          </b>
+          <p>
+            Bu tizim xatosi emas: agent Smart Ombor / Fon GPS APK ochiq bo‘lmasa, brauzer yopilsa yoki
+            GPS ruxsati o‘chsa — kuzatuv to‘xtaydi. Ish soatida har bir agent telefonida kabinet yoki
+            Fon GPS yoqilgan bo‘lishi shart.
+          </p>
+          <ul className="kpi-status-list">
+            {silentAgents.map((a) => {
+              const st = agentWatch(a, workActive);
+              return (
+                <li key={a.id}>
+                  <strong>{a.fullName}</strong>
+                  {' — '}
+                  {st === 'silent'
+                    ? `uzilgan (${fmtAgo(a.lastSeenAt)}, bugun ${a.pingCountToday || 0} ping)`
+                    : a.lastSeenAt
+                      ? `signal yo‘q (oxirgi ${fmtAgo(a.lastSeenAt)})`
+                      : 'hech qachon GPS yubormagan'}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : null}
 
       {/* Clickable Agent Selector Pills (one agent at a time) */}
@@ -220,14 +255,17 @@ export function GpsPage() {
               </span>
               <small className="gps-agent-pill-meta">✓ {a.visitedToday} / {a.customersCount} nuqta</small>
               <small className="gps-agent-pill-status">
-                {a.watchLabel ||
-                  (isOnline
-                    ? a.watchSource === 'native' || a.watchSource === 'heartbeat'
-                      ? 'Fon GPS'
-                      : 'Jonli GPS'
-                    : a.lastSeenAt
-                      ? `Oxirgi ${fmtTime(a.lastSeenAt)}`
-                      : 'GPS yo‘q')}
+                {isOnline
+                  ? (a.watchSource === 'native' || a.watchSource === 'heartbeat' ? 'Fon GPS' : 'Jonli GPS')
+                  : status === 'away'
+                    ? `Yaqinda · ${fmtAgo(a.lastSeenAt)}`
+                    : status === 'silent'
+                      ? `Uzilgan · ${fmtAgo(a.lastSeenAt)}`
+                      : status === 'off_hours'
+                        ? 'Ish soati tashqarida'
+                        : a.lastSeenAt
+                          ? `Yo‘q · ${fmtAgo(a.lastSeenAt)}`
+                          : 'GPS yo‘q'}
               </small>
             </button>
           );

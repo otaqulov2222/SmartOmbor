@@ -68,7 +68,10 @@ export function isWithinWorkHours(now = new Date(), hours = agentWorkHours()): b
   return minutes >= start && minutes < end;
 }
 
-/** live ≤3 daqiqa; away ≤15; silent = bugun ping bor lekin uzilgan; no_signal = bugun umuman yo‘q. */
+/**
+ * live ≤5 daqiqa (heartbeat 12s + tarmoq kechikishi);
+ * away ≤20; silent = bugun ping bor lekin uzilgan; no_signal = bugun umuman yo‘q.
+ */
 export function resolveWatchStatus(input: {
   lastSeenAt: Date | string | null | undefined;
   hadPingToday: boolean;
@@ -80,8 +83,8 @@ export function resolveWatchStatus(input: {
   const at = input.lastSeenAt instanceof Date ? input.lastSeenAt : new Date(input.lastSeenAt);
   if (!Number.isFinite(at.getTime())) return input.hadPingToday ? "silent" : "no_signal";
   const age = (input.now || new Date()).getTime() - at.getTime();
-  if (age >= 0 && age <= 3 * 60_000) return "live";
-  if (age >= 0 && age <= 15 * 60_000) return "away";
+  if (age >= 0 && age <= 5 * 60_000) return "live";
+  if (age >= 0 && age <= 20 * 60_000) return "away";
   if (input.hadPingToday) return "silent";
   return "no_signal";
 }
