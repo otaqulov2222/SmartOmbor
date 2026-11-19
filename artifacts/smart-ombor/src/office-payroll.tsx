@@ -147,19 +147,6 @@ export function OfficePayrollPage() {
     latePct: t('pay.latePct'),
   }), [t]);
 
-  const monthPayload = useMemo(() => {
-    if (!data) return null;
-    return {
-      month: data.month,
-      from: data.from,
-      to: data.to,
-      workdays: data.workdays,
-      latePenaltyPct: data.settings.latePenaltyPct,
-      summary: data.summary,
-      people: data.people,
-    };
-  }, [data]);
-
   const runExport = async (fn: () => void | Promise<void>) => {
     if (exportBusy) return;
     setExportBusy(true);
@@ -178,6 +165,19 @@ export function OfficePayrollPage() {
   });
 
   const data = query.data;
+
+  const monthPayload = useMemo(() => {
+    if (!data) return null;
+    return {
+      month: data.month,
+      from: data.from,
+      to: data.to,
+      workdays: data.workdays,
+      latePenaltyPct: data.settings?.latePenaltyPct ?? 100,
+      summary: data.summary,
+      people: data.people,
+    };
+  }, [data]);
   useEffect(() => {
     if (data?.settings?.latePenaltyPct != null) setLatePct(String(data.settings.latePenaltyPct));
   }, [data?.settings?.latePenaltyPct]);
