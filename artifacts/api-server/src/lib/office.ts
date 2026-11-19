@@ -1183,13 +1183,16 @@ export function addAdjustment(input: {
 }) {
   const accountId = String(input.accountId || "").trim();
   const month = String(input.month || "").trim();
-  const amount = Math.round(Number(input.amount) || 0);
+  let amount = Math.round(Number(input.amount) || 0);
   if (!accountId || !/^\d{4}-\d{2}$/.test(month) || amount === 0) {
     throw Object.assign(new Error("adjustment"), { status: 400 });
   }
   let kind: PayrollAdjustment["kind"] = "other";
   if (input.kind === "bonus" || input.kind === "deduct" || input.kind === "other") kind = input.kind;
   else kind = amount > 0 ? "bonus" : "deduct";
+  // Ushlanma har doim minus; bonus har doim plus — UI musbat summa yuborsa ham.
+  if (kind === "deduct") amount = -Math.abs(amount);
+  else if (kind === "bonus") amount = Math.abs(amount);
   const store = load();
   const row: PayrollAdjustment = {
     id: randomUUID(),
@@ -1300,6 +1303,7 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
   const workdays = workdaysInMonth(month, site.offDays);
   const range = tabelRange(from, to, people);
   const store = load();
+  const today = tashkentParts().date;
 
   const peopleOut: PayrollPerson[] = people.map((person) => {
     const hours = hoursFor(person.id);
@@ -1314,6 +1318,10 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
       const isLate = row.status === "late" || (row.lateIn > 0 && (row.status === "present" || row.status === "late" || row.status === "out_missing"));
       // excused / weekend — jarima yo‘q
       if (row.status === "off" || row.status === "sick" || row.status === "vacation" || row.status === "trip" || row.status === "permit") {
+        continue;
+      }
+      // Bugungi kun hali tugamagan — kelmagan deb to‘liq jarima qo‘ymaymiz.
+      if (isAbsent && row.date === today) {
         continue;
       }
       if (isAbsent) {

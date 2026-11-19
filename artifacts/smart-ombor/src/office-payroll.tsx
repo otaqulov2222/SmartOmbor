@@ -136,7 +136,7 @@ export function OfficePayrollPage() {
   const [siteStart, setSiteStart] = useState('06:00');
   const [siteEnd, setSiteEnd] = useState('18:00');
   const [siteOffDays, setSiteOffDays] = useState<number[]>([1]);
-  const [personHours, setPersonHours] = useState({ start: '07:00', end: '17:00', useCustom: false });
+  const [personHours, setPersonHours] = useState({ start: '06:00', end: '18:00', useCustom: false });
   const [setupOpen, setSetupOpen] = useState(false);
 
   useEffect(() => {
@@ -197,6 +197,7 @@ export function OfficePayrollPage() {
       to: data.to,
       workdays: data.workdays,
       latePenaltyPct: data.settings?.latePenaltyPct ?? 100,
+      siteOffDays: data.site?.offDays || [1],
       summary: data.summary,
       people: data.people,
     };
@@ -381,6 +382,12 @@ export function OfficePayrollPage() {
 
   return (
     <div className="pay">
+      {flash ? (
+        <p className={`pay-flash ${flash === t('pay.savedOk') ? '' : 'is-err'}`.trim()}>
+          <Check size={15} /> {flash}
+        </p>
+      ) : null}
+
       <div className="pay-head">
         <div>
           <div className="pay-head-title">
@@ -748,10 +755,6 @@ export function OfficePayrollPage() {
                 <b className={selected.net < 0 ? 'pay-net is-neg' : 'pay-net'}>{money(selected.net)}</b>
               </article>
             </div>
-
-            {flash ? (
-              <p className="pay-flash"><Check size={15} /> {flash}</p>
-            ) : null}
 
             <section>
               <h3>{t('pay.personHours')}</h3>

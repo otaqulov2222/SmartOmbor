@@ -39,6 +39,7 @@ export type PayMonth = {
   to: string;
   workdays: number;
   latePenaltyPct: number;
+  siteOffDays?: number[];
   summary: {
     headcount: number;
     salaryFund: number;
@@ -98,6 +99,17 @@ function signedMoney(n: number) {
   if ((n || 0) > 0) return `+${abs}`;
   if ((n || 0) < 0) return `-${abs}`;
   return abs;
+}
+
+const DAY_SHORT = ['Ya', 'Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh'] as const;
+function workdaysNote(offDays: number[] = [1]) {
+  const off = new Set(offDays);
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const work = order.filter((d) => !off.has(d)).map((d) => DAY_SHORT[d]);
+  const rest = order.filter((d) => off.has(d)).map((d) => DAY_SHORT[d]);
+  if (!work.length) return 'Ish kunlari sozlanmagan';
+  const workLabel = work.length > 1 ? `${work[0]}–${work[work.length - 1]}` : work[0];
+  return rest.length ? `${workLabel} ish (${rest.join(', ')} dam)` : `${workLabel} (dam yo‘q)`;
 }
 /** 2026-11-04 → 04.11.2026 */
 function fmtDate(iso: string) {
@@ -254,7 +266,7 @@ export function exportMonthExcel(data: PayMonth, labels: PayLabels) {
       ['Hujjat', 'Smart Ombor · Oylik hisobot', ''],
       ['Hisobot oyi', fmtMonthTitle(data.month), 'Oy nomi'],
       ['Sana oralig‘i', `${fmtDate(data.from)} — ${fmtDate(data.to)}`, 'Hisoblangan kunlar'],
-      [labels.workdays, `${data.workdays} kun`, 'Se–Ya ish kunlari (Du dam)'],
+      [labels.workdays, `${data.workdays} kun`, workdaysNote(data.siteOffDays)],
       [labels.latePct, `${data.latePenaltyPct}%`, 'Kechikish jarimasi (kunlikdan)'],
       ['Xodimlar soni', data.summary.headcount, ''],
       [labels.monthly, moneySom(data.summary.salaryFund), 'Barcha oyliklar jami'],
@@ -369,7 +381,7 @@ export function exportPersonExcel(
       ['Sana oralig‘i', `${fmtDate(from)} — ${fmtDate(to)}`, 'Hisoblangan kunlar'],
       [labels.monthly, moneySom(person.monthly), 'Asosiy oylik'],
       [labels.daily, moneySom(person.daily), 'Kunlik = oylik ÷ ish kunlari'],
-      [labels.workdays, `${person.workdays} kun`, 'Oy bo‘yicha Se–Ya'],
+      [labels.workdays, `${person.workdays} kun`, 'Oy bo‘yicha ish kunlari'],
       [labels.present, `${person.presentDays} kun`, 'Davomatda belgilangan'],
       [labels.absent, `${person.absentDays} kun`, 'Kelmagan ish kunlari'],
       [labels.late, `${person.lateDays} kun`, 'Kechikkan kunlar'],
