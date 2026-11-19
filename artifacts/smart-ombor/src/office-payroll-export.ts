@@ -82,6 +82,11 @@ const SOFT: [number, number, number] = [239, 246, 255];
 const LINE: [number, number, number] = [226, 232, 240];
 const GREEN: [number, number, number] = [22, 101, 52];
 
+const UZ_MONTHS = [
+  'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
+  'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr',
+];
+
 function money(n: number) {
   return new Intl.NumberFormat('en-US').format(Math.round(n || 0));
 }
@@ -93,6 +98,26 @@ function signedMoney(n: number) {
   if ((n || 0) > 0) return `+${abs}`;
   if ((n || 0) < 0) return `-${abs}`;
   return abs;
+}
+/** 2026-11-04 → 04.11.2026 */
+function fmtDate(iso: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return iso;
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+/** 2026-11 → 2026-yil noyabr */
+function fmtMonthTitle(month: string) {
+  const m = /^(\d{4})-(\d{2})$/.exec(month.trim());
+  if (!m) return month;
+  const year = m[1];
+  const idx = Number(m[2]) - 1;
+  const name = UZ_MONTHS[idx] || m[2];
+  return `${year}-yil ${name}`;
+}
+function fmtPeriod(month: string, from?: string, to?: string) {
+  const title = fmtMonthTitle(month);
+  if (from && to) return `${title} (${fmtDate(from)} — ${fmtDate(to)})`;
+  return title;
 }
 
 function bufToB64(buf: ArrayBuffer) {
@@ -226,15 +251,17 @@ export function exportMonthExcel(data: PayMonth, labels: PayLabels) {
     name: labels.summary.slice(0, 28) || 'Jami',
     headers: ["Ko‘rsatkich", 'Qiymat', 'Izoh'],
     rows: [
-      [labels.period, `${data.from} — ${data.to}`, ''],
-      [labels.workdays, data.workdays, ''],
-      [labels.latePct, `${data.latePenaltyPct}%`, ''],
-      [labels.employee, data.summary.headcount, ''],
-      [labels.monthly, moneySom(data.summary.salaryFund), 'Oylik fond'],
-      [labels.fines, moneySom(data.summary.fineTotal), ''],
-      [labels.advances, moneySom(data.summary.advancesTotal), ''],
-      [labels.bonus, moneySom(data.summary.adjustmentsTotal), ''],
-      [labels.net, moneySom(data.summary.netTotal), 'Yakuniy to‘lov'],
+      ['Hujjat', 'Smart Ombor · Oylik hisobot', ''],
+      ['Hisobot oyi', fmtMonthTitle(data.month), 'Oy nomi'],
+      ['Sana oralig‘i', `${fmtDate(data.from)} — ${fmtDate(data.to)}`, 'Hisoblangan kunlar'],
+      [labels.workdays, `${data.workdays} kun`, 'Du–Ju ish kunlari'],
+      [labels.latePct, `${data.latePenaltyPct}%`, 'Kechikish jarimasi (kunlikdan)'],
+      ['Xodimlar soni', data.summary.headcount, ''],
+      [labels.monthly, moneySom(data.summary.salaryFund), 'Barcha oyliklar jami'],
+      [labels.fines, moneySom(data.summary.fineTotal), 'Jarimalar jami'],
+      [labels.advances, moneySom(data.summary.advancesTotal), 'Avanslar jami'],
+      [labels.bonus, moneySom(data.summary.adjustmentsTotal), 'Bonus / tuzatish jami'],
+      [labels.net, moneySom(data.summary.netTotal), 'Yakuniy to‘lov jami'],
     ],
   };
   downloadXlsx(`oylik-${data.month}.xlsx`, [summarySheet, peopleSheet]);
@@ -245,7 +272,7 @@ export async function exportMonthPdf(data: PayMonth, labels: PayLabels) {
   paintBrand(
     doc,
     labels.title,
-    `${labels.period}: ${data.from} — ${data.to}`,
+    fmtPeriod(data.month, data.from, data.to),
     `${labels.workdays}: ${data.workdays}  ·  ${labels.latePct}: ${data.latePenaltyPct}%`,
   );
 
@@ -322,25 +349,34 @@ export async function exportMonthPdf(data: PayMonth, labels: PayLabels) {
   doc.save(`oylik-${data.month}.pdf`);
 }
 
-export function exportPersonExcel(person: PayPerson, month: string, labels: PayLabels) {
+export function exportPersonExcel(
+  person: PayPerson,
+  month: string,
+  labels: PayLabels,
+  range?: { from: string; to: string },
+) {
+  const from = range?.from || `${month}-01`;
+  const to = range?.to || from;
   const summary: Sheet = {
     name: labels.summary.slice(0, 28) || 'Jami',
     headers: ["Ko‘rsatkich", 'Qiymat', 'Izoh'],
     rows: [
+      ['Hujjat', 'Smart Ombor · Xodim oylik hisoboti', ''],
       [labels.employee, person.name, ''],
       [labels.login, person.login, ''],
-      [labels.role, person.role, ''],
-      [labels.period, month, ''],
+      [labels.role, person.role || '—', ''],
+      ['Hisobot oyi', fmtMonthTitle(month), 'Masalan: 2026-yil noyabr'],
+      ['Sana oralig‘i', `${fmtDate(from)} — ${fmtDate(to)}`, 'Hisoblangan kunlar'],
       [labels.monthly, moneySom(person.monthly), 'Asosiy oylik'],
-      [labels.daily, moneySom(person.daily), 'Kunlik stavka'],
-      [labels.workdays, person.workdays, ''],
-      [labels.present, person.presentDays, ''],
-      [labels.absent, person.absentDays, ''],
-      [labels.late, person.lateDays, ''],
+      [labels.daily, moneySom(person.daily), 'Kunlik = oylik ÷ ish kunlari'],
+      [labels.workdays, `${person.workdays} kun`, 'Oy bo‘yicha Du–Ju'],
+      [labels.present, `${person.presentDays} kun`, 'Davomatda belgilangan'],
+      [labels.absent, `${person.absentDays} kun`, 'Kelmagan ish kunlari'],
+      [labels.late, `${person.lateDays} kun`, 'Kechikkan kunlar'],
       [labels.fines, moneySom(person.fineTotal), 'Jarimalar jami'],
       [labels.advances, moneySom(person.advancesTotal), 'Avanslar jami'],
-      [labels.bonus, moneySom(person.adjustmentsTotal), 'Bonus / tuzatish'],
-      [labels.net, moneySom(person.net), 'Yakuniy to‘lov'],
+      [labels.bonus, moneySom(person.adjustmentsTotal), 'Bonus / taqdirlash'],
+      [labels.net, moneySom(person.net), 'Yakuniy to‘lov = oylik − jarima − avans + bonus'],
     ],
   };
   const fines: Sheet = {
@@ -349,38 +385,48 @@ export function exportPersonExcel(person: PayPerson, month: string, labels: PayL
     rows: person.fines.length
       ? person.fines.map((f, i) => [
           i + 1,
-          f.date,
-          kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin})` : ''),
-          money(f.amount),
-          money(f.autoAmount),
-          f.note || (f.overridden ? 'tahrirlangan' : ''),
+          fmtDate(f.date),
+          kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin} daq)` : ''),
+          moneySom(f.amount),
+          moneySom(f.autoAmount),
+          f.note || (f.overridden ? 'tahrirlangan' : '—'),
         ])
-      : [['—', '—', '—', '—', '—', 'Jarima yo‘q']],
+      : [['—', '—', '—', '—', '—', 'Bu oyda jarima yo‘q']],
   };
   const advances: Sheet = {
     name: labels.advances.slice(0, 28) || 'Avanslar',
     headers: ['№', labels.date, labels.amount, labels.note],
     rows: person.advances.length
-      ? person.advances.map((a, i) => [i + 1, a.date, money(a.amount), a.note || ''])
-      : [['—', '—', '—', 'Avans yo‘q']],
+      ? person.advances.map((a, i) => [i + 1, fmtDate(a.date), moneySom(a.amount), a.note || '—'])
+      : [['—', '—', '—', 'Bu oyda avans yo‘q']],
   };
   const bonus: Sheet = {
     name: labels.bonus.slice(0, 28) || 'Bonus',
     headers: ['№', labels.kind, labels.amount, labels.note],
     rows: person.adjustments.length
-      ? person.adjustments.map((a, i) => [i + 1, a.kind, money(a.amount), a.note || ''])
-      : [['—', '—', '—', 'Bonus yo‘q']],
+      ? person.adjustments.map((a, i) => [
+          i + 1,
+          a.kind === 'bonus' ? 'Bonus / taqdirlash' : a.kind === 'deduct' ? 'Ushlanma' : a.kind,
+          moneySom(a.amount),
+          a.note || '—',
+        ])
+      : [['—', '—', '—', 'Bu oyda bonus yo‘q']],
   };
   downloadXlsx(`oylik-${month}-${safeName(person.name)}.xlsx`, [summary, fines, advances, bonus]);
 }
 
-export async function exportPersonPdf(person: PayPerson, month: string, labels: PayLabels) {
+export async function exportPersonPdf(
+  person: PayPerson,
+  month: string,
+  labels: PayLabels,
+  range?: { from: string; to: string },
+) {
   const doc = await makePdfDoc(false);
   paintBrand(
     doc,
     labels.title,
     `${person.name}  ·  ${person.login}`,
-    `${labels.period}: ${month}`,
+    fmtPeriod(month, range?.from, range?.to),
   );
 
   autoTable(doc, {
@@ -388,13 +434,15 @@ export async function exportPersonPdf(person: PayPerson, month: string, labels: 
     startY: 34,
     head: [[labels.summary, '']],
     body: [
+      ['Hisobot oyi', fmtMonthTitle(month)],
+      ['Sana oralig‘i', range?.from && range?.to ? `${fmtDate(range.from)} — ${fmtDate(range.to)}` : '—'],
       [labels.role, person.role || '—'],
       [labels.monthly, moneySom(person.monthly)],
       [labels.daily, moneySom(person.daily)],
-      [labels.workdays, String(person.workdays)],
-      [labels.present, String(person.presentDays)],
-      [labels.absent, String(person.absentDays)],
-      [labels.late, String(person.lateDays)],
+      [labels.workdays, `${person.workdays} kun`],
+      [labels.present, `${person.presentDays} kun`],
+      [labels.absent, `${person.absentDays} kun`],
+      [labels.late, `${person.lateDays} kun`],
       [labels.fines, moneySom(person.fineTotal)],
       [labels.advances, moneySom(person.advancesTotal)],
       [labels.bonus, `${signedMoney(person.adjustmentsTotal)} so‘m`],
@@ -406,7 +454,7 @@ export async function exportPersonPdf(person: PayPerson, month: string, labels: 
     },
     didParseCell: (hook) => {
       if (hook.section !== 'body') return;
-      if (hook.row.index === 10 && hook.column.index === 1) {
+      if (hook.row.index === 12 && hook.column.index === 1) {
         hook.cell.styles.textColor = GREEN;
         hook.cell.styles.fontSize = 10;
         hook.cell.styles.fillColor = [240, 253, 244];
@@ -439,8 +487,8 @@ export async function exportPersonPdf(person: PayPerson, month: string, labels: 
     labels.fines,
     [labels.date, labels.kind, labels.amount, labels.auto, labels.note],
     person.fines.map((f) => [
-      f.date,
-      kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin})` : ''),
+      fmtDate(f.date),
+      kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin} daq)` : ''),
       money(f.amount),
       money(f.autoAmount),
       f.note || '—',
@@ -450,13 +498,17 @@ export async function exportPersonPdf(person: PayPerson, month: string, labels: 
   section(
     labels.advances,
     [labels.date, labels.amount, labels.note],
-    person.advances.map((a) => [a.date, money(a.amount), a.note || '—']),
+    person.advances.map((a) => [fmtDate(a.date), money(a.amount), a.note || '—']),
     [1],
   );
   section(
     labels.bonus,
     [labels.kind, labels.amount, labels.note],
-    person.adjustments.map((a) => [a.kind, money(a.amount), a.note || '—']),
+    person.adjustments.map((a) => [
+      a.kind === 'bonus' ? 'Bonus / taqdirlash' : a.kind === 'deduct' ? 'Ushlanma' : a.kind,
+      money(a.amount),
+      a.note || '—',
+    ]),
     [1],
   );
 

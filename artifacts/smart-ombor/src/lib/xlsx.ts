@@ -97,7 +97,16 @@ function colWidth(sheet: Sheet, index: number) {
     }
   }
   if (numeric) return Math.min(18, Math.max(12, max + 2));
+  // Summary-style sheets (2–3 cols): keep readable widths for long money/period text.
+  if (columnsHint(sheet) <= 3) {
+    if (index === 0) return Math.min(34, Math.max(22, max + 2));
+    if (index === 1) return Math.min(48, Math.max(28, max + 2));
+    return Math.min(42, Math.max(22, max + 2));
+  }
   return Math.min(index === 0 ? 42 : index === 1 ? 28 : 36, Math.max(16, max + 2));
+}
+function columnsHint(sheet: Sheet) {
+  return Math.max(sheet.headers.length, ...sheet.rows.map((row) => row.length), 1);
 }
 
 function cellXml(ref: string, cell: Cell, style: number) {
@@ -116,14 +125,14 @@ function sheetXml(sheet: Sheet) {
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
     '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>',
     '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
-    `<sheetFormatPr defaultRowHeight="18"/><cols>${cols}</cols><sheetData>`,
+    `<sheetFormatPr defaultRowHeight="22"/><cols>${cols}</cols><sheetData>`,
   ];
-  const writeRow = (r: number, cells: Cell[], styleFor: (index: number, cell: Cell) => number) => {
-    let row = `<row r="${r}">`;
+  const writeRow = (r: number, cells: Cell[], styleFor: (index: number, cell: Cell) => number, height = 22) => {
+    let row = `<row r="${r}" ht="${height}" customHeight="1">`;
     for (let i = 0; i < columns; i += 1) row += cellXml(`${colName(i)}${r}`, cells[i], styleFor(i, cells[i]));
     lines.push(row + '</row>');
   };
-  writeRow(1, sheet.headers, () => 1);
+  writeRow(1, sheet.headers, () => 1, 26);
   sheet.rows.forEach((row, i) => writeRow(i + 2, row, (_index, cell) => {
     const number = typeof cell === 'number' && Number.isFinite(cell);
     if (i % 2 === 1) return number ? 4 : 2;
@@ -140,7 +149,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <fonts count="2">
 <font><sz val="11"/><name val="Calibri"/><color rgb="FF0F1B2D"/></font>
-<font><b/><sz val="11"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
+<font><b/><sz val="12"/><name val="Calibri"/><color rgb="FFFFFFFF"/></font>
 </fonts>
 <fills count="4">
 <fill><patternFill patternType="none"/></fill>

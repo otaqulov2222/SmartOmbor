@@ -555,7 +555,11 @@ export function OfficePayrollPage() {
                     type="button"
                     className="pay-export-btn"
                     disabled={exportBusy}
-                    onClick={() => void runExport(() => exportPersonExcel(selected, month, labels))}
+                    onClick={() =>
+                      void runExport(() =>
+                        exportPersonExcel(selected, month, labels, data ? { from: data.from, to: data.to } : undefined),
+                      )
+                    }
                   >
                     <FileSpreadsheet size={14} /> {t('pay.excel')}
                   </button>
@@ -563,7 +567,11 @@ export function OfficePayrollPage() {
                     type="button"
                     className="pay-export-btn is-pdf"
                     disabled={exportBusy}
-                    onClick={() => void runExport(() => exportPersonPdf(selected, month, labels))}
+                    onClick={() =>
+                      void runExport(() =>
+                        exportPersonPdf(selected, month, labels, data ? { from: data.from, to: data.to } : undefined),
+                      )
+                    }
                   >
                     <Download size={14} /> {t('pay.pdf')}
                   </button>
