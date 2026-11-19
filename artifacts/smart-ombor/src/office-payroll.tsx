@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Banknote, CalendarDays, Check, ChevronLeft, ChevronRight, CircleAlert,
-  Download, FileSpreadsheet, FileText, Pencil, Percent, RefreshCw, Save, Search, Trash2, Wallet, X,
+  AlertTriangle, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight,
+  Download, FileSpreadsheet, FileText, Pencil, RefreshCw, Save, Search, Settings2, Trash2, Wallet, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/i18n';
@@ -137,6 +137,7 @@ export function OfficePayrollPage() {
   const [siteEnd, setSiteEnd] = useState('18:00');
   const [siteOffDays, setSiteOffDays] = useState<number[]>([1]);
   const [personHours, setPersonHours] = useState({ start: '07:00', end: '17:00', useCustom: false });
+  const [setupOpen, setSetupOpen] = useState(false);
 
   useEffect(() => {
     if (!flash) return;
@@ -373,6 +374,11 @@ export function OfficePayrollPage() {
   const fund = data?.summary.salaryFund || 0;
   const needSalary = !query.isLoading && fund <= 0 && (data?.people.length || 0) > 0;
 
+  const periodLabel =
+    data?.from && data?.to
+      ? `${data.from.slice(8, 10)}.${data.from.slice(5, 7)}.${data.from.slice(0, 4)} — ${data.to.slice(8, 10)}.${data.to.slice(5, 7)}.${data.to.slice(0, 4)}`
+      : '—';
+
   return (
     <div className="pay">
       <div className="pay-head">
@@ -381,9 +387,20 @@ export function OfficePayrollPage() {
             <h1><Wallet size={22} strokeWidth={2.1} /> {t('nav.officePayroll')}</h1>
             <span className="pay-badge"><CalendarDays size={13} /> {month}</span>
           </div>
-          <p className="pay-sub">{t('pay.sub')}</p>
+          <p className="pay-sub">
+            {siteStart}–{siteEnd} · {t('pay.workdays')}: {data?.workdays ?? '—'} · {periodLabel}
+          </p>
         </div>
         <div className="pay-head-actions">
+          <button
+            type="button"
+            className={`pay-export-btn ${setupOpen ? 'is-active' : ''}`}
+            onClick={() => setSetupOpen((v) => !v)}
+          >
+            <Settings2 size={15} />
+            {t('pay.setupTitle')}
+            <ChevronDown size={14} className={setupOpen ? 'pay-chevron is-open' : 'pay-chevron'} />
+          </button>
           <div className="pay-export" title={t('pay.exportMonth')}>
             <button
               type="button"
@@ -417,29 +434,12 @@ export function OfficePayrollPage() {
         </div>
       </div>
 
-      <div className="pay-setup">
-        <div className="pay-setup-top">
-          <div>
-            <h2>{t('pay.setupTitle')}</h2>
-            <p>{t('pay.setupSub')}</p>
-          </div>
-          <div className="pay-setup-stat">
-            <span>{t('pay.workdays')}</span>
-            <strong>{data?.workdays ?? '—'}</strong>
-            <small>
-              {data?.from && data?.to
-                ? `${data.from.slice(8, 10)}.${data.from.slice(5, 7)}.${data.from.slice(0, 4)} — ${data.to.slice(8, 10)}.${data.to.slice(5, 7)}.${data.to.slice(0, 4)}`
-                : '—'}
-            </small>
-          </div>
-        </div>
-
-        <div className="pay-setup-grid">
-          <div className="pay-setup-block">
-            <div className="pay-setup-head">{t('pay.workHours')}</div>
-            <div className="pay-setup-times">
-              <label>
-                <span>{t('pay.from')}</span>
+      {setupOpen ? (
+        <div className="pay-setup">
+          <div className="pay-setup-row">
+            <div className="pay-setup-field">
+              <span>{t('pay.workHours')}</span>
+              <div className="pay-setup-times">
                 <input
                   className="input"
                   type="text"
@@ -449,10 +449,7 @@ export function OfficePayrollPage() {
                   value={siteStart}
                   onChange={(e) => setSiteStart(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
                 />
-              </label>
-              <span className="pay-setup-dash">—</span>
-              <label>
-                <span>{t('pay.to')}</span>
+                <span className="pay-setup-dash">—</span>
                 <input
                   className="input"
                   type="text"
@@ -462,120 +459,86 @@ export function OfficePayrollPage() {
                   value={siteEnd}
                   onChange={(e) => setSiteEnd(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
                 />
-              </label>
+              </div>
             </div>
-            <div className="pay-days" role="group" aria-label={t('pay.workHours')}>
-              {DAY_OPTS.map((d) => {
-                const off = siteOffDays.includes(d.id);
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    className={`pay-day-chip ${off ? 'is-off' : 'is-on'}`}
-                    title={off ? t('pay.dayOff') : t('pay.dayOn')}
-                    onClick={() =>
-                      setSiteOffDays((prev) => {
-                        if (off) {
-                          const next = prev.filter((x) => x !== d.id);
-                          return next.length ? next : prev;
-                        }
-                        return [...prev, d.id].sort((a, b) => a - b);
-                      })
-                    }
-                  >
-                    {t(d.key as 'pay.dayMon')}
-                  </button>
-                );
-              })}
+            <div className="pay-setup-field">
+              <span>{t('pay.workdays')}</span>
+              <div className="pay-days" role="group" aria-label={t('pay.workHours')}>
+                {DAY_OPTS.map((d) => {
+                  const off = siteOffDays.includes(d.id);
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      className={`pay-day-chip ${off ? 'is-off' : 'is-on'}`}
+                      title={off ? t('pay.dayOff') : t('pay.dayOn')}
+                      onClick={() =>
+                        setSiteOffDays((prev) => {
+                          if (off) {
+                            const next = prev.filter((x) => x !== d.id);
+                            return next.length ? next : prev;
+                          }
+                          return [...prev, d.id].sort((a, b) => a - b);
+                        })
+                      }
+                    >
+                      {t(d.key as 'pay.dayMon')}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <p className="pay-hint">
-              {siteStart || '06:00'}–{siteEnd || '18:00'} · {t('pay.workHoursHintShort')}
-            </p>
+            <div className="pay-setup-field is-narrow">
+              <span>{t('pay.latePct')}</span>
+              <div className="pay-setup-late">
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={latePct}
+                  onChange={(e) => setLatePct(e.target.value)}
+                />
+                <span className="pay-setup-unit">%</span>
+              </div>
+            </div>
             <button
               type="button"
               className="pay-setup-save"
-              disabled={saveSiteHours.isPending}
-              onClick={() => saveSiteHours.mutate()}
+              disabled={saveSiteHours.isPending || saveSettings.isPending}
+              onClick={() => {
+                saveSiteHours.mutate();
+                saveSettings.mutate();
+              }}
             >
-              {saveSiteHours.isPending ? t('pay.saving') : t('pay.saveHours')}
+              {saveSiteHours.isPending || saveSettings.isPending ? t('pay.saving') : t('pay.save')}
             </button>
           </div>
-
-          <div className="pay-setup-block">
-            <div className="pay-setup-head"><Percent size={13} /> {t('pay.latePct')}</div>
-            <div className="pay-setup-late">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                max={100}
-                value={latePct}
-                onChange={(e) => setLatePct(e.target.value)}
-              />
-              <span className="pay-setup-unit">%</span>
-            </div>
-            <p className="pay-hint">{t('pay.latePctHint')}</p>
-            <button
-              type="button"
-              className="pay-setup-save"
-              disabled={saveSettings.isPending}
-              onClick={() => saveSettings.mutate()}
-            >
-              {saveSettings.isPending ? t('pay.saving') : t('pay.save')}
-            </button>
-          </div>
+          <p className="pay-hint">{t('pay.workHoursHintShort')} · {t('pay.latePctHint')}</p>
         </div>
-      </div>
+      ) : null}
 
-      <div className="pay-stats">
-        <article className="pay-stat is-blue">
-          <div className="pay-stat-head">
-            <span>{t('pay.fund')}</span>
-            <span className="pay-stat-ico"><Banknote size={16} /></span>
-          </div>
-          <strong>{money(data?.summary.salaryFund || 0)}<span className="pay-som">so‘m</span></strong>
-          <small>{data?.summary.headcount || 0} {t('pay.employee').toLowerCase()}</small>
-        </article>
-        <article className="pay-stat is-red">
-          <div className="pay-stat-head">
-            <span>{t('pay.fines')}</span>
-            <span className="pay-stat-ico"><CircleAlert size={16} /></span>
-          </div>
-          <strong>{money(data?.summary.fineTotal || 0)}<span className="pay-som">so‘m</span></strong>
-          <small>{t('pay.absent')} / {t('pay.late')}</small>
-        </article>
-        <article className="pay-stat is-amber">
-          <div className="pay-stat-head">
-            <span>{t('pay.advances')}</span>
-            <span className="pay-stat-ico"><Wallet size={16} /></span>
-          </div>
-          <strong>{money(data?.summary.advancesTotal || 0)}<span className="pay-som">so‘m</span></strong>
-          <small>{t('pay.advances')}</small>
-        </article>
-        <article className="pay-stat is-violet">
-          <div className="pay-stat-head">
-            <span>{t('pay.bonusCol')}</span>
-            <span className="pay-stat-ico"><Banknote size={16} /></span>
-          </div>
-          <strong>
-            {(data?.summary.adjustmentsTotal || 0) > 0 ? '+' : ''}
-            {money(data?.summary.adjustmentsTotal || 0)}
-            <span className="pay-som">so‘m</span>
-          </strong>
-          <small>{t('pay.bonus')}</small>
-        </article>
-        <article className="pay-stat is-green">
-          <div className="pay-stat-head">
-            <span>{t('pay.net')}</span>
-            <span className="pay-stat-ico"><Banknote size={16} /></span>
-          </div>
-          <strong>{money(data?.summary.netTotal || 0)}<span className="pay-som">so‘m</span></strong>
-          <small>
-            {(data?.summary.adjustmentsTotal || 0)
-              ? `${(data?.summary.adjustmentsTotal || 0) > 0 ? '+' : ''}${money(data?.summary.adjustmentsTotal || 0)} ${t('pay.bonusCol').toLowerCase()}`
-              : t('pay.net')}
-          </small>
-        </article>
+      <div className="pay-strip">
+        <div className="pay-strip-item">
+          <span>{t('pay.fund')}</span>
+          <b>{money(data?.summary.salaryFund || 0)}</b>
+        </div>
+        <div className="pay-strip-item is-red">
+          <span>{t('pay.fines')}</span>
+          <b>{money(data?.summary.fineTotal || 0)}</b>
+        </div>
+        <div className="pay-strip-item is-amber">
+          <span>{t('pay.advances')}</span>
+          <b>{money(data?.summary.advancesTotal || 0)}</b>
+        </div>
+        <div className="pay-strip-item is-violet">
+          <span>{t('pay.bonusCol')}</span>
+          <b>{(data?.summary.adjustmentsTotal || 0) > 0 ? '+' : ''}{money(data?.summary.adjustmentsTotal || 0)}</b>
+        </div>
+        <div className="pay-strip-item is-green">
+          <span>{t('pay.net')}</span>
+          <b>{money(data?.summary.netTotal || 0)}</b>
+        </div>
       </div>
 
       {needSalary ? (
