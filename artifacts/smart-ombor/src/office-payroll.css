@@ -526,22 +526,81 @@
 .pay-pill.is-late { background: #fef3c7; color: #b45309; }
 .pay-form {
   display: grid;
-  gap: .55rem;
+  gap: .65rem;
   margin-top: .75rem;
   padding-top: .75rem;
   border-top: 1px dashed #e2e8f0;
 }
+.pay-form-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: .78rem;
+  line-height: 1.4;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: .55rem .7rem;
+}
+.pay-field {
+  display: grid;
+  gap: .28rem;
+}
+.pay-field > span {
+  color: #475569;
+  font-size: .72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
 .pay-form .input,
 .pay-form select {
+  width: 100%;
   border-radius: 11px;
   border: 1px solid #cfd9e6;
-  padding: .55rem .7rem;
+  padding: .65rem .75rem;
   background: #fff;
+  font: inherit;
 }
 .pay-form-actions {
   display: flex;
   flex-wrap: wrap;
   gap: .45rem;
+}
+.pay-form-actions .pay-save-btn { flex: 1 1 100%; }
+.pay-save-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  width: 100%;
+  min-height: 2.85rem;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: .95rem;
+  font-weight: 780;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(29, 78, 216, .28);
+}
+.pay-save-btn:hover:not(:disabled) { filter: brightness(1.05); }
+.pay-save-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.pay-flash {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .65rem .85rem;
+  border-radius: 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
+  font-weight: 750;
+  font-size: .88rem;
 }
 
 @media (max-width: 980px) {

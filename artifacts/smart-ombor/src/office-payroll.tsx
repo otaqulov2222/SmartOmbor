@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Banknote, CalendarDays, ChevronLeft, ChevronRight, CircleAlert,
-  Pencil, Percent, Plus, RefreshCw, Search, Trash2, Wallet, X,
+  AlertTriangle, Banknote, CalendarDays, Check, ChevronLeft, ChevronRight, CircleAlert,
+  Pencil, Percent, RefreshCw, Save, Search, Trash2, Wallet, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/i18n';
@@ -106,6 +106,13 @@ export function OfficePayrollPage() {
   const [advanceForm, setAdvanceForm] = useState({ amount: '', date: '', note: '' });
   const [adjForm, setAdjForm] = useState({ amount: '', note: '', kind: 'bonus' });
   const [fineEdit, setFineEdit] = useState<{ date: string; kind: 'absent' | 'late'; amount: string; note: string } | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = window.setTimeout(() => setFlash(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [flash]);
 
   const query = useQuery({
     queryKey: ['office-payroll', month],
@@ -167,6 +174,7 @@ export function OfficePayrollPage() {
       }),
     onSuccess: () => {
       setAdvanceForm({ amount: '', date: '', note: '' });
+      setFlash(t('pay.savedOk'));
       invalidate();
     },
   });
@@ -184,6 +192,7 @@ export function OfficePayrollPage() {
       }),
     onSuccess: () => {
       setFineEdit(null);
+      setFlash(t('pay.savedOk'));
       invalidate();
     },
   });
@@ -202,6 +211,7 @@ export function OfficePayrollPage() {
       }),
     onSuccess: () => {
       setAdjForm({ amount: '', note: '', kind: 'bonus' });
+      setFlash(t('pay.savedOk'));
       invalidate();
     },
   });
@@ -443,6 +453,10 @@ export function OfficePayrollPage() {
               </article>
             </div>
 
+            {flash ? (
+              <p className="pay-flash"><Check size={15} /> {flash}</p>
+            ) : null}
+
             <section>
               <h3>{t('pay.fines')}</h3>
               {selected.fines.length ? (
@@ -499,7 +513,8 @@ export function OfficePayrollPage() {
                   <div className="pay-form-actions">
                     <button
                       type="button"
-                      className="btn primary"
+                      className="pay-save-btn"
+                      disabled={saveFine.isPending}
                       onClick={() =>
                         saveFine.mutate({
                           accountId: selected.accountId,
@@ -510,7 +525,8 @@ export function OfficePayrollPage() {
                         })
                       }
                     >
-                      {t('pay.save')}
+                      <Save size={16} />
+                      {saveFine.isPending ? t('pay.saving') : t('pay.save')}
                     </button>
                     <button
                       type="button"
@@ -536,86 +552,128 @@ export function OfficePayrollPage() {
 
             <section>
               <h3>{t('pay.advances')}</h3>
-              <ul className="pay-list">
-                {selected.advances.map((a) => (
-                  <li key={a.id}>
-                    <div>
-                      <b>{money(a.amount)}</b> · {a.date}
-                      {a.note ? <div className="pay-muted">{a.note}</div> : null}
-                    </div>
-                    <button type="button" className="btn" onClick={() => delAdvance.mutate(a.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {selected.advances.length ? (
+                <ul className="pay-list">
+                  {selected.advances.map((a) => (
+                    <li key={a.id}>
+                      <div>
+                        <b>{money(a.amount)} <span className="pay-som">so‘m</span></b> · {a.date}
+                        {a.note ? <div className="pay-muted">{a.note}</div> : null}
+                      </div>
+                      <button type="button" className="btn" onClick={() => delAdvance.mutate(a.id)} aria-label="delete">
+                        <Trash2 size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="pay-muted">{t('pay.noAdvances')}</p>
+              )}
               <div className="pay-form">
-                <input
-                  className="input"
-                  type="number"
-                  placeholder={t('pay.amount')}
-                  value={advanceForm.amount}
-                  onChange={(e) => setAdvanceForm({ ...advanceForm, amount: e.target.value })}
-                />
-                <input
-                  className="input"
-                  type="date"
-                  value={advanceForm.date}
-                  onChange={(e) => setAdvanceForm({ ...advanceForm, date: e.target.value })}
-                />
-                <input
-                  className="input"
-                  placeholder={t('pay.note')}
-                  value={advanceForm.note}
-                  onChange={(e) => setAdvanceForm({ ...advanceForm, note: e.target.value })}
-                />
-                <button type="button" className="btn primary" onClick={() => addAdvance.mutate()} disabled={!advanceForm.amount}>
-                  <Plus size={14} /> {t('pay.addAdvance')}
+                <p className="pay-form-hint">{t('pay.formHint')}</p>
+                <label className="pay-field">
+                  <span>{t('pay.amount')}</span>
+                  <input
+                    className="input"
+                    type="number"
+                    placeholder="500000"
+                    value={advanceForm.amount}
+                    onChange={(e) => setAdvanceForm({ ...advanceForm, amount: e.target.value })}
+                  />
+                </label>
+                <label className="pay-field">
+                  <span>{t('pay.date')}</span>
+                  <input
+                    className="input"
+                    type="date"
+                    value={advanceForm.date}
+                    onChange={(e) => setAdvanceForm({ ...advanceForm, date: e.target.value })}
+                  />
+                </label>
+                <label className="pay-field">
+                  <span>{t('pay.note')}</span>
+                  <input
+                    className="input"
+                    placeholder={t('pay.note')}
+                    value={advanceForm.note}
+                    onChange={(e) => setAdvanceForm({ ...advanceForm, note: e.target.value })}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="pay-save-btn"
+                  onClick={() => addAdvance.mutate()}
+                  disabled={!advanceForm.amount || addAdvance.isPending}
+                >
+                  <Save size={16} />
+                  {addAdvance.isPending ? t('pay.saving') : t('pay.addAdvance')}
                 </button>
+                {addAdvance.isError ? <p className="pay-err">{(addAdvance.error as Error).message}</p> : null}
               </div>
             </section>
 
             <section>
               <h3>{t('pay.adjust')}</h3>
-              <ul className="pay-list">
-                {selected.adjustments.map((a) => (
-                  <li key={a.id}>
-                    <div>
-                      <b>{money(a.amount)}</b> · {a.kind}
-                      {a.note ? <div className="pay-muted">{a.note}</div> : null}
-                    </div>
-                    <button type="button" className="btn" onClick={() => delAdj.mutate(a.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {selected.adjustments.length ? (
+                <ul className="pay-list">
+                  {selected.adjustments.map((a) => (
+                    <li key={a.id}>
+                      <div>
+                        <b>{money(a.amount)} <span className="pay-som">so‘m</span></b> · {a.kind}
+                        {a.note ? <div className="pay-muted">{a.note}</div> : null}
+                      </div>
+                      <button type="button" className="btn" onClick={() => delAdj.mutate(a.id)} aria-label="delete">
+                        <Trash2 size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="pay-muted">{t('pay.noAdjust')}</p>
+              )}
               <div className="pay-form">
-                <select
-                  className="input"
-                  value={adjForm.kind}
-                  onChange={(e) => setAdjForm({ ...adjForm, kind: e.target.value })}
+                <p className="pay-form-hint">{t('pay.formHint')}</p>
+                <label className="pay-field">
+                  <span>{t('pay.bonus')}</span>
+                  <select
+                    className="input"
+                    value={adjForm.kind}
+                    onChange={(e) => setAdjForm({ ...adjForm, kind: e.target.value })}
+                  >
+                    <option value="bonus">{t('pay.bonus')}</option>
+                    <option value="deduct">{t('pay.deduct')}</option>
+                    <option value="other">{t('pay.other')}</option>
+                  </select>
+                </label>
+                <label className="pay-field">
+                  <span>{t('pay.amount')}</span>
+                  <input
+                    className="input"
+                    type="number"
+                    placeholder={t('pay.amountSigned')}
+                    value={adjForm.amount}
+                    onChange={(e) => setAdjForm({ ...adjForm, amount: e.target.value })}
+                  />
+                </label>
+                <label className="pay-field">
+                  <span>{t('pay.note')}</span>
+                  <input
+                    className="input"
+                    placeholder={t('pay.note')}
+                    value={adjForm.note}
+                    onChange={(e) => setAdjForm({ ...adjForm, note: e.target.value })}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="pay-save-btn"
+                  onClick={() => addAdj.mutate()}
+                  disabled={!adjForm.amount || addAdj.isPending}
                 >
-                  <option value="bonus">{t('pay.bonus')}</option>
-                  <option value="deduct">{t('pay.deduct')}</option>
-                  <option value="other">{t('pay.other')}</option>
-                </select>
-                <input
-                  className="input"
-                  type="number"
-                  placeholder={t('pay.amountSigned')}
-                  value={adjForm.amount}
-                  onChange={(e) => setAdjForm({ ...adjForm, amount: e.target.value })}
-                />
-                <input
-                  className="input"
-                  placeholder={t('pay.note')}
-                  value={adjForm.note}
-                  onChange={(e) => setAdjForm({ ...adjForm, note: e.target.value })}
-                />
-                <button type="button" className="btn primary" onClick={() => addAdj.mutate()} disabled={!adjForm.amount}>
-                  <Plus size={14} /> {t('pay.addAdjust')}
+                  <Save size={16} />
+                  {addAdj.isPending ? t('pay.saving') : t('pay.addAdjust')}
                 </button>
+                {addAdj.isError ? <p className="pay-err">{(addAdj.error as Error).message}</p> : null}
               </div>
             </section>
           </aside>
