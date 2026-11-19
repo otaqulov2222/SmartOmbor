@@ -1,7 +1,7 @@
 /**
  * Smart location resolver for Tashkent stores & markets
  * when MoySklad counterparty doesn't yet have exact GPS coordinates,
- * plus Haversine distance and nearest-neighbor 1 -> 2 -> 3 -> 4 -> 5 route ordering.
+ * plus Haversine distance and nearest-neighbor route ordering from agent position.
  */
 
 const PLACES: Array<[RegExp, number, number]> = [
@@ -89,11 +89,21 @@ function stopExact(s: { exact?: boolean; exactGps?: boolean }): boolean {
   return s.exactGps === true || s.exact === true;
 }
 
-function greedyNearest<T extends { lat: number; lng: number }>(
-  pool: T[],
-  startLat: number,
-  startLng: number,
-): T[] {
+/**
+ * Nearest-neighbor: har qadamda joriy nuqtaga eng yaqin mijoz.
+ * Tie-break: aniq GPS > qarz > ism (bir xil masofada).
+ */
+function greedyNearest<
+  T extends {
+    lat: number;
+    lng: number;
+    exact?: boolean;
+    exactGps?: boolean;
+    debt?: string | number;
+    name?: string;
+    id?: string;
+  },
+>(pool: T[], startLat: number, startLng: number): T[] {
   const rem = [...pool];
   const out: T[] = [];
   let curLat = startLat;
@@ -106,6 +116,26 @@ function greedyNearest<T extends { lat: number; lng: number }>(
       if (d < bestDist) {
         bestDist = d;
         bestIdx = i;
+        continue;
+      }
+      if (d === bestDist) {
+        const a = rem[i];
+        const b = rem[bestIdx];
+        const ea = stopExact(a) ? 1 : 0;
+        const eb = stopExact(b) ? 1 : 0;
+        if (ea !== eb) {
+          if (ea > eb) bestIdx = i;
+          continue;
+        }
+        const da = Number(a.debt || 0);
+        const db = Number(b.debt || 0);
+        if (da !== db) {
+          if (da > db) bestIdx = i;
+          continue;
+        }
+        if (String(a.name || a.id || "").localeCompare(String(b.name || b.id || ""), "uz") < 0) {
+          bestIdx = i;
+        }
       }
     }
     const [picked] = rem.splice(bestIdx, 1);
@@ -116,15 +146,27 @@ function greedyNearest<T extends { lat: number; lng: number }>(
   return out;
 }
 
-function stableFallbackOrder<T extends { id: string; debt?: string | number; name?: string }>(pool: T[]): T[] {
-  return [...pool].sort((a, b) => {
-    const da = Number(a.debt || 0);
-    const db = Number(b.debt || 0);
-    if (db !== da) return db - da;
-    return String(a.name || a.id).localeCompare(String(b.name || b.id), "uz");
-  });
+/** Agent GPS yo‘q: klaster markaziga eng yaqin nuqtadan NN boshlash. */
+function seedFromStops<T extends { lat: number; lng: number }>(stops: T[]): { lat: number; lng: number } | null {
+  if (!stops.length) return null;
+  const lat = stops.reduce((s, x) => s + x.lat, 0) / stops.length;
+  const lng = stops.reduce((s, x) => s + x.lng, 0) / stops.length;
+  let best = stops[0];
+  let bestD = Infinity;
+  for (const s of stops) {
+    const d = distanceMeters(lat, lng, s.lat, s.lng);
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
+  }
+  return { lat: best.lat, lng: best.lng };
 }
 
+/**
+ * Marshrut: agent turgan joydan → eng yaqin → keyingi eng yaqin (1→2→3…).
+ * Qarz bo‘yicha tartib YO‘Q (faqat teng masofada tie-break).
+ */
 export function orderRouteStops<
   T extends {
     id: string;
@@ -147,49 +189,36 @@ export function orderRouteStops<
     .sort((a, b) => String(a.visitedAt || "").localeCompare(String(b.visitedAt || "")));
 
   const unvisited = stops.filter((s) => !s.visitedToday);
-  const exactUnvisited = unvisited.filter((s) => stopExact(s));
-  const inferredUnvisited = unvisited.filter((s) => !stopExact(s));
 
   const hasStart =
     startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng);
 
-  let seedLat: number | null = hasStart
-    ? (startLat as number)
-    : visited.length
-      ? visited[visited.length - 1].lat
-      : exactUnvisited.length
-        ? exactUnvisited[0].lat
-        : null;
-  let seedLng: number | null = hasStart
-    ? (startLng as number)
-    : visited.length
-      ? visited[visited.length - 1].lng
-      : exactUnvisited.length
-        ? exactUnvisited[0].lng
-        : null;
+  let seedLat: number | null = null;
+  let seedLng: number | null = null;
 
-  let greedyExact: T[] = [];
-  let greedyInferred: T[] = [];
-
-  if (seedLat != null && seedLng != null) {
-    // Avval aniq GPS nuqtalar — taxminiy (hudud) pinlar marshrutni buzmasin
-    const exactPool =
-      !hasStart && !visited.length && exactUnvisited.length
-        ? exactUnvisited.slice(1)
-        : exactUnvisited;
-    const firstExact =
-      !hasStart && !visited.length && exactUnvisited.length ? [exactUnvisited[0]] : [];
-    greedyExact = [...firstExact, ...greedyNearest(exactPool, seedLat, seedLng)];
-    const afterExactLat = greedyExact.length ? greedyExact[greedyExact.length - 1].lat : seedLat;
-    const afterExactLng = greedyExact.length ? greedyExact[greedyExact.length - 1].lng : seedLng;
-    greedyInferred = greedyNearest(inferredUnvisited, afterExactLat, afterExactLng);
+  if (hasStart) {
+    seedLat = startLat as number;
+    seedLng = startLng as number;
+  } else if (visited.length) {
+    seedLat = visited[visited.length - 1].lat;
+    seedLng = visited[visited.length - 1].lng;
   } else {
-    // GPS umuman yo‘q — Toshkent markazini o‘ylab topmaymiz
-    greedyExact = stableFallbackOrder(exactUnvisited);
-    greedyInferred = stableFallbackOrder(inferredUnvisited);
+    const seed = seedFromStops(unvisited);
+    if (seed) {
+      seedLat = seed.lat;
+      seedLng = seed.lng;
+    }
   }
 
-  const ordered = [...visited, ...greedyExact, ...greedyInferred];
+  // Barcha ochiq nuqtalar — bir NN zanjir (aniq/taxminiy ajratilmaydi)
+  const greedy =
+    seedLat != null && seedLng != null
+      ? greedyNearest(unvisited, seedLat, seedLng)
+      : [...unvisited].sort((a, b) =>
+          String(a.name || a.id).localeCompare(String(b.name || b.id), "uz"),
+        );
+
+  const ordered = [...visited, ...greedy];
   let nextAssigned = false;
 
   return ordered.map((item, idx) => {
@@ -199,7 +228,6 @@ export function orderRouteStops<
     const fromAgentM =
       hasStart ? distanceMeters(startLat as number, startLng as number, item.lat, item.lng) : null;
 
-    // distanceM = marshrut oyog‘i (prev→current). Keyingi nuqta uchun agent→nuqta.
     let distanceM: number | null = null;
     if (isNext && hasStart) {
       distanceM = fromAgentM;

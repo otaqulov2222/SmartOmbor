@@ -2396,7 +2396,10 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       }
     }
 
-    const selectedAgentLoc = activeAgentId ? lastLocByAgent.get(activeAgentId) : null;
+    // Marshrut seed = xaritadagi pin bilan bir xil (bugun yoki oxirgi ma’lum joy)
+    const selectedAgentLoc = activeAgentId
+      ? (lastLocByAgent.get(activeAgentId) || lastAnyByAgent.get(activeAgentId) || null)
+      : null;
     const selectedAgentRow = agents.find((a) => a.id === activeAgentId);
     // Marshrut nuqtalari = MoySklad взаиморасчеты (KPI bilan 1:1), lokal assignment emas.
     const msDetail = selectedAgentRow
