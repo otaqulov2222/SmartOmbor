@@ -13,6 +13,7 @@ import {
   clerkProxyMiddleware,
   getClerkProxyHost,
 } from "./middlewares/clerkProxyMiddleware";
+import { serverBillingLockMiddleware } from "./middlewares/serverBillingLock";
 
 const app: Express = express();
 
@@ -51,6 +52,7 @@ if (process.env.CLERK_SECRET_KEY) {
   );
 }
 
+app.use("/api", serverBillingLockMiddleware);
 app.use("/api", router);
 
 const webRoot = path.resolve(process.cwd(), "artifacts/smart-ombor/dist/public");

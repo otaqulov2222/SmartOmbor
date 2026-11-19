@@ -8,11 +8,13 @@ import localAuthRouter from "./local-auth";
 import officeRouter from "./office";
 import kpiRouter from "./kpi";
 import assistantRouter from "./assistant";
+import serverBillingRouter from "./server-billing";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(localAuthRouter);
+router.use(serverBillingRouter);
 router.use(officeRouter);
 router.use(partnersRouter);
 router.use(kpiRouter);

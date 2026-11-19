@@ -7,6 +7,7 @@ import { buildXlsx } from "./xlsx-file";
 import { logger } from "./logger";
 import { orderBasis, orderRecommendations, productTraits } from "./recommendations";
 import { recommendationPdf, recommendationRows, recommendationXlsx } from "./reco-export";
+import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -319,7 +320,16 @@ function claimDigest(stamp: string) {
   }
 }
 
-const WELCOME = "<b>Smart Ombor</b>\nUlandi.\n\nXabar har kuni soat <b>11:00</b> da keladi. Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.";
+const WELCOME = [
+  "<b>Smart Ombor</b>",
+  "Ulandi.",
+  "",
+  "• Turib qolgan / buyurtma — har kuni <b>11:00</b>",
+  "• Server to‘lovi eslatmasi — muddatga 3 kun qolganda har kuni <b>10:00</b>",
+  "• To‘lov qilganda yozing: <code>server tolov</code>",
+  "",
+  "Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.",
+].join("\n");
 
 async function sendFile(chatId: number, body: Buffer, filename: string, mime: string, caption: string, threadId?: number | null) {
   const key = token();
@@ -418,6 +428,29 @@ async function tick() {
       if (!chatId || chatId < 0) continue;
       const first = state.chatId == null;
       state.chatId = chatId;
+      const text = String(message?.text || "").trim().toLowerCase();
+      // Admin: server to‘lovi qilindi → muddat +30 kun, eslatmalar yangilanadi
+      if (
+        /^(?:\/)?server[_\s-]*(tolov|to'?lov|paid|pay)/i.test(text)
+        || /server\s*to'?lov\s*qilindi/.test(text)
+        || text === "/paid"
+      ) {
+        const bill = markServerPaid({ note: "telegram" });
+        const dueLabel = (bill.nextDue || "").split("-").reverse().join(".");
+        await send(
+          chatId,
+          [
+            "<b>✅ Server to‘lovi belgilandi</b>",
+            "",
+            `To‘lov sanasi: <b>${(bill.paidAt || "").split("-").reverse().join(".")}</b>`,
+            `Keyingi muddat: <b>${dueLabel}</b> (${bill.periodDays} kun)`,
+            "",
+            "Muddatga 3 kun qolganda har kuni soat <b>10:00</b> da eslatma yuboriladi.",
+            "To‘lov qilinmasa tizim to‘xtaydi.",
+          ].join("\n"),
+        );
+        continue;
+      }
       if (first || message?.text?.startsWith("/start")) {
         await send(chatId, WELCOME);
         await sendDigest(state);
@@ -443,6 +476,26 @@ async function tick() {
       }
       logger.info({ day: now.stamp, sent }, "Daily Telegram digest");
     }
+
+    // Server to‘lovi eslatmasi — har kuni 10:00 (Toshkent), muddatga 3/2/1/0 kun qolganda
+    try {
+      ensureBillingInitialized();
+      const remind = peekBillingReminder();
+      if (remind) {
+        const target = state.chatId || (state.groupId && state.orderThreadId ? state.groupId : null);
+        if (target) {
+          const thread = target === state.groupId ? state.orderThreadId : null;
+          const ok = await send(target, remind.html, undefined, thread);
+          if (ok) markBillingReminded(remind.daysLeft);
+          logger.info({ day: now.stamp, daysLeft: remind.daysLeft, due: remind.due, ok }, "Server billing reminder");
+        } else {
+          logger.warn({ day: now.stamp, daysLeft: remind.daysLeft }, "Server billing reminder skipped — no Telegram chat");
+        }
+      }
+    } catch (error) {
+      logger.warn({ err: error instanceof Error ? error.message : error }, "Server billing reminder failed");
+    }
+
     writeState(state);
   } catch (error) {
     const message = error instanceof Error ? error.message.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot") : "telegram";

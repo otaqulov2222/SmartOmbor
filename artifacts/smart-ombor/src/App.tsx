@@ -366,6 +366,69 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
   const { user } = useUser(); const { signOut } = useClerk(); const { t } = useI18n();
   return <WorkspaceChrome title={title} userName={user?.fullName || user?.firstName || t('shell.localUser')} onSignOut={() => signOut({ redirectUrl: basePath || '/' })}>{children}</WorkspaceChrome>;
 }
+function ServerBillingBanner() {
+  const session = readLocalSession();
+  const canPay = session?.role === 'super_admin' || session?.role === 'manager';
+  const q = useQuery<{
+    nextDue: string | null;
+    daysLeft: number | null;
+    locked: boolean;
+    paidAt: string | null;
+  }>({
+    queryKey: ['server-billing'],
+    queryFn: async () => {
+      const res = await fetch('/api/server-billing');
+      if (!res.ok) throw new Error('billing');
+      return res.json();
+    },
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+  const [busy, setBusy] = useState(false);
+  const data = q.data;
+  if (!data || data.daysLeft == null) return null;
+  // Faqat 3 kun ichida yoki muddat o‘tganda ko‘rsat
+  if (data.daysLeft > 3) return null;
+  const due = (data.nextDue || '').split('-').reverse().join('.');
+  const locked = data.locked || data.daysLeft < 0;
+  const title = locked
+    ? 'Server to‘lovi muddati o‘tdi — tizim to‘xtatilgan'
+    : data.daysLeft === 0
+      ? 'Bugun server to‘lovi muddati'
+      : `Server to‘loviga ${data.daysLeft} kun qoldi`;
+  const markPaid = async () => {
+    if (!canPay || busy) return;
+    setBusy(true);
+    try {
+      const token = session?.token || '';
+      const res = await fetch('/api/server-billing/paid', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ note: 'ui' }),
+      });
+      if (!res.ok) throw new Error('paid');
+      await q.refetch();
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={`server-bill-banner ${locked ? 'is-locked' : 'is-warn'}`} role="status">
+      <div>
+        <b>{title}</b>
+        <span>Muddat: {due || '—'} · To‘lov qilinmasa tizim to‘xtaydi</span>
+      </div>
+      {canPay ? (
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void markPaid()}>
+          {busy ? '…' : 'To‘lov qilindi'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function LocalShell({ children, title }: { children: ReactNode; title: string }) {
   const [, setLocation] = useLocation(); const { t } = useI18n();
   const session = readLocalSession();
@@ -498,6 +561,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     </aside>
     <div className="main">
       <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{has('scanner') && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
+      <ServerBillingBanner />
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
   </div>;

@@ -1640,3 +1640,34 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   }
   .assistant-bubble { max-width: min(92%, 100%); }
 }
+
+.server-bill-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin: 0 .85rem .35rem;
+  padding: .65rem .85rem;
+  border-radius: 10px;
+  font-size: .86rem;
+}
+.server-bill-banner > div {
+  display: grid;
+  gap: .15rem;
+  min-width: 0;
+}
+.server-bill-banner b { font-weight: 780; }
+.server-bill-banner span { color: inherit; opacity: .88; font-size: .78rem; }
+.server-bill-banner.is-warn {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+}
+.server-bill-banner.is-locked {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #9f1239;
+}
+@media (max-width: 720px) {
+  .server-bill-banner { flex-direction: column; align-items: stretch; margin: 0 .55rem .25rem; }
+}
