@@ -54,6 +54,44 @@
   white-space: nowrap;
 }
 
+.pay-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+.pay-export {
+  display: inline-flex;
+  gap: .4rem;
+  flex-wrap: wrap;
+}
+.pay-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  min-height: 2.35rem;
+  padding: .45rem .75rem;
+  border-radius: 11px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #1e3a8a;
+  font-size: .82rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.pay-export-btn.is-pdf {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+  color: #166534;
+}
+.pay-export-btn:hover:not(:disabled) { filter: brightness(.97); }
+.pay-export-btn:disabled { opacity: .55; cursor: not-allowed; }
+.pay-drawer-tools {
+  display: flex;
+  align-items: flex-start;
+  gap: .45rem;
+}
 .pay-month {
   display: inline-flex;
   align-items: center;

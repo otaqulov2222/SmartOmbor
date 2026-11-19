@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Banknote, CalendarDays, Check, ChevronLeft, ChevronRight, CircleAlert,
-  Pencil, Percent, RefreshCw, Save, Search, Trash2, Wallet, X,
+  Download, FileSpreadsheet, FileText, Pencil, Percent, RefreshCw, Save, Search, Trash2, Wallet, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/i18n';
 import { officeHeaders } from '@/office';
+import {
+  exportMonthExcel,
+  exportMonthPdf,
+  exportPersonExcel,
+  exportPersonPdf,
+  type PayLabels,
+} from '@/office-payroll-export';
 import './office-payroll.css';
 
 type FineLine = {
@@ -107,12 +114,63 @@ export function OfficePayrollPage() {
   const [adjForm, setAdjForm] = useState({ amount: '', note: '', kind: 'bonus' });
   const [fineEdit, setFineEdit] = useState<{ date: string; kind: 'absent' | 'late'; amount: string; note: string } | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     if (!flash) return;
     const id = window.setTimeout(() => setFlash(null), 2200);
     return () => window.clearTimeout(id);
   }, [flash]);
+
+  const labels = useMemo<PayLabels>(() => ({
+    title: t('nav.officePayroll'),
+    employee: t('pay.employee'),
+    login: t('pay.login'),
+    role: t('pay.role'),
+    monthly: t('pay.monthly'),
+    daily: t('pay.daily'),
+    workdays: t('pay.workdays'),
+    absent: t('pay.absent'),
+    late: t('pay.late'),
+    present: t('pay.present'),
+    fines: t('pay.fines'),
+    advances: t('pay.advances'),
+    bonus: t('pay.bonusCol'),
+    net: t('pay.net'),
+    auto: t('pay.auto'),
+    note: t('pay.note'),
+    amount: t('pay.amount'),
+    date: t('pay.date'),
+    kind: t('pay.kind'),
+    summary: t('pay.summary'),
+    period: t('pay.period'),
+    latePct: t('pay.latePct'),
+  }), [t]);
+
+  const monthPayload = useMemo(() => {
+    if (!data) return null;
+    return {
+      month: data.month,
+      from: data.from,
+      to: data.to,
+      workdays: data.workdays,
+      latePenaltyPct: data.settings.latePenaltyPct,
+      summary: data.summary,
+      people: data.people,
+    };
+  }, [data]);
+
+  const runExport = async (fn: () => void | Promise<void>) => {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      await fn();
+    } catch (err) {
+      setFlash((err as Error).message || t('common.actionFailed'));
+    } finally {
+      setExportBusy(false);
+    }
+  };
 
   const query = useQuery({
     queryKey: ['office-payroll', month],
@@ -234,17 +292,37 @@ export function OfficePayrollPage() {
           </div>
           <p className="pay-sub">{t('pay.sub')}</p>
         </div>
-        <div className="pay-month">
-          <button type="button" onClick={() => setMonth((m) => shiftMonth(m, -1))} aria-label="prev">
-            <ChevronLeft size={16} />
-          </button>
-          <b>{month}</b>
-          <button type="button" onClick={() => setMonth((m) => shiftMonth(m, 1))} aria-label="next">
-            <ChevronRight size={16} />
-          </button>
-          <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} aria-label="refresh">
-            <RefreshCw size={15} className={query.isFetching ? 'pay-spin' : undefined} />
-          </button>
+        <div className="pay-head-actions">
+          <div className="pay-export" title={t('pay.exportMonth')}>
+            <button
+              type="button"
+              className="pay-export-btn"
+              disabled={!monthPayload?.people.length || exportBusy}
+              onClick={() => monthPayload && void runExport(() => exportMonthExcel(monthPayload, labels))}
+            >
+              <FileSpreadsheet size={15} /> {exportBusy ? t('pay.exporting') : t('pay.excel')}
+            </button>
+            <button
+              type="button"
+              className="pay-export-btn is-pdf"
+              disabled={!monthPayload?.people.length || exportBusy}
+              onClick={() => monthPayload && void runExport(() => exportMonthPdf(monthPayload, labels))}
+            >
+              <FileText size={15} /> {t('pay.pdf')}
+            </button>
+          </div>
+          <div className="pay-month">
+            <button type="button" onClick={() => setMonth((m) => shiftMonth(m, -1))} aria-label="prev">
+              <ChevronLeft size={16} />
+            </button>
+            <b>{month}</b>
+            <button type="button" onClick={() => setMonth((m) => shiftMonth(m, 1))} aria-label="next">
+              <ChevronRight size={16} />
+            </button>
+            <button type="button" onClick={() => query.refetch()} disabled={query.isFetching} aria-label="refresh">
+              <RefreshCw size={15} className={query.isFetching ? 'pay-spin' : undefined} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -471,9 +549,29 @@ export function OfficePayrollPage() {
                   <p className="pay-muted">{selected.login}</p>
                 </span>
               </div>
-              <button type="button" className="icon-btn" onClick={() => setDetailId(null)} aria-label="close">
-                <X size={18} />
-              </button>
+              <div className="pay-drawer-tools">
+                <div className="pay-export" title={t('pay.exportPerson')}>
+                  <button
+                    type="button"
+                    className="pay-export-btn"
+                    disabled={exportBusy}
+                    onClick={() => void runExport(() => exportPersonExcel(selected, month, labels))}
+                  >
+                    <FileSpreadsheet size={14} /> {t('pay.excel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="pay-export-btn is-pdf"
+                    disabled={exportBusy}
+                    onClick={() => void runExport(() => exportPersonPdf(selected, month, labels))}
+                  >
+                    <Download size={14} /> {t('pay.pdf')}
+                  </button>
+                </div>
+                <button type="button" className="icon-btn" onClick={() => setDetailId(null)} aria-label="close">
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             <div className="pay-drawer-summary">
               <article>
