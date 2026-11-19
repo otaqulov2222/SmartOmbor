@@ -144,6 +144,48 @@
   gap: 1rem;
   align-items: end;
 }
+.pay-panel-hours { align-items: start; }
+.pay-time {
+  display: grid;
+  gap: .25rem;
+  font-size: .72rem;
+  font-weight: 750;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.pay-time .input { min-width: 7.2rem; }
+.pay-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin-top: .65rem;
+}
+.pay-day-chip {
+  border: 1px solid #dbe4f0;
+  background: #f0fdf4;
+  color: #166534;
+  border-radius: 999px;
+  padding: .28rem .55rem;
+  font-size: .75rem;
+  font-weight: 780;
+  cursor: pointer;
+}
+.pay-day-chip.is-off {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+  text-decoration: line-through;
+}
+.pay-check {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .88rem;
+  font-weight: 650;
+  color: #334155;
+  margin-top: .35rem;
+}
 .pay-label {
   display: inline-flex;
   align-items: center;

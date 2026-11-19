@@ -22,7 +22,32 @@ export type OfficeSite = {
   accuracyM: number;
   start: string;
   end: string;
+  /**
+   * Dam olish kunlari — `Date.getUTCDay()` (0=Yakshanba … 6=Shanba).
+   * Default: faqat Dushanba [1] → ish Se–Ya.
+   */
+  offDays: number[];
 };
+
+/** Xodim uchun alohida ish grafigi (bo‘sh = ofis standarti). */
+export type WorkSchedule = {
+  start: string;
+  end: string;
+  /** Berilsa ofis offDays o‘rniga shu ishlatiladi. */
+  offDays?: number[];
+  note: string;
+  updatedAt: string;
+};
+
+export type ResolvedHours = {
+  start: string;
+  end: string;
+  offDays: number[];
+  source: "site" | "custom";
+};
+
+/** Default: Seshanba–Yakshanba ish, Dushanba dam. */
+export const DEFAULT_OFF_DAYS = [1];
 
 function defaultSite(): OfficeSite {
   return {
@@ -31,9 +56,23 @@ function defaultSite(): OfficeSite {
     lng: DEFAULT_OFFICE_LNG,
     radiusM: DEFAULT_OFFICE_RADIUS_M,
     accuracyM: DEFAULT_OFFICE_ACCURACY_M,
-    start: "09:00",
+    start: "06:00",
     end: "18:00",
+    offDays: [...DEFAULT_OFF_DAYS],
   };
+}
+
+function normalizeHm(raw: unknown, fallback: string) {
+  const value = String(raw || "").trim().slice(0, 5);
+  return /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+}
+
+function normalizeOffDays(raw: unknown, fallback: number[] = DEFAULT_OFF_DAYS): number[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  const next = [...new Set(raw.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))];
+  // Barcha kunlar dam bo‘lmasin — bo‘sh/noto‘g‘ri → default
+  if (!next.length || next.length >= 7) return [...fallback];
+  return next.sort((a, b) => a - b);
 }
 
 /** @deprecated — officeSite() dan foydalaning */
@@ -162,6 +201,8 @@ type Store = {
   advances: PayrollAdvance[];
   fineOverrides: FineOverride[];
   adjustments: PayrollAdjustment[];
+  /** accountId → shaxsiy ish soati */
+  schedules: Record<string, WorkSchedule>;
 };
 
 const FILE = dataFile("office.json");
@@ -180,9 +221,35 @@ function normalizeSite(raw: Partial<OfficeSite> | undefined): OfficeSite {
     lng: Number.isFinite(lng) && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0) ? lng : base.lng,
     radiusM: Number.isFinite(radiusM) ? Math.min(5000, Math.max(30, radiusM)) : base.radiusM,
     accuracyM: Number.isFinite(accuracyM) ? Math.min(2000, Math.max(50, accuracyM)) : base.accuracyM,
-    start: /^\d{2}:\d{2}$/.test(String(raw.start || "")) ? String(raw.start) : base.start,
-    end: /^\d{2}:\d{2}$/.test(String(raw.end || "")) ? String(raw.end) : base.end,
+    start: normalizeHm(raw.start, base.start),
+    end: normalizeHm(raw.end, base.end),
+    offDays: normalizeOffDays(raw.offDays, base.offDays),
   };
+}
+
+function normalizeSchedule(raw: Partial<WorkSchedule> | undefined, site: OfficeSite): WorkSchedule | null {
+  if (!raw || typeof raw !== "object") return null;
+  const start = normalizeHm(raw.start, "");
+  const end = normalizeHm(raw.end, "");
+  if (!start || !end) return null;
+  const offDays = raw.offDays != null ? normalizeOffDays(raw.offDays, site.offDays) : undefined;
+  return {
+    start,
+    end,
+    ...(offDays ? { offDays } : {}),
+    note: String(raw.note || "").trim().slice(0, 200),
+    updatedAt: String(raw.updatedAt || new Date().toISOString()),
+  };
+}
+
+function normalizeSchedules(raw: unknown, site: OfficeSite): Record<string, WorkSchedule> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, WorkSchedule> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, Partial<WorkSchedule>>)) {
+    const row = normalizeSchedule(value, site);
+    if (row) out[id] = row;
+  }
+  return out;
 }
 
 function defaultPayrollSettings(): PayrollSettings {
@@ -202,6 +269,7 @@ function empty(): Store {
     advances: [],
     fineOverrides: [],
     adjustments: [],
+    schedules: {},
   };
 }
 
@@ -266,6 +334,7 @@ function load(): Store {
       advances: Array.isArray(parsed.advances) ? (parsed.advances as PayrollAdvance[]) : [],
       fineOverrides: Array.isArray(parsed.fineOverrides) ? (parsed.fineOverrides as FineOverride[]) : [],
       adjustments: Array.isArray(parsed.adjustments) ? (parsed.adjustments as PayrollAdjustment[]) : [],
+      schedules: normalizeSchedules(parsed.schedules, normalizeSite(parsed.site)),
     };
   } catch {
     memory = empty();
@@ -383,21 +452,22 @@ export function officeSite(): OfficeSite {
 }
 
 export function setOfficeSite(input: {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   radiusM?: number;
   accuracyM?: number;
   name?: string;
   start?: string;
   end?: string;
+  offDays?: number[];
 }) {
-  const lat = Number(input.lat);
-  const lng = Number(input.lng);
+  const store = load();
+  const lat = input.lat != null ? Number(input.lat) : store.site.lat;
+  const lng = input.lng != null ? Number(input.lng) : store.site.lng;
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     throw Object.assign(new Error("geo"), { status: 400 });
   }
   if (lat === 0 && lng === 0) throw Object.assign(new Error("geo"), { status: 400 });
-  const store = load();
   store.site = normalizeSite({
     ...store.site,
     lat,
@@ -407,9 +477,61 @@ export function setOfficeSite(input: {
     name: input.name ?? store.site.name,
     start: input.start ?? store.site.start,
     end: input.end ?? store.site.end,
+    offDays: input.offDays ?? store.site.offDays,
   });
   save(store);
   return officeSite();
+}
+
+export function hoursFor(accountId?: string | null): ResolvedHours {
+  const site = officeSite();
+  const id = String(accountId || "");
+  if (!id) return { start: site.start, end: site.end, offDays: [...site.offDays], source: "site" };
+  const custom = load().schedules[id];
+  if (!custom) return { start: site.start, end: site.end, offDays: [...site.offDays], source: "site" };
+  return {
+    start: custom.start,
+    end: custom.end,
+    offDays: custom.offDays ? [...custom.offDays] : [...site.offDays],
+    source: "custom",
+  };
+}
+
+export function schedulesOf(): Record<string, WorkSchedule> {
+  return { ...load().schedules };
+}
+
+export function setWorkSchedule(input: {
+  accountId: string;
+  start: string;
+  end: string;
+  offDays?: number[] | null;
+  note?: string;
+  clear?: boolean;
+}) {
+  const accountId = String(input.accountId || "").trim();
+  if (!accountId) throw Object.assign(new Error("account"), { status: 400 });
+  const store = load();
+  if (input.clear) {
+    delete store.schedules[accountId];
+    save(store);
+    return null;
+  }
+  const start = normalizeHm(input.start, "");
+  const end = normalizeHm(input.end, "");
+  if (!start || !end) throw Object.assign(new Error("hours"), { status: 400 });
+  const row: WorkSchedule = {
+    start,
+    end,
+    note: String(input.note || "").trim().slice(0, 200),
+    updatedAt: new Date().toISOString(),
+  };
+  if (input.offDays != null) {
+    row.offDays = normalizeOffDays(input.offDays, store.site.offDays);
+  }
+  store.schedules[accountId] = row;
+  save(store);
+  return row;
 }
 
 export function officeDistance(lat: number, lng: number) {
@@ -1103,13 +1225,13 @@ function monthBounds(month: string) {
   return { from, to: to < from ? from : to, last };
 }
 
-/** Oy ichidagi Du–Ju ish kunlari soni (Shanba/Yakshanba chiqariladi). */
-export function workdaysInMonth(month: string) {
+/** Oy ichidagi ish kunlari soni (offDays chiqariladi). Default: Se–Ya. */
+export function workdaysInMonth(month: string, offDays: number[] = officeSite().offDays) {
   const { from, last } = monthBounds(month);
   let count = 0;
   let cursor = from;
   while (cursor <= last) {
-    if (!weekendOf(cursor)) count += 1;
+    if (!isOffDay(cursor, offDays)) count += 1;
     cursor = shiftDay(cursor, 1);
   }
   return Math.max(1, count); // 0 bo‘lmasin — bo‘linish xavfsiz
@@ -1134,6 +1256,12 @@ export type PayrollPerson = {
   monthly: number;
   daily: number;
   workdays: number;
+  schedule: {
+    start: string;
+    end: string;
+    offDays: number[];
+    source: "site" | "custom";
+  };
   absentDays: number;
   lateDays: number;
   presentDays: number;
@@ -1155,7 +1283,7 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
   to: string;
   workdays: number;
   settings: PayrollSettings;
-  site: { start: string; end: string };
+  site: { start: string; end: string; offDays: number[] };
   summary: {
     headcount: number;
     salaryFund: number;
@@ -1169,13 +1297,15 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
   const { from, to } = monthBounds(month);
   const site = officeSite();
   const settings = payrollSettingsOf();
-  const workdays = workdaysInMonth(month);
-  const range = tabelRange(from, to, people, site.start, site.end);
+  const workdays = workdaysInMonth(month, site.offDays);
+  const range = tabelRange(from, to, people);
   const store = load();
 
   const peopleOut: PayrollPerson[] = people.map((person) => {
+    const hours = hoursFor(person.id);
+    const personWorkdays = workdaysInMonth(month, hours.offDays);
     const monthly = salaryOf(person.id);
-    const daily = monthly > 0 ? Math.round(monthly / workdays) : 0;
+    const daily = monthly > 0 ? Math.round(monthly / personWorkdays) : 0;
     const rows = range.items.filter((row) => row.accountId === person.id);
     const fines: PayrollFineLine[] = [];
 
@@ -1238,7 +1368,13 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
       role: person.role,
       monthly,
       daily,
-      workdays,
+      workdays: personWorkdays,
+      schedule: {
+        start: hours.start,
+        end: hours.end,
+        offDays: hours.offDays,
+        source: hours.source,
+      },
       absentDays: fines.filter((f) => f.kind === "absent").length,
       lateDays: fines.filter((f) => f.kind === "late").length,
       presentDays: rows.filter(
@@ -1279,7 +1415,7 @@ export function payrollMonth(month: string, people: TabelPerson[]): {
     to,
     workdays,
     settings,
-    site: { start: site.start, end: site.end },
+    site: { start: site.start, end: site.end, offDays: site.offDays },
     summary,
     people: peopleOut,
   };
@@ -1311,10 +1447,19 @@ function minutesBetween(left: string, right: string) {
 
 export type TabelPerson = { id: string; name: string; login: string; role: string };
 
-function weekendOf(day: string) {
+function weekdayOf(day: string) {
   const [year, month, date] = day.split("-").map(Number);
-  const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
-  return weekday === 0 || weekday === 6;
+  return new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+}
+
+/** Dam kuni? Default: Dushanba. */
+export function isOffDay(day: string, offDays: number[] = officeSite().offDays) {
+  return offDays.includes(weekdayOf(day));
+}
+
+/** @deprecated — isOffDay ishlating */
+function weekendOf(day: string) {
+  return isOffDay(day);
 }
 
 function tabelStatus(row: OfficePunch | undefined, inHm: string, weekend: boolean, start: string): TabelStatus {
@@ -1364,11 +1509,16 @@ export function setTabelMark(input: { accountId: string; date: string; excuse?: 
   return row;
 }
 
-export function tabelDay(day: string, people: TabelPerson[], start = "09:00", end = "18:00") {
+export function tabelDay(day: string, people: TabelPerson[], _fallbackStart?: string, _fallbackEnd?: string) {
+  const site = officeSite();
   const punches = load().punches.filter((row) => row.date === day);
   const byId = new Map(punches.map((row) => [row.accountId, row]));
-  const weekend = weekendOf(day);
+  const siteOff = isOffDay(day, site.offDays);
   const items = people.map((person, index) => {
+    const hours = hoursFor(person.id);
+    const start = hours.start;
+    const end = hours.end;
+    const weekend = isOffDay(day, hours.offDays);
     const row = byId.get(person.id);
     const inHm = hmOf(row?.inAt ?? null);
     const outHm = hmOf(row?.outAt ?? null);
@@ -1382,16 +1532,19 @@ export function tabelDay(day: string, people: TabelPerson[], start = "09:00", en
       role: person.role,
       status,
       weekend,
+      start,
+      end,
+      scheduleSource: hours.source,
       excuse: row?.excuse || "",
       inAt: row?.inAt ?? null,
       outAt: row?.outAt ?? null,
       inHm,
       outHm,
       workedMs: row ? workedMs(row, row.outAt ? Date.parse(row.outAt) : Date.now()) : 0,
-      lateIn: inHm ? Math.max(0, minutesBetween(inHm, start)) : 0,
-      earlyIn: inHm ? Math.max(0, minutesBetween(start, inHm)) : 0,
-      earlyOut: outHm ? Math.max(0, minutesBetween(end, outHm)) : 0,
-      overtime: outHm ? Math.max(0, minutesBetween(outHm, end)) : 0,
+      lateIn: inHm && !weekend ? Math.max(0, minutesBetween(inHm, start)) : 0,
+      earlyIn: inHm && !weekend ? Math.max(0, minutesBetween(start, inHm)) : 0,
+      earlyOut: outHm && !weekend ? Math.max(0, minutesBetween(end, outHm)) : 0,
+      overtime: outHm && !weekend ? Math.max(0, minutesBetween(outHm, end)) : 0,
       note: row?.note || "",
       inMethod: row?.inMethod ?? null,
       outMethod: row?.outMethod ?? null,
@@ -1404,9 +1557,10 @@ export function tabelDay(day: string, people: TabelPerson[], start = "09:00", en
   const came = items.filter((row) => row.status === "present" || row.status === "late" || row.status === "out_missing").length;
   return {
     date: day,
-    start,
-    end,
-    weekend,
+    start: site.start,
+    end: site.end,
+    offDays: site.offDays,
+    weekend: siteOff,
     stats: {
       total: items.length,
       came,
@@ -1441,13 +1595,14 @@ function peopleSummary(items: Array<ReturnType<typeof tabelDay>["items"][number]
   });
 }
 
-export function tabelRange(from: string, to: string, people: TabelPerson[], start = "09:00", end = "18:00") {
+export function tabelRange(from: string, to: string, people: TabelPerson[], _start?: string, _end?: string) {
+  const site = officeSite();
   const begin = from <= to ? from : to;
   const endDay = from <= to ? to : from;
   const days = [];
   let cursor = begin;
   while (cursor <= endDay && days.length < 62) {
-    days.push(tabelDay(cursor, people, start, end));
+    days.push(tabelDay(cursor, people));
     cursor = shiftDay(cursor, 1);
   }
   const items = days.flatMap((day) => day.items.map((row) => ({ ...row, date: day.date })));
@@ -1462,5 +1617,14 @@ export function tabelRange(from: string, to: string, people: TabelPerson[], star
     }),
     { total: people.length, came: 0, absent: 0, late: 0, off: 0, waiting: 0 },
   );
-  return { from: begin, to: endDay, start, end, stats, items, people: peopleSummary(items, people) };
+  return {
+    from: begin,
+    to: endDay,
+    start: site.start,
+    end: site.end,
+    offDays: site.offDays,
+    stats,
+    items,
+    people: peopleSummary(items, people),
+  };
 }

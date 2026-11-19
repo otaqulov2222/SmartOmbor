@@ -27,6 +27,12 @@ type FineLine = {
 };
 type Advance = { id: string; accountId: string; amount: number; date: string; note: string };
 type Adjustment = { id: string; accountId: string; month: string; amount: number; note: string; kind: string };
+type ScheduleInfo = {
+  start: string;
+  end: string;
+  offDays: number[];
+  source: 'site' | 'custom';
+};
 type Person = {
   accountId: string;
   name: string;
@@ -35,6 +41,7 @@ type Person = {
   monthly: number;
   daily: number;
   workdays: number;
+  schedule?: ScheduleInfo;
   absentDays: number;
   lateDays: number;
   presentDays: number;
@@ -55,6 +62,7 @@ type Payroll = {
   to: string;
   workdays: number;
   settings: { latePenaltyPct: number };
+  site?: { start: string; end: string; offDays: number[] };
   summary: {
     headcount: number;
     salaryFund: number;
@@ -65,6 +73,16 @@ type Payroll = {
   };
   people: Person[];
 };
+
+const DAY_OPTS = [
+  { id: 1, key: 'pay.dayMon' },
+  { id: 2, key: 'pay.dayTue' },
+  { id: 3, key: 'pay.dayWed' },
+  { id: 4, key: 'pay.dayThu' },
+  { id: 5, key: 'pay.dayFri' },
+  { id: 6, key: 'pay.daySat' },
+  { id: 0, key: 'pay.daySun' },
+] as const;
 
 function tashkentMonth() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date()).slice(0, 7);
@@ -115,6 +133,10 @@ export function OfficePayrollPage() {
   const [fineEdit, setFineEdit] = useState<{ date: string; kind: 'absent' | 'late'; amount: string; note: string } | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
+  const [siteStart, setSiteStart] = useState('06:00');
+  const [siteEnd, setSiteEnd] = useState('18:00');
+  const [siteOffDays, setSiteOffDays] = useState<number[]>([1]);
+  const [personHours, setPersonHours] = useState({ start: '07:00', end: '17:00', useCustom: false });
 
   useEffect(() => {
     if (!flash) return;
@@ -182,6 +204,13 @@ export function OfficePayrollPage() {
     if (data?.settings?.latePenaltyPct != null) setLatePct(String(data.settings.latePenaltyPct));
   }, [data?.settings?.latePenaltyPct]);
 
+  useEffect(() => {
+    if (!data?.site) return;
+    setSiteStart(data.site.start || '06:00');
+    setSiteEnd(data.site.end || '18:00');
+    setSiteOffDays(Array.isArray(data.site.offDays) && data.site.offDays.length ? data.site.offDays : [1]);
+  }, [data?.site?.start, data?.site?.end, JSON.stringify(data?.site?.offDays)]);
+
   const people = useMemo(() => {
     const list = data?.people || [];
     const needle = q.trim().toLowerCase();
@@ -196,6 +225,20 @@ export function OfficePayrollPage() {
 
   const selected = people.find((p) => p.accountId === detailId) || null;
 
+  useEffect(() => {
+    if (!selected) return;
+    const sch = selected.schedule;
+    if (sch?.source === 'custom') {
+      setPersonHours({ start: sch.start, end: sch.end, useCustom: true });
+    } else {
+      setPersonHours({
+        start: data?.site?.start || siteStart || '06:00',
+        end: data?.site?.end || siteEnd || '18:00',
+        useCustom: false,
+      });
+    }
+  }, [selected?.accountId, selected?.schedule?.source, selected?.schedule?.start, selected?.schedule?.end, data?.site?.start, data?.site?.end, siteStart, siteEnd]);
+
   const invalidate = () => cache.invalidateQueries({ queryKey: ['office-payroll', month] });
 
   const saveSettings = useMutation({
@@ -204,7 +247,49 @@ export function OfficePayrollPage() {
         method: 'PUT',
         body: JSON.stringify({ latePenaltyPct: Number(latePct) }),
       }),
-    onSuccess: () => invalidate(),
+    onSuccess: () => {
+      setFlash(t('pay.savedOk'));
+      invalidate();
+    },
+  });
+
+  const saveSiteHours = useMutation({
+    mutationFn: () =>
+      api('/api/office/site', {
+        method: 'POST',
+        body: JSON.stringify({
+          start: siteStart,
+          end: siteEnd,
+          offDays: siteOffDays,
+        }),
+      }),
+    onSuccess: () => {
+      setFlash(t('pay.savedOk'));
+      invalidate();
+    },
+  });
+
+  const savePersonHours = useMutation({
+    mutationFn: () => {
+      if (!detailId) throw new Error('person');
+      if (!personHours.useCustom) {
+        return api(`/api/office/schedules/${detailId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ clear: true }),
+        });
+      }
+      return api(`/api/office/schedules/${detailId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          start: personHours.start,
+          end: personHours.end,
+        }),
+      });
+    },
+    onSuccess: () => {
+      setFlash(t('pay.savedOk'));
+      invalidate();
+    },
   });
 
   const saveSalary = useMutation({
@@ -327,7 +412,47 @@ export function OfficePayrollPage() {
       </div>
 
       <div className="pay-panel">
-        <div className="pay-panel-grid">
+        <div className="pay-panel-grid pay-panel-hours">
+          <div>
+            <div className="pay-label">{t('pay.workHours')}</div>
+            <div className="pay-settings-row">
+              <label className="pay-time">
+                <span>{t('pay.from')}</span>
+                <input className="input" type="time" value={siteStart} onChange={(e) => setSiteStart(e.target.value)} />
+              </label>
+              <label className="pay-time">
+                <span>{t('pay.to')}</span>
+                <input className="input" type="time" value={siteEnd} onChange={(e) => setSiteEnd(e.target.value)} />
+              </label>
+              <button type="button" className="btn primary" disabled={saveSiteHours.isPending} onClick={() => saveSiteHours.mutate()}>
+                {t('pay.save')}
+              </button>
+            </div>
+            <div className="pay-days">
+              {DAY_OPTS.map((d) => {
+                const off = siteOffDays.includes(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    className={`pay-day-chip ${off ? 'is-off' : 'is-on'}`}
+                    onClick={() =>
+                      setSiteOffDays((prev) => {
+                        if (off) {
+                          const next = prev.filter((x) => x !== d.id);
+                          return next.length ? next : prev;
+                        }
+                        return [...prev, d.id].sort((a, b) => a - b);
+                      })
+                    }
+                  >
+                    {t(d.key as 'pay.dayMon')}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="pay-hint">{t('pay.workHoursHint')}</p>
+          </div>
           <div>
             <div className="pay-label"><Percent size={13} /> {t('pay.latePct')}</div>
             <div className="pay-settings-row">
@@ -344,9 +469,7 @@ export function OfficePayrollPage() {
               </button>
             </div>
             <p className="pay-hint">{t('pay.latePctHint')}</p>
-          </div>
-          <div className="pay-meta">
-            <div className="pay-meta-card">
+            <div className="pay-meta-card" style={{ marginTop: 12 }}>
               <span>{t('pay.workdays')}</span>
               <b>{data?.workdays ?? '—'}</b>
               <small>{data?.from || '—'} → {data?.to || '—'}</small>
@@ -610,6 +733,56 @@ export function OfficePayrollPage() {
             {flash ? (
               <p className="pay-flash"><Check size={15} /> {flash}</p>
             ) : null}
+
+            <section>
+              <h3>{t('pay.personHours')}</h3>
+              <p className="pay-form-hint">{t('pay.personHoursHint')}</p>
+              <label className="pay-check">
+                <input
+                  type="checkbox"
+                  checked={personHours.useCustom}
+                  onChange={(e) => setPersonHours((h) => ({ ...h, useCustom: e.target.checked }))}
+                />
+                <span>{t('pay.customHours')}</span>
+              </label>
+              {personHours.useCustom ? (
+                <div className="pay-settings-row" style={{ marginTop: 8 }}>
+                  <label className="pay-time">
+                    <span>{t('pay.from')}</span>
+                    <input
+                      className="input"
+                      type="time"
+                      value={personHours.start}
+                      onChange={(e) => setPersonHours((h) => ({ ...h, start: e.target.value }))}
+                    />
+                  </label>
+                  <label className="pay-time">
+                    <span>{t('pay.to')}</span>
+                    <input
+                      className="input"
+                      type="time"
+                      value={personHours.end}
+                      onChange={(e) => setPersonHours((h) => ({ ...h, end: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <p className="pay-muted">
+                  {t('pay.usingSiteHours')}: {data?.site?.start || siteStart}–{data?.site?.end || siteEnd}
+                </p>
+              )}
+              <button
+                type="button"
+                className="pay-save-btn"
+                style={{ marginTop: 10 }}
+                disabled={savePersonHours.isPending}
+                onClick={() => savePersonHours.mutate()}
+              >
+                <Save size={16} />
+                {savePersonHours.isPending ? t('pay.saving') : t('pay.save')}
+              </button>
+              {savePersonHours.isError ? <p className="pay-err">{(savePersonHours.error as Error).message}</p> : null}
+            </section>
 
             <section>
               <h3>{t('pay.fines')}</h3>

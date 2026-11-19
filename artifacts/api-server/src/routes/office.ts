@@ -25,6 +25,9 @@ import {
   setPayrollSettings,
   setSalary,
   setTabelMark,
+  setWorkSchedule,
+  schedulesOf,
+  hoursFor,
   tashkentParts,
   tabelDay,
   tabelRange,
@@ -60,6 +63,7 @@ router.get("/office/me", (req, res) => {
     role: user.role,
     director: directorOf(user.role),
     office: site,
+    hours: hoursFor(user.id),
     clock: now.clock,
     date: now.date,
     face: faceEnrolled(user.id),
@@ -72,20 +76,61 @@ router.get("/office/me", (req, res) => {
 router.post("/office/site", async (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   try {
+    const hasGeo = req.body?.lat != null && req.body?.lng != null;
     const site = setOfficeSite({
-      lat: Number(req.body?.lat),
-      lng: Number(req.body?.lng),
+      lat: hasGeo ? Number(req.body?.lat) : undefined,
+      lng: hasGeo ? Number(req.body?.lng) : undefined,
       radiusM: req.body?.radiusM != null ? Number(req.body.radiusM) : undefined,
       accuracyM: req.body?.accuracyM != null ? Number(req.body.accuracyM) : undefined,
       name: req.body?.name != null ? String(req.body.name) : undefined,
       start: req.body?.start != null ? String(req.body.start) : undefined,
       end: req.body?.end != null ? String(req.body.end) : undefined,
+      offDays: Array.isArray(req.body?.offDays) ? req.body.offDays.map((n: unknown) => Number(n)) : undefined,
     });
     await flushOfficeStore();
     res.json({ office: site });
   } catch (error) {
     const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
     res.status(status).json({ error: error instanceof Error ? error.message : "site" });
+  }
+});
+
+router.get("/office/schedules", (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  const site = officeSite();
+  res.json({
+    site: { start: site.start, end: site.end, offDays: site.offDays },
+    schedules: schedulesOf(),
+  });
+});
+
+router.put("/office/schedules/:accountId", async (req, res) => {
+  if (!requireOfficeDirector(req, res)) return;
+  const accountId = String(req.params.accountId || "");
+  const known = listLocalPeople().some((person) => person.id === accountId);
+  if (!accountId || !known) {
+    res.status(400).json({ error: "person" });
+    return;
+  }
+  try {
+    const clear = Boolean(req.body?.clear) || req.body?.start === "" || req.body?.end === "";
+    const row = setWorkSchedule({
+      accountId,
+      start: String(req.body?.start ?? ""),
+      end: String(req.body?.end ?? ""),
+      offDays: Array.isArray(req.body?.offDays) ? req.body.offDays.map((n: unknown) => Number(n)) : req.body?.offDays === null ? null : undefined,
+      note: req.body?.note != null ? String(req.body.note) : undefined,
+      clear,
+    });
+    await flushOfficeStore();
+    res.json({
+      schedule: row,
+      resolved: hoursFor(accountId),
+      site: officeSite(),
+    });
+  } catch (error) {
+    const status = typeof error === "object" && error && "status" in error ? Number((error as { status: number }).status) : 400;
+    res.status(status).json({ error: error instanceof Error ? error.message : "schedule" });
   }
 });
 

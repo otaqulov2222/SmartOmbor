@@ -999,8 +999,9 @@ export function OfficePage() {
 
   const ctaNeedCam = !camReady;
   const endHour = Number((me?.office.end || '18:00').slice(0, 2)) || 18;
+  const startHour = Number((me?.office.start || '06:00').slice(0, 2)) || 6;
   const hourNow = Number(clock.slice(0, 2));
-  const night = hourNow >= endHour || hourNow < 6;
+  const night = hourNow >= endHour || hourNow < startHour;
   const heroSrc = `${import.meta.env.BASE_URL}office-hero.jpg`;
   const nightSrc = `${import.meta.env.BASE_URL}office-hero-night.jpg`;
 
@@ -1054,7 +1055,7 @@ export function OfficePage() {
             <span>
               <b>{t('office.in')} <Clock size={13}/></b>
               <em>{me?.today?.inAt ? time(me.today.inAt) : '—'}</em>
-              <small>{t('office.plan', { time: me?.office.start || '09:00' })}</small>
+              <small>{t('office.plan', { time: me?.office.start || '06:00' })}</small>
             </span>
             <LogIn size={18} className="office-go-arrow"/>
           </button>
