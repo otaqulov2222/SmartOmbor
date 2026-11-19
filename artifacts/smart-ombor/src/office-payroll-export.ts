@@ -75,6 +75,26 @@ export type PayLabels = {
   latePct: string;
 };
 
+const BLUE: [number, number, number] = [29, 78, 216];
+const INK: [number, number, number] = [15, 27, 45];
+const MUTED: [number, number, number] = [100, 116, 139];
+const SOFT: [number, number, number] = [239, 246, 255];
+const LINE: [number, number, number] = [226, 232, 240];
+const GREEN: [number, number, number] = [22, 101, 52];
+
+function money(n: number) {
+  return new Intl.NumberFormat('en-US').format(Math.round(n || 0));
+}
+function moneySom(n: number) {
+  return `${money(n)} so‘m`;
+}
+function signedMoney(n: number) {
+  const abs = money(Math.abs(n || 0));
+  if ((n || 0) > 0) return `+${abs}`;
+  if ((n || 0) < 0) return `-${abs}`;
+  return abs;
+}
+
 function bufToB64(buf: ArrayBuffer) {
   const bytes = new Uint8Array(buf);
   let binary = '';
@@ -110,6 +130,30 @@ async function makePdfDoc(landscape = false) {
   return doc;
 }
 
+function paintBrand(doc: jsPDF, title: string, subtitle: string, meta: string) {
+  const w = doc.internal.pageSize.getWidth();
+  doc.setFillColor(...BLUE);
+  doc.rect(0, 0, w, 28, 'F');
+  doc.setFillColor(37, 99, 235);
+  doc.rect(0, 28, w, 1.2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('Roboto', 'bold');
+  doc.setFontSize(11);
+  doc.text('Smart Ombor', 14, 10);
+  doc.setFontSize(16);
+  doc.text(title, 14, 18);
+  doc.setFont('Roboto', 'normal');
+  doc.setFontSize(9);
+  doc.text(subtitle, 14, 24);
+  doc.setFont('Roboto', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(meta, w - 14, 18, { align: 'right' });
+}
+
+function finalY(doc: jsPDF, fallback: number) {
+  return ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY || fallback);
+}
+
 function safeName(value: string) {
   return value.replace(/[^\w\-а-яА-ЯёЁўқғҳʼ' ]+/gi, '').trim().replace(/\s+/g, '-') || 'oylik';
 }
@@ -118,14 +162,39 @@ function kindLabel(kind: string, labels: PayLabels) {
   if (kind === 'absent') return labels.absent;
   if (kind === 'late') return labels.late;
   if (kind === 'bonus') return labels.bonus;
-  if (kind === 'deduct') return labels.bonus;
+  if (kind === 'deduct') return 'Ushlanma';
   return kind;
+}
+
+function tableBase() {
+  return {
+    theme: 'grid' as const,
+    styles: {
+      font: 'Roboto',
+      fontSize: 8.5,
+      textColor: INK,
+      lineColor: LINE,
+      lineWidth: 0.15,
+      cellPadding: { top: 2.2, right: 2.2, bottom: 2.2, left: 2.2 },
+      valign: 'middle' as const,
+    },
+    headStyles: {
+      fillColor: BLUE,
+      textColor: [255, 255, 255] as [number, number, number],
+      font: 'Roboto',
+      fontStyle: 'bold' as const,
+      fontSize: 8,
+    },
+    alternateRowStyles: { fillColor: [248, 250, 252] as [number, number, number] },
+    margin: { left: 14, right: 14 },
+  };
 }
 
 export function exportMonthExcel(data: PayMonth, labels: PayLabels) {
   const peopleSheet: Sheet = {
     name: labels.title.slice(0, 28) || 'Oylik',
     headers: [
+      '№',
       labels.employee,
       labels.login,
       labels.role,
@@ -138,58 +207,81 @@ export function exportMonthExcel(data: PayMonth, labels: PayLabels) {
       labels.bonus,
       labels.net,
     ],
-    rows: data.people.map((p) => [
+    rows: data.people.map((p, i) => [
+      i + 1,
       p.name,
       p.login,
       p.role,
-      p.monthly,
-      p.daily,
+      money(p.monthly),
+      money(p.daily),
       p.absentDays,
       p.lateDays,
-      p.fineTotal,
-      p.advancesTotal,
-      p.adjustmentsTotal,
-      p.net,
+      money(p.fineTotal),
+      money(p.advancesTotal),
+      signedMoney(p.adjustmentsTotal),
+      money(p.net),
     ]),
   };
   const summarySheet: Sheet = {
     name: labels.summary.slice(0, 28) || 'Jami',
-    headers: [labels.summary, ''],
+    headers: ["Ko‘rsatkich", 'Qiymat', 'Izoh'],
     rows: [
-      [labels.period, `${data.from} — ${data.to}`],
-      [labels.workdays, data.workdays],
-      [labels.latePct, data.latePenaltyPct],
-      [labels.employee, data.summary.headcount],
-      [labels.monthly, data.summary.salaryFund],
-      [labels.fines, data.summary.fineTotal],
-      [labels.advances, data.summary.advancesTotal],
-      [labels.bonus, data.summary.adjustmentsTotal],
-      [labels.net, data.summary.netTotal],
+      [labels.period, `${data.from} — ${data.to}`, ''],
+      [labels.workdays, data.workdays, ''],
+      [labels.latePct, `${data.latePenaltyPct}%`, ''],
+      [labels.employee, data.summary.headcount, ''],
+      [labels.monthly, moneySom(data.summary.salaryFund), 'Oylik fond'],
+      [labels.fines, moneySom(data.summary.fineTotal), ''],
+      [labels.advances, moneySom(data.summary.advancesTotal), ''],
+      [labels.bonus, moneySom(data.summary.adjustmentsTotal), ''],
+      [labels.net, moneySom(data.summary.netTotal), 'Yakuniy to‘lov'],
     ],
   };
-  downloadXlsx(`oylik-${data.month}.xlsx`, [peopleSheet, summarySheet]);
+  downloadXlsx(`oylik-${data.month}.xlsx`, [summarySheet, peopleSheet]);
 }
 
 export async function exportMonthPdf(data: PayMonth, labels: PayLabels) {
   const doc = await makePdfDoc(true);
-  doc.setFont('Roboto', 'bold');
-  doc.setFontSize(13);
-  doc.text(`${labels.title} · ${data.month}`, 14, 14);
-  doc.setFont('Roboto', 'normal');
-  doc.setFontSize(9);
-  doc.text(
-    `${labels.period}: ${data.from} — ${data.to}  ·  ${labels.workdays}: ${data.workdays}  ·  ${labels.latePct}: ${data.latePenaltyPct}%`,
-    14,
-    20,
+  paintBrand(
+    doc,
+    labels.title,
+    `${labels.period}: ${data.from} — ${data.to}`,
+    `${labels.workdays}: ${data.workdays}  ·  ${labels.latePct}: ${data.latePenaltyPct}%`,
   );
-  doc.text(
-    `${labels.monthly}: ${data.summary.salaryFund}  ·  ${labels.fines}: ${data.summary.fineTotal}  ·  ${labels.advances}: ${data.summary.advancesTotal}  ·  ${labels.bonus}: ${data.summary.adjustmentsTotal}  ·  ${labels.net}: ${data.summary.netTotal}`,
-    14,
-    25,
-  );
+
   autoTable(doc, {
-    startY: 30,
+    ...tableBase(),
+    startY: 34,
+    theme: 'plain',
+    body: [[
+      `${labels.monthly}\n${moneySom(data.summary.salaryFund)}`,
+      `${labels.fines}\n${moneySom(data.summary.fineTotal)}`,
+      `${labels.advances}\n${moneySom(data.summary.advancesTotal)}`,
+      `${labels.bonus}\n${moneySom(data.summary.adjustmentsTotal)}`,
+      `${labels.net}\n${moneySom(data.summary.netTotal)}`,
+    ]],
+    styles: {
+      ...tableBase().styles,
+      fontSize: 9,
+      fillColor: SOFT,
+      minCellHeight: 14,
+      halign: 'center',
+      lineWidth: 0,
+    },
+    didParseCell: (hook) => {
+      if (hook.section !== 'body') return;
+      const text = String(hook.cell.raw || '');
+      if (text.includes('\n')) {
+        hook.cell.text = text.split('\n');
+      }
+    },
+  });
+
+  autoTable(doc, {
+    ...tableBase(),
+    startY: finalY(doc, 50) + 4,
     head: [[
+      '№',
       labels.employee,
       labels.login,
       labels.monthly,
@@ -201,29 +293,30 @@ export async function exportMonthPdf(data: PayMonth, labels: PayLabels) {
       labels.bonus,
       labels.net,
     ]],
-    body: data.people.map((p) => [
+    body: data.people.map((p, i) => [
+      i + 1,
       p.name,
       p.login,
-      p.monthly,
-      p.daily,
+      money(p.monthly),
+      money(p.daily),
       p.absentDays,
       p.lateDays,
-      p.fineTotal,
-      p.advancesTotal,
-      p.adjustmentsTotal,
-      p.net,
+      money(p.fineTotal),
+      money(p.advancesTotal),
+      signedMoney(p.adjustmentsTotal),
+      money(p.net),
     ]),
-    styles: { font: 'Roboto', fontSize: 7.5 },
-    headStyles: { fillColor: [29, 78, 216], font: 'Roboto', fontStyle: 'bold' },
+    styles: { ...tableBase().styles, fontSize: 7.5 },
     columnStyles: {
-      2: { halign: 'right' },
+      0: { halign: 'center', cellWidth: 8 },
       3: { halign: 'right' },
       4: { halign: 'right' },
-      5: { halign: 'right' },
-      6: { halign: 'right' },
+      5: { halign: 'center' },
+      6: { halign: 'center' },
       7: { halign: 'right' },
       8: { halign: 'right' },
       9: { halign: 'right' },
+      10: { halign: 'right', fontStyle: 'bold', textColor: GREEN },
     },
   });
   doc.save(`oylik-${data.month}.pdf`);
@@ -232,88 +325,114 @@ export async function exportMonthPdf(data: PayMonth, labels: PayLabels) {
 export function exportPersonExcel(person: PayPerson, month: string, labels: PayLabels) {
   const summary: Sheet = {
     name: labels.summary.slice(0, 28) || 'Jami',
-    headers: [labels.summary, ''],
+    headers: ["Ko‘rsatkich", 'Qiymat', 'Izoh'],
     rows: [
-      [labels.employee, person.name],
-      [labels.login, person.login],
-      [labels.role, person.role],
-      [labels.period, month],
-      [labels.monthly, person.monthly],
-      [labels.daily, person.daily],
-      [labels.workdays, person.workdays],
-      [labels.present, person.presentDays],
-      [labels.absent, person.absentDays],
-      [labels.late, person.lateDays],
-      [labels.fines, person.fineTotal],
-      [labels.advances, person.advancesTotal],
-      [labels.bonus, person.adjustmentsTotal],
-      [labels.net, person.net],
+      [labels.employee, person.name, ''],
+      [labels.login, person.login, ''],
+      [labels.role, person.role, ''],
+      [labels.period, month, ''],
+      [labels.monthly, moneySom(person.monthly), 'Asosiy oylik'],
+      [labels.daily, moneySom(person.daily), 'Kunlik stavka'],
+      [labels.workdays, person.workdays, ''],
+      [labels.present, person.presentDays, ''],
+      [labels.absent, person.absentDays, ''],
+      [labels.late, person.lateDays, ''],
+      [labels.fines, moneySom(person.fineTotal), 'Jarimalar jami'],
+      [labels.advances, moneySom(person.advancesTotal), 'Avanslar jami'],
+      [labels.bonus, moneySom(person.adjustmentsTotal), 'Bonus / tuzatish'],
+      [labels.net, moneySom(person.net), 'Yakuniy to‘lov'],
     ],
   };
   const fines: Sheet = {
     name: labels.fines.slice(0, 28) || 'Jarimalar',
-    headers: [labels.date, labels.kind, labels.amount, labels.auto, labels.note],
-    rows: person.fines.map((f) => [
-      f.date,
-      kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin})` : ''),
-      f.amount,
-      f.autoAmount,
-      f.note || (f.overridden ? 'edit' : ''),
-    ]),
+    headers: ['№', labels.date, labels.kind, labels.amount, labels.auto, labels.note],
+    rows: person.fines.length
+      ? person.fines.map((f, i) => [
+          i + 1,
+          f.date,
+          kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin})` : ''),
+          money(f.amount),
+          money(f.autoAmount),
+          f.note || (f.overridden ? 'tahrirlangan' : ''),
+        ])
+      : [['—', '—', '—', '—', '—', 'Jarima yo‘q']],
   };
   const advances: Sheet = {
     name: labels.advances.slice(0, 28) || 'Avanslar',
-    headers: [labels.date, labels.amount, labels.note],
-    rows: person.advances.map((a) => [a.date, a.amount, a.note || '']),
+    headers: ['№', labels.date, labels.amount, labels.note],
+    rows: person.advances.length
+      ? person.advances.map((a, i) => [i + 1, a.date, money(a.amount), a.note || ''])
+      : [['—', '—', '—', 'Avans yo‘q']],
   };
   const bonus: Sheet = {
     name: labels.bonus.slice(0, 28) || 'Bonus',
-    headers: [labels.kind, labels.amount, labels.note],
-    rows: person.adjustments.map((a) => [a.kind, a.amount, a.note || '']),
+    headers: ['№', labels.kind, labels.amount, labels.note],
+    rows: person.adjustments.length
+      ? person.adjustments.map((a, i) => [i + 1, a.kind, money(a.amount), a.note || ''])
+      : [['—', '—', '—', 'Bonus yo‘q']],
   };
   downloadXlsx(`oylik-${month}-${safeName(person.name)}.xlsx`, [summary, fines, advances, bonus]);
 }
 
 export async function exportPersonPdf(person: PayPerson, month: string, labels: PayLabels) {
   const doc = await makePdfDoc(false);
-  doc.setFont('Roboto', 'bold');
-  doc.setFontSize(14);
-  doc.text(`${labels.title}`, 14, 16);
-  doc.setFontSize(11);
-  doc.text(`${person.name} · ${person.login}`, 14, 23);
-  doc.setFont('Roboto', 'normal');
-  doc.setFontSize(9);
-  doc.text(`${labels.period}: ${month}`, 14, 29);
+  paintBrand(
+    doc,
+    labels.title,
+    `${person.name}  ·  ${person.login}`,
+    `${labels.period}: ${month}`,
+  );
+
   autoTable(doc, {
+    ...tableBase(),
     startY: 34,
-    theme: 'plain',
+    head: [[labels.summary, '']],
     body: [
-      [labels.monthly, String(person.monthly), labels.daily, String(person.daily)],
-      [labels.absent, String(person.absentDays), labels.late, String(person.lateDays)],
-      [labels.fines, String(person.fineTotal), labels.advances, String(person.advancesTotal)],
-      [labels.bonus, String(person.adjustmentsTotal), labels.net, String(person.net)],
+      [labels.role, person.role || '—'],
+      [labels.monthly, moneySom(person.monthly)],
+      [labels.daily, moneySom(person.daily)],
+      [labels.workdays, String(person.workdays)],
+      [labels.present, String(person.presentDays)],
+      [labels.absent, String(person.absentDays)],
+      [labels.late, String(person.lateDays)],
+      [labels.fines, moneySom(person.fineTotal)],
+      [labels.advances, moneySom(person.advancesTotal)],
+      [labels.bonus, `${signedMoney(person.adjustmentsTotal)} so‘m`],
+      [labels.net, moneySom(person.net)],
     ],
-    styles: { font: 'Roboto', fontSize: 9, cellPadding: 1.5 },
     columnStyles: {
-      0: { fontStyle: 'bold', textColor: [100, 116, 139] },
-      2: { fontStyle: 'bold', textColor: [100, 116, 139] },
+      0: { cellWidth: 55, textColor: MUTED, fontStyle: 'bold' },
+      1: { halign: 'right', fontStyle: 'bold' },
+    },
+    didParseCell: (hook) => {
+      if (hook.section !== 'body') return;
+      if (hook.row.index === 10 && hook.column.index === 1) {
+        hook.cell.styles.textColor = GREEN;
+        hook.cell.styles.fontSize = 10;
+        hook.cell.styles.fillColor = [240, 253, 244];
+      }
     },
   });
-  let y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY || 55) + 6;
 
-  const section = (title: string, head: string[], body: (string | number)[][]) => {
+  let y = finalY(doc, 90) + 8;
+
+  const section = (title: string, head: string[], body: string[][], moneyCols: number[] = []) => {
     if (!body.length) return;
+    doc.setFillColor(...SOFT);
+    doc.roundedRect(14, y - 4.5, doc.internal.pageSize.getWidth() - 28, 7, 1.5, 1.5, 'F');
     doc.setFont('Roboto', 'bold');
-    doc.setFontSize(10);
-    doc.text(title, 14, y);
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLUE);
+    doc.text(title, 16, y);
+    y += 4;
     autoTable(doc, {
-      startY: y + 2,
+      ...tableBase(),
+      startY: y,
       head: [head],
       body,
-      styles: { font: 'Roboto', fontSize: 8 },
-      headStyles: { fillColor: [29, 78, 216], font: 'Roboto', fontStyle: 'bold' },
+      columnStyles: Object.fromEntries(moneyCols.map((c) => [c, { halign: 'right' as const }])),
     });
-    y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY || y) + 8;
+    y = finalY(doc, y) + 8;
   };
 
   section(
@@ -322,21 +441,32 @@ export async function exportPersonPdf(person: PayPerson, month: string, labels: 
     person.fines.map((f) => [
       f.date,
       kindLabel(f.kind, labels) + (f.lateMin ? ` (${f.lateMin})` : ''),
-      f.amount,
-      f.autoAmount,
-      f.note || '',
+      money(f.amount),
+      money(f.autoAmount),
+      f.note || '—',
     ]),
+    [2, 3],
   );
   section(
     labels.advances,
     [labels.date, labels.amount, labels.note],
-    person.advances.map((a) => [a.date, a.amount, a.note || '']),
+    person.advances.map((a) => [a.date, money(a.amount), a.note || '—']),
+    [1],
   );
   section(
     labels.bonus,
     [labels.kind, labels.amount, labels.note],
-    person.adjustments.map((a) => [a.kind, a.amount, a.note || '']),
+    person.adjustments.map((a) => [a.kind, money(a.amount), a.note || '—']),
+    [1],
   );
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  doc.setFont('Roboto', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(...MUTED);
+  doc.text('Smart Ombor · Oylik hisobot', 14, pageH - 8);
+  doc.text(moneySom(person.net), pageW - 14, pageH - 8, { align: 'right' });
 
   doc.save(`oylik-${month}-${safeName(person.name)}.pdf`);
 }

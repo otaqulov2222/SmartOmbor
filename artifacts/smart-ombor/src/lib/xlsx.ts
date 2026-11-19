@@ -96,8 +96,8 @@ function colWidth(sheet: Sheet, index: number) {
       if (String(value).length > max) max = String(value).length;
     }
   }
-  if (numeric) return Math.min(16, Math.max(11, max + 2));
-  return Math.min(index === 0 ? 46 : 28, Math.max(14, max + 2));
+  if (numeric) return Math.min(18, Math.max(12, max + 2));
+  return Math.min(index === 0 ? 42 : index === 1 ? 28 : 36, Math.max(16, max + 2));
 }
 
 function cellXml(ref: string, cell: Cell, style: number) {
