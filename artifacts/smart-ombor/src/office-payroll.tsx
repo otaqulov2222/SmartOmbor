@@ -302,13 +302,29 @@ export function OfficePayrollPage() {
           <strong>{money(data?.summary.advancesTotal || 0)}<span className="pay-som">so‘m</span></strong>
           <small>{t('pay.advances')}</small>
         </article>
+        <article className="pay-stat is-violet">
+          <div className="pay-stat-head">
+            <span>{t('pay.bonusCol')}</span>
+            <span className="pay-stat-ico"><Banknote size={16} /></span>
+          </div>
+          <strong>
+            {(data?.summary.adjustmentsTotal || 0) > 0 ? '+' : ''}
+            {money(data?.summary.adjustmentsTotal || 0)}
+            <span className="pay-som">so‘m</span>
+          </strong>
+          <small>{t('pay.bonus')}</small>
+        </article>
         <article className="pay-stat is-green">
           <div className="pay-stat-head">
             <span>{t('pay.net')}</span>
             <span className="pay-stat-ico"><Banknote size={16} /></span>
           </div>
           <strong>{money(data?.summary.netTotal || 0)}<span className="pay-som">so‘m</span></strong>
-          <small>{t('pay.net')}</small>
+          <small>
+            {(data?.summary.adjustmentsTotal || 0)
+              ? `${(data?.summary.adjustmentsTotal || 0) > 0 ? '+' : ''}${money(data?.summary.adjustmentsTotal || 0)} ${t('pay.bonusCol').toLowerCase()}`
+              : t('pay.net')}
+          </small>
         </article>
       </div>
 
@@ -340,6 +356,7 @@ export function OfficePayrollPage() {
               <th className="is-num">{t('pay.late')}</th>
               <th className="is-num">{t('pay.fines')}</th>
               <th className="is-num">{t('pay.advances')}</th>
+              <th className="is-num">{t('pay.bonusCol')}</th>
               <th className="is-num">{t('pay.net')}</th>
               <th />
             </tr>
@@ -403,10 +420,30 @@ export function OfficePayrollPage() {
                 <td className="is-num" data-label={t('pay.advances')}>
                   <MoneyCell value={p.advancesTotal} />
                 </td>
+                <td className="is-num" data-label={t('pay.bonusCol')}>
+                  {p.adjustmentsTotal ? (
+                    <span className={`pay-bonus ${p.adjustmentsTotal < 0 ? 'is-neg' : ''}`}>
+                      {p.adjustmentsTotal > 0 ? '+' : ''}
+                      {money(p.adjustmentsTotal)}
+                      <span className="pay-som">so‘m</span>
+                    </span>
+                  ) : (
+                    <span className="pay-edit is-empty">—</span>
+                  )}
+                </td>
                 <td className="is-num" data-label={t('pay.net')}>
-                  <span className={`pay-net ${p.net < 0 ? 'is-neg' : p.net === 0 ? 'is-zero' : ''}`}>
-                    {money(p.net)}
-                    <span className="pay-som">so‘m</span>
+                  <span className="pay-net-wrap">
+                    <span className={`pay-net ${p.net < 0 ? 'is-neg' : p.net === 0 ? 'is-zero' : ''}`}>
+                      {money(p.net)}
+                      <span className="pay-som">so‘m</span>
+                    </span>
+                    {p.adjustmentsTotal ? (
+                      <small className={`pay-net-hint ${p.adjustmentsTotal < 0 ? 'is-neg' : ''}`}>
+                        {p.adjustmentsTotal > 0 ? '+' : ''}
+                        {money(p.adjustmentsTotal)}{' '}
+                        {p.adjustmentsTotal > 0 ? t('pay.bonusInNet') : t('pay.deductInNet')}
+                      </small>
+                    ) : null}
                   </span>
                 </td>
                 <td>
@@ -417,7 +454,7 @@ export function OfficePayrollPage() {
               </tr>
             ))}
             {!people.length && !query.isLoading ? (
-              <tr><td colSpan={9} className="pay-empty">{t('pay.empty')}</td></tr>
+              <tr><td colSpan={10} className="pay-empty">{t('pay.empty')}</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -446,6 +483,17 @@ export function OfficePayrollPage() {
               <article>
                 <span>{t('pay.fines')}</span>
                 <b>{money(selected.fineTotal)}</b>
+              </article>
+              <article>
+                <span>{t('pay.advances')}</span>
+                <b>{money(selected.advancesTotal)}</b>
+              </article>
+              <article>
+                <span>{t('pay.bonusCol')}</span>
+                <b className={selected.adjustmentsTotal ? (selected.adjustmentsTotal < 0 ? 'pay-net is-neg' : 'pay-bonus') : undefined}>
+                  {selected.adjustmentsTotal > 0 ? '+' : ''}
+                  {money(selected.adjustmentsTotal)}
+                </b>
               </article>
               <article>
                 <span>{t('pay.net')}</span>
