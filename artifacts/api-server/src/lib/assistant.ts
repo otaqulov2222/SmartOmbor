@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { dataFile } from "./data-dir";
 import { logger } from "./logger";
-import { officeSite, tashkentParts, todayBoard, workedMs, tabelDay } from "./office";
+import { officeSite, tashkentParts, todayBoard, workedMs, tabelDay, payrollMonth, payrollSettingsOf } from "./office";
 import { packSizeOf, ensurePachka, productPackSize, pieceCount, receiptParts } from "./supply-assortment";
 import { listLocalPeople } from "../routes/local-auth";
 import { idFromHref, money, moysklad, moyskladAll, moyskladConfigured } from "./moysklad";
@@ -28,8 +28,14 @@ import {
   portalLinksReply,
   resolveSalesDays,
   roleLabelUz,
+  classifyAssistantIntent,
   finalizeAssistantReply,
+  identityReply,
+  isAttendanceIntent,
   isDailyBriefIntent,
+  isIdentityIntent,
+  isPayrollIntent,
+  normalizeAssistantQuery,
   sanitizeAssistantReply,
   vagueGiveReply,
   wantsPortalLink,
@@ -73,7 +79,15 @@ export function assistantConfigured() {
 }
 
 const SYSTEM = `Siz — Smart Ombor (Bordo) nazorat agentisiz.
-Asosiy kuch: ombor, yuk xati, pachka, davomat, MoySklad, KPI, GPS, xodimlar.
+Asosiy kuch: ombor, yuk xati, pachka, davomat, oylik, MoySklad, KPI, GPS, xodimlar.
+
+TUSHUNISH (QATIY):
+- Savolni ma’nosiga qarab javob bering. Orfografiya xato bo‘lsa ham (buyicha/bo‘yicha, toliq/to‘liq) tushuning.
+- «bugungi kun hisoboti / nima boldi / holatlar» → kunlik brifing (yuk + savdo + davomat). KPI PDF emas.
+- «bugun kim keldi / davomat» → davomat board.
+- «oylik / maosh / jarima / avans» → oylik bo‘limi haqida aniq javob.
+- «sen nima agentisan» → o‘zingizni qisqa tanishtiring, KPI havola bermang.
+- Noaniq «ber/kere ber» → aniq variantlar so‘rang; uydirma fayl havolasi YO‘Q.
 
 TIL (QATIY):
 - Foydalanuvchi o‘zbekcha yozsa — FAQAT o‘zbekcha javob.
@@ -86,28 +100,22 @@ TIL (QATIY):
 - UUID / uzun id ko‘rsatmang. Ortiqcha ** kam. Parol/token/.env yo‘q.
 
 QATIY:
-- Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → KPI → GPS → Hamkor → Boshqalar
+- Sidebar: Dashboard → Mahsulotlar → Xodimlar → Davomat → Oylik → KPI → GPS → Hamkor → Boshqalar
 - Pachka: yuk xatidagi qo‘lda yozilgan son → MoySklad packs.quantity
 - Ofis GPS: 41.258556, 69.150964 · 150 m
+- Ish vaqti default: 06:00–18:00, Dushanba dam (Se–Ya ish).
 
-KPI bo‘limi (foydalanuvchi so‘rasa shu bilan tushuntiring):
-- Boshqaruv: umumiy KPI dashboard — agentlar, jami KPI, MS yangilash, agentni ochib guruh/mijozlar.
-- Agentlar va hamkorlar: agent bo‘yicha jami (mijozlar, kirim, chiqim, KPI). Mijozlar tabi — mijoz biriktirish.
-- Savdo va to‘lov: har bir jo‘natma bo‘yicha savdo, to‘langan, foiz, KPI, holat. «3 bosqich qoidalari» — shu kun 3%, 1–7 kun 2%, 8–15 kun 1% (asos: to‘langan summa).
-- Xodimlar bo‘limi login/parol uchun; KPI raqamlari KPI ichida.
-- Agent portal: agent o‘z kabineti (alohida).
+KPI bo‘limi (faqat KPI so‘ralganda):
+- Boshqaruv / Agentlar / Savdo va to‘lov; 3 bosqich: shu kun 3%, 1–7 kun 2%, 8–15 kun 1%.
+- Chatda uydirma KPI PDF/Excel havola bermang. Raqamlar: Dashboard → KPI.
 
 Tool:
 - Yuk / kirim / pachka / davomat / xato → AVVAL mos tool.
 - Fayl (PDF/Excel/CSV) → export_report. Base64 yozmang.
 - Fayl tayyor: qisqa xulosa + «Yuklab olish tugmasini bosing» (faqat haqiqiy fayl bo‘lsa).
-- Soxta markdown havola YO‘Q: [KPI hisobotini yuklab olish], [yuklab olish](...) — umuman yozmang.
-- KPI raqamlari uchun: Dashboard → KPI. Chatda uydirma PDF link bermang.
+- Soxta markdown havola YO‘Q.
 - «tekshira olmadim» demang. Admin “tuzat/yoz” desa fix_product_pachka.
-- Oddiy tushuntirish (KPI/menyu) uchun tool shart emas — bilganingizcha aniq yozing.
-- Foydalanuvchi misol keltirmasa ham: oxirgi yuk, davomat, hisobot, xato, MS solishtirish, eng ko‘p/sotilmagan tovar, qoldiq past, ombor, savdo summasi, mahsulot qidiruv, buyurtma tavsiya, zavodlar — o‘zingiz tanlab bajaring.
-- FAQAT so‘ralgan savolga javob bering. O‘zingizdan qo‘shimcha audit, boshqa yuk, «vhk» uslubidagi ortiqcha matn yozmang.
-- Tool nomini (inglizcha) foydalanuvchiga yozmang.`;
+- FAQAT so‘ralgan savolga javob bering. Tool nomini foydalanuvchiga yozmang.`;
 
 const TOOLS = [
   {
@@ -1270,6 +1278,9 @@ function detectExport(lower: string): { kind: "davomat" | "kirim" | "staff"; for
   const wantsKirim = /kirim\s*hisobot|yuk\s*(hisobot|excel|pdf)|shipment|приход|наклад/.test(lower)
     || (/kirim|yuklar|yuk\b/.test(lower) && /pdf|xlsx|excel|csv|yuklab|fayl|hisobot/.test(lower) && !wantsDavomat);
   // «bugungi kun hisobot / tizim hisobot» — fayl emas, kunlik brifing
+  if (isDailyBriefIntent(lower) && !/pdf|пдф|xlsx|excel|csv/.test(lower)) {
+    return null;
+  }
   if (/hisobot/.test(lower) && /bugun|kun\s*buyicha|tizim|umumiy|nima\s*boldi|holat/.test(lower)
     && !wantsDavomat && !wantsKirim && !wantsStaff
     && !/pdf|пдф|xlsx|excel|csv/.test(lower)) {
@@ -1582,7 +1593,8 @@ async function tryFastLocalTask(
   message: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
 ): Promise<AssistantResult | null> {
-  const lower = message.toLowerCase();
+  const lower = normalizeAssistantQuery(message);
+  const intent = classifyAssistantIntent(lower);
   const tools: Array<{ name: string; ok: boolean }> = [];
   const files: AssistantFile[] = [];
   const shipmentMatch = message.match(/\b(\d{3,5}-\d{2,4})\b/);
@@ -1592,7 +1604,7 @@ async function tryFastLocalTask(
   const prevAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content || "";
   const prevWasSales = /eng ko['‘`]?p sotilgan|sotilganlar:|dona ·|savdo hisobot/i.test(prevAssistant);
   const prevWasUnsold = /sotilmagan \(qoldiq bor\)|harakatsiz/i.test(prevAssistant);
-  const prevWasKpi = /KPI|Dashboard\s*→\s*KPI|agentlar\s*\(|Bugungi\s*\(.*\)\s*(kunga\s*)?agent|Savdo agenti/i.test(prevAssistant);
+  const prevWasKpi = /KPI|Dashboard\s*→\s*KPI|agentlar\s*\(|Boshqaruv\s*\/\s*Agentlar/i.test(prevAssistant);
 
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     try {
@@ -1623,8 +1635,13 @@ async function tryFastLocalTask(
     return { reply, model: "local-fast", tools, files };
   }
 
+  // 0-) O‘zini tanishtirish — KPI/agent trapiga tushmasin
+  if (intent === "identity" || isIdentityIntent(lower)) {
+    return { reply: identityReply(), model: "local-fast", tools, files };
+  }
+
   // 0a) Bugungi tizim hisoboti — «hisobot ber» vague/KPI yo‘liga tushmasin
-  if (isDailyBriefIntent(lower)) {
+  if (intent === "daily_brief" || isDailyBriefIntent(lower)) {
     const today = tashkentParts().date;
     const sales = await run("sales_summary", { days: 1 }) as Record<string, unknown> | null;
     const board = await run("office_today", {}) as Record<string, unknown> | null;
@@ -1697,8 +1714,82 @@ async function tryFastLocalTask(
     return { reply, model: "local-fast", tools, files };
   }
 
+  // 0a1) Oylik / maosh / jarima qisqa holat
+  if (intent === "payroll" || isPayrollIntent(lower)) {
+    try {
+      const month = tashkentParts().date.slice(0, 7);
+      const people = listLocalPeople().map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role }));
+      const pay = payrollMonth(month, people);
+      const site = officeSite();
+      const settings = payrollSettingsOf();
+      const top = [...pay.people].sort((a, b) => Math.abs(b.fineTotal) - Math.abs(a.fineTotal)).slice(0, 5);
+      const reply = [
+        `Oylik (${month}) — qisqa holat`,
+        "",
+        `• Ish vaqti: ${site.start}–${site.end} · dam kunlari: ${(site.offDays || []).map((d) => ["Ya", "Du", "Se", "Ch", "Pa", "Ju", "Sh"][d]).join(", ") || "—"}`,
+        `• Ish kunlari: ${pay.workdays} · kechikish jarimasi: ${settings.latePenaltyPct}% kunlik`,
+        `• Xodimlar: ${pay.summary.headcount} · oylik fondi: ${formatSum(pay.summary.salaryFund) || 0} so‘m`,
+        `• Jarimalar: ${formatSum(pay.summary.fineTotal) || 0} · avans: ${formatSum(pay.summary.advancesTotal) || 0} · bonus: ${formatSum(pay.summary.adjustmentsTotal) || 0}`,
+        `• Yakuniy to‘lov: ${formatSum(pay.summary.netTotal) || 0} so‘m`,
+        top.some((p) => p.fineTotal)
+          ? ["", "Eng ko‘p jarima:", ...top.filter((p) => p.fineTotal).map((p) => `• ${p.name}: ${formatSum(p.fineTotal)} so‘m (kelmagan ${p.absentDays}, kechik ${p.lateDays})`)].join("\n")
+          : "",
+        "",
+        "Batafsil: Dashboard → Oylik. Excel/PDF shu bo‘limdan yuklanadi.",
+      ].filter(Boolean).join("\n");
+      return { reply, model: "local-fast", tools, files };
+    } catch (error) {
+      logger.warn({ err: error instanceof Error ? error.message : error }, "payroll brief failed");
+      return {
+        reply: "Oylik hisobini hozir ochib bo‘lmadi. Dashboard → Oylik bo‘limiga kiring.",
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+  }
+
+  // 0a2) Davomat board (kunlik brifingdan keyin, vague dan oldin)
+  if (intent === "attendance" || isAttendanceIntent(lower)) {
+    const board = await run("office_today", {}) as Record<string, unknown> | null;
+    if (!board) return { reply: "Davomat board olinmadi.", model: "local-fast", tools, files };
+    const rows = Array.isArray(board.rows) ? board.rows as Array<Record<string, unknown>> : [];
+    const present = rows.filter((r) => r.inAt);
+    const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
+    const people = listLocalPeople();
+    const byId = new Map(people.map((p) => [p.id, p.name]));
+    const day = tashkentParts().date;
+    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
+    const onlyLate = /kechik/.test(lower);
+    if (onlyLate) {
+      return {
+        reply: late.length
+          ? [`Bugun kechikkanlar (${late.length}):`, ...late.slice(0, 20).map((r) => `• ${r.name}: ${r.inHm || "—"} (+${r.lateIn || 0} daq)`)].join("\n")
+          : "Bugun kechikkan yo‘q.",
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+    return {
+      reply: [
+        `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}, kechikkan ${late.length}.`,
+        ...present.slice(0, 15).map((r) => {
+          const rawName = String(r.name || "");
+          const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";
+          return `• ${name}: ${clockLabel(String(r.inAt || ""))} → ${r.outAt ? clockLabel(String(r.outAt)) : "ketmagan"} (${workedLabel(Number(r.workedMs || 0))})`;
+        }),
+        absent ? `Kelmaganlar: ${absent} ta (batafsil Dashboard → Davomat).` : "",
+      ].filter(Boolean).join("\n"),
+      model: "local-fast",
+      tools,
+      files,
+    };
+  }
+
   // 0b) «kere ber» / qisqa buyruq — Groq ga UMUMAN ketmaydi (soxta PDF yo‘q)
-  if (wantsVagueGive(lower)) {
+  if (intent === "vague_give" || wantsVagueGive(lower)) {
     if (/excel|xlsx/.test(lower) || (/fayl/.test(lower) && (prevWasKpi || /agent/i.test(prevAssistant)))) {
       await run("export_report", { kind: "staff", format: "xlsx" });
       if (files.length) {
@@ -2062,45 +2153,7 @@ async function tryFastLocalTask(
     };
   }
 
-  // 7) Davomat board (+ kechikkan)
-  const wantsBoard = /bugun kim|kelganlar|kelmagan|bugungi davomat|davomat holat|kim keldi|kim kelmagan|kechik|сегодня кто|кто приш/.test(lower)
-    || (/davomat/.test(lower) && /(bugun|holat|ro.?yxat|kim|stat|hozir)/.test(lower) && !/tushun|qanday|bolim/.test(lower));
-  if (wantsBoard) {
-    const board = await run("office_today", {}) as Record<string, unknown> | null;
-    if (!board) return { reply: "Davomat board olinmadi.", model: "local-fast", tools, files };
-    const rows = Array.isArray(board.rows) ? board.rows as Array<Record<string, unknown>> : [];
-    const present = rows.filter((r) => r.inAt);
-    const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
-    const people = listLocalPeople();
-    const byId = new Map(people.map((p) => [p.id, p.name]));
-    const day = tashkentParts().date;
-    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
-    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
-    const onlyLate = /kechik/.test(lower);
-    if (onlyLate) {
-      return {
-        reply: late.length
-          ? [`Bugun kechikkanlar (${late.length}):`, ...late.slice(0, 20).map((r) => `• ${r.name}: ${r.inHm || "—"} (+${r.lateIn || 0} daq)`)].join("\n")
-          : "Bugun kechikkan yo‘q.",
-        model: "local-fast",
-        tools,
-        files,
-      };
-    }
-    return {
-      reply: [
-        `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}, kechikkan ${late.length}.`,
-        ...present.slice(0, 12).map((r) => {
-          const rawName = String(r.name || "");
-          const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";
-          return `• ${name}: ${clockLabel(String(r.inAt || ""))} → ${r.outAt ? clockLabel(String(r.outAt)) : "ketmagan"} (${workedLabel(Number(r.workedMs || 0))})`;
-        }),
-      ].join("\n"),
-      model: "local-fast",
-      tools,
-      files,
-    };
-  }
+  // 7) Davomat — yuqorida (0a2) qayta ishlangan; bu yerda dublikat yo‘q
 
   // 8a) Portal / kirish havolasi
   if (wantsPortalLink(lower)) {

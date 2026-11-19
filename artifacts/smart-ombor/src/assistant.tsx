@@ -101,10 +101,14 @@ function stripJunk(text: string) {
   out = out.replace(/\bJVBERi0[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/\bUEsDB[A-Za-z0-9+/=\s]{40,}/g, '');
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, '');
-  // Haqiqiy kunlik hisobotni KPI “soxta havola” matniga almashtirmaymiz
-  if (/^Bugungi hisobot\s*—/i.test(out.trim())) {
-    // faqat umumiy junk tozalash pastga o‘tadi
-  } else {
+  // Haqiqiy mahalliy javoblarni KPI “soxta havola” matniga almashtirmaymiz
+  const trusted = /^Bugungi hisobot\s*—/i.test(out.trim())
+    || /^Bugungi davomat:/i.test(out.trim())
+    || /^Bugungi savdo:/i.test(out.trim())
+    || /^Oylik\s*\(/i.test(out.trim())
+    || /^Men Smart Ombor/i.test(out.trim())
+    || /Pastdagi Yuklab olish tugmasini/i.test(out);
+  if (!trusted) {
     // Soxta KPI PDF / bo‘sh **** — butun javobni almashtiramiz (server eski bo‘lsa ham)
     const fakeKpi = /kpi/i.test(out)
       && (/pdf\s*shaklida|yuklab\s*olish\s*uchun|quyidagi\s*havola|hisobotini\s*yuklab/i.test(out)
@@ -112,9 +116,12 @@ function stripJunk(text: string) {
         || /yuklab\s*olish\s*uchun\s*\*{0,8}/i.test(out));
     if ((fakeKpi || /^\*{2,}\s*$/m.test(out)) && !/Yuklab olish tugmasini/i.test(out)) {
       return [
-        'KPI uchun soxta yuklab olish havolasi yo‘q.',
-        'Aniq raqamlar: Dashboard → KPI → Boshqaruv / Agentlar.',
-        'Ro‘yxatni Excel qilib bersam: «agentlar excel» deb yozing.',
+        'Nima kerakligini aniq yozing. Masalan:',
+        '• bugungi kun hisoboti',
+        '• bugun kim keldi',
+        '• oylik holati',
+        '• davomat PDF / agentlar excel',
+        '• KPI → Dashboard → KPI',
       ].join('\n');
     }
   }

@@ -255,10 +255,38 @@ export function localizeUzbekReply(text: string): string {
   return out;
 }
 
+/** So‘rovni bir xil shaklga keltirish (lotin variantlari, ortiqcha tinish). */
+export function normalizeAssistantQuery(raw: string): string {
+  return String(raw || "")
+    .toLowerCase()
+    .replace(/[‘’ʻ`´]/g, "'")
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ")
+    .replace(/[?!.,;:]+$/g, "")
+    .trim();
+}
+
+/** Haqiqiy tizim javabi — soxta KPI filtriga tushmasin. */
+export function isTrustedLocalReply(text: string): boolean {
+  const t = String(text || "").trim();
+  return (
+    /^Bugungi hisobot\s*—/i.test(t)
+    || /^Bugungi davomat:/i.test(t)
+    || /^Bugungi savdo:/i.test(t)
+    || /^Bugungi\s*\(\d{4}-\d{2}-\d{2}\)\s*agentlar/i.test(t)
+    || /^Oylik\s*\(/i.test(t)
+    || /^Oxirgi\s+\d+\s+kun/i.test(t)
+    || /^Xodimlar:\s*\d+/i.test(t)
+    || /^Agentlar:\s*\d+/i.test(t)
+    || /Pastdagi Yuklab olish tugmasini/i.test(t)
+  );
+}
+
 /** Soxta KPI PDF / bo‘sh **** havola javobi */
 export function looksLikeFakeKpiDownload(text: string): boolean {
   const t = String(text || "");
   if (/Yuklab olish tugmasini/i.test(t)) return false;
+  if (isTrustedLocalReply(t)) return false;
   const low = t.toLowerCase();
   if (!/kpi/.test(low)) return false;
   if (/pdf\s*shaklida|yuklab\s*olish\s*uchun|quyidagi\s*havola|hisobotini\s*yuklab/.test(low)) return true;
@@ -290,6 +318,10 @@ export function stripFakeDownloadLinks(text: string): string {
 
 export function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
+  if (isTrustedLocalReply(out)) {
+    out = localizeUzbekReply(out);
+    return out.replace(/\n{3,}/g, "\n\n").trim();
+  }
   if (looksLikeFakeKpiDownload(out)) {
     return kpiFollowupReply();
   }
@@ -322,58 +354,93 @@ export function sanitizeAssistantReply(text: string): string {
   return out;
 }
 
+/** AI o‘zi haqida / «sen nima agentisan» */
+export function isIdentityIntent(lower: string): boolean {
+  const t = normalizeAssistantQuery(lower);
+  return (
+    /sen\s*(nima|kim)|nimani?\s*agent|qanday\s*agent|kim\s*san|vazifang|nima\s*qila\s*olasan|nima\s*bilasan/.test(t)
+    || /who\s*are\s*you|what\s*can\s*you\s*do/.test(t)
+  );
+}
+
 /** Bugungi / kunlik tizim hisoboti — «hisobot ber» vague emas. */
 export function isDailyBriefIntent(lower: string): boolean {
-  const t = String(lower || "").toLowerCase();
-  if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa)|umumiy\s*hisobot/.test(t)) return true;
-  if (
-    /bugungi?\s*kun|kun\s*bo?['‘`]?yicha|bugun\s*nima\s*boldi|bugun\s*holat|qanday\s*holat/.test(t)
-    && /hisobot|xulosa|nima\s*boldi|ayt|ber|toliq|holat/.test(t)
-  ) {
+  const t = normalizeAssistantQuery(lower);
+  if (isIdentityIntent(t)) return false;
+  // Aniq fayl so‘rovi emas
+  if (/\b(pdf|xlsx|excel|csv)\b/.test(t) && /davomat|kirim|xodim|staff/.test(t)) return false;
+  if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa|holat)|umumiy\s*(hisobot|holat|xulosa)/.test(t)) return true;
+  if (/bugun(gi)?\s*(kun|hisobot|holat|xulosa)|kun\s*bo'?yicha|kun\s*buyicha/.test(t)) {
+    if (/hisobot|xulosa|holat|nima\s*boldi|ayt|ber|toliq|qanday|nimalar/.test(t)) return true;
+  }
+  if (/nima\s*boldi|qanday\s*holat|nimalar\s*(boldi|bo'?ldi)|toliq\s*hisobot/.test(t) && /bugun|kun|tizim|umumiy/.test(t)) {
     return true;
   }
   if (
-    /hisobot\s*(ber|chiqar|ayt|ol)/.test(t)
+    /hisobot\s*(ber|chiqar|ayt|ol|kerak)/.test(t)
     && /bugun|kun|tizim|umumiy|toliq|holat|nima/.test(t)
     && !/davomat|посещаем|pdf|xlsx|excel/.test(t)
   ) {
     return true;
   }
   if (/^salom\b/.test(t) && /bugun|kun/.test(t) && /hisobot/.test(t) && !/davomat|pdf|xlsx/.test(t)) return true;
+  // Qisqa: «bugun nima boldi?»
+  if (/^bugun\s*(nima\s*boldi|holat|hisobot)?[!?.]*$/.test(t)) return true;
   return false;
 }
 
+/** Davomat / kim keldi */
+export function isAttendanceIntent(lower: string): boolean {
+  const t = normalizeAssistantQuery(lower);
+  if (isDailyBriefIntent(t) && !/davomat|kelgan|kelmagan|kechik/.test(t)) return false;
+  if (/bugun\s*kim|kim\s*keldi|kim\s*kelmagan|kelganlar|kelmaganlar|kechikkan/.test(t)) return true;
+  if (/bugungi?\s*davomat|davomat\s*(holat|ro'?yxat|bugun)|сегодня\s*кто|кто\s*приш/.test(t)) return true;
+  if (/davomat/.test(t) && /(bugun|holat|ro'?yxat|kim|stat|hozir|ber|ayt)/.test(t) && !/tushun|qanday\s*bolim|pdf|excel/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/** Oylik / maosh / jarima */
+export function isPayrollIntent(lower: string): boolean {
+  const t = normalizeAssistantQuery(lower);
+  return /oylik|maosh|ish\s*haqi|jarima|avans|bonus|net\s*to'?lov|payroll|зарплат|оклад/.test(t);
+}
+
 export function wantsVagueGive(lower: string): boolean {
-  const t = String(lower || "").toLowerCase().trim();
-  // Kunlik hisobotni «hisobot ber» deb KPI javobiga aylantirmaslik
-  if (isDailyBriefIntent(t)) return false;
+  const t = normalizeAssistantQuery(lower);
+  // Aniq intentlar vague emas
+  if (isDailyBriefIntent(t) || isAttendanceIntent(t) || isPayrollIntent(t) || isIdentityIntent(t)) return false;
+  if (isSalesSummaryIntent(t) || isTopSoldIntent(t) || isUnsoldIntent(t) || isStaffListIntent(t)) return false;
+  if (wantsPortalLink(t)) return false;
   // «kere ber», «kerak», qisqa buyruqlar — Groq ga umuman ketmasin
   if (/^(kere|kerak)(\s*ber)?[!?.]*$/.test(t)) return true;
   if (/^(ber|yubor|yoz|chiqar)[!?.]*$/.test(t)) return true;
   // Faqat qisqa/noaniq «hisobot ber» — batafsil so‘rov emas
-  if (/hisobot\s*ber/.test(t) && t.length > 48) return false;
+  if (/hisobot\s*ber/.test(t) && (t.length > 40 || /bugun|kun|toliq|holat|nima/.test(t))) return false;
   return /yuklab\s*ber|pdf\s*ber|excel\s*ber|xlsx\s*ber|fayl\s*ber|hisobot\s*ber|kere\s*ber|kerak\s*ber/.test(t);
 }
 
 export function vagueGiveReply(prevAssistant = ""): string {
-  if (/kpi|agent|savdo agenti|dashboard/i.test(prevAssistant)) {
+  // Faqat aniq KPI konteksti — «agent» so‘zi AI suhbatidan kelib qolmasin
+  if (/kpi|dashboard\s*→\s*kpi|agentlar\s*\(|boshqaruv\s*\/\s*agentlar/i.test(prevAssistant)) {
     return kpiFollowupReply();
   }
   return [
-    "Nima kerakligini aniq yozing:",
+    "Nima kerakligini aniq yozing. Masalan:",
+    "• bugungi kun hisoboti",
+    "• bugun kim keldi",
+    "• oylik holati",
+    "• oxirgi yukni tekshir",
+    "• davomat PDF / kirim excel / agentlar excel",
     "• KPI raqamlari → Dashboard → KPI",
-    "• agentlar excel",
-    "• davomat PDF",
-    "• kirim excel",
-    "• xodimlar excel",
   ].join("\n");
 }
 
 /** Oxirgi to‘siq: soxta PDF / **** / uydirma havola hech qachon chiqmasin */
 export function finalizeAssistantReply(text: string, hasFiles = false): string {
   const raw = String(text || "");
-  // Haqiqiy kunlik brifingni KPI “soxta havola” matniga almashtirmaymiz
-  if (/^Bugungi hisobot\s*—/i.test(raw.trim()) || /^Bugungi\s*\(\d{4}-\d{2}-\d{2}\)\s*agentlar/i.test(raw.trim())) {
+  if (isTrustedLocalReply(raw) || hasFiles) {
     return sanitizeAssistantReply(raw);
   }
   let out = sanitizeAssistantReply(raw);
@@ -381,17 +448,33 @@ export function finalizeAssistantReply(text: string, hasFiles = false): string {
   if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /pdf|yuklab\s*olish\s*uchun|\*{2,}/i.test(out))) {
     return kpiFollowupReply();
   }
-  // Bo‘sh yoki faqat **** qolgan javob
+  // Bo‘sh yoki faqat **** qolgan javob — umumiy yo‘l-yo‘riq (KPI emas, agar KPI yo‘q)
   if (!out.trim() || /^\*{2,}$/.test(out.trim()) || /yuklab\s*olish\s*uchun\s*\*{0,8}\s*$/i.test(out)) {
-    return kpiFollowupReply();
+    return vagueGiveReply("");
   }
   return out;
 }
 
 export function isKpiAgentsIntent(lower: string): boolean {
-  const t = String(lower || "").toLowerCase();
+  const t = normalizeAssistantQuery(lower);
+  if (isIdentityIntent(t) || isDailyBriefIntent(t) || isAttendanceIntent(t)) return false;
+  // «KPI» so‘zi bo‘lmasa — agentlar ro‘yxati KPI emas
   if (!/kpi/.test(t)) return false;
   return /agent|ro.?yxat|kim|bugun|yozilgan|bor|qaysi/.test(t);
+}
+
+export function identityReply(): string {
+  return [
+    "Men Smart Ombor nazorat agentiman.",
+    "Yordam bera olaman:",
+    "• bugungi umumiy hisobot (yuk, savdo, davomat)",
+    "• yuk xati tekshiruvi / pachka / MoySklad",
+    "• davomat, oylik, jarima",
+    "• savdo, sotilmagan tovar, qoldiq",
+    "• PDF/Excel hisobotlar",
+    "",
+    "Masalan yozing: «bugungi kun hisoboti» yoki «0066-015 tekshir».",
+  ].join("\n");
 }
 
 export function formatKpiAgentsReply(rows: Array<{ name?: unknown; login?: unknown; role?: unknown }>, today: string): string {
@@ -417,8 +500,41 @@ export function kpiFollowupReply(): string {
 
 /** Staff ro‘yxati so‘rovi (loginlar, kimlar bor…) */
 export function isStaffListIntent(lower: string): boolean {
-  const t = String(lower || "").toLowerCase();
-  if (wantsPortalLink(t)) return false;
-  if (isKpiAgentsIntent(t)) return false;
+  const t = normalizeAssistantQuery(lower);
+  if (wantsPortalLink(t) || isKpiAgentsIntent(t) || isIdentityIntent(t) || isDailyBriefIntent(t)) return false;
   return /xodimlar\s*ro.?yxat|kimlar\s*bor|staff\s*list|loginlar|barcha\s*xodim|agentlar\s*ro.?yxat|xodimlar\s*login|login\s*parol|xodimlar\s*va\s*login|agentlar\s*excel/.test(t);
+}
+
+/**
+ * Intent prioriteti (yuqoridan pastga).
+ * Test va routing uchun: birinchi mos kelgan yo‘l.
+ */
+export type AssistantIntent =
+  | "identity"
+  | "daily_brief"
+  | "attendance"
+  | "payroll"
+  | "portal"
+  | "staff"
+  | "kpi_agents"
+  | "vague_give"
+  | "sales"
+  | "top_sold"
+  | "unsold"
+  | "other";
+
+export function classifyAssistantIntent(raw: string): AssistantIntent {
+  const t = normalizeAssistantQuery(raw);
+  if (isIdentityIntent(t)) return "identity";
+  if (isDailyBriefIntent(t)) return "daily_brief";
+  if (isAttendanceIntent(t)) return "attendance";
+  if (isPayrollIntent(t)) return "payroll";
+  if (wantsPortalLink(t)) return "portal";
+  if (isKpiAgentsIntent(t)) return "kpi_agents";
+  if (isStaffListIntent(t)) return "staff";
+  if (isTopSoldIntent(t)) return "top_sold";
+  if (isUnsoldIntent(t)) return "unsold";
+  if (isSalesSummaryIntent(t)) return "sales";
+  if (wantsVagueGive(t)) return "vague_give";
+  return "other";
 }
