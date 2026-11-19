@@ -67,7 +67,7 @@ export function inferCoordinates(
       };
     }
   }
-  // Default spread around Tashkent trade rings
+  // Default spread around Tashkent trade rings — faqat taxminiy hudud
   return {
     lat: Number((41.295 + dLat * 2.2).toFixed(6)),
     lng: Number((69.235 + dLng * 2.5).toFixed(6)),
@@ -85,38 +85,19 @@ export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
   return Math.round(2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
-export function orderRouteStops<
-  T extends {
-    id: string;
-    lat: number;
-    lng: number;
-    visitedToday: boolean;
-    visitedAt?: string | null;
-    debt?: string | number;
-  },
->(stops: T[], startLat?: number | null, startLng?: number | null): Array<T & { step: number; isNext: boolean; distanceM: number | null }> {
-  const visited = stops
-    .filter((s) => s.visitedToday)
-    .sort((a, b) => String(a.visitedAt || "").localeCompare(String(b.visitedAt || "")));
+function stopExact(s: { exact?: boolean; exactGps?: boolean }): boolean {
+  return s.exactGps === true || s.exact === true;
+}
 
-  // Single nearest-neighbor pool for ALL unvisited (debt does not jump the queue)
-  const unvisited = stops.filter((s) => !s.visitedToday);
-
-  let curLat =
-    startLat != null && Number.isFinite(startLat)
-      ? startLat
-      : visited.length
-        ? visited[visited.length - 1].lat
-        : 41.2995;
-  let curLng =
-    startLng != null && Number.isFinite(startLng)
-      ? startLng
-      : visited.length
-        ? visited[visited.length - 1].lng
-        : 69.2401;
-
-  const rem = [...unvisited];
-  const greedy: T[] = [];
+function greedyNearest<T extends { lat: number; lng: number }>(
+  pool: T[],
+  startLat: number,
+  startLng: number,
+): T[] {
+  const rem = [...pool];
+  const out: T[] = [];
+  let curLat = startLat;
+  let curLng = startLng;
   while (rem.length) {
     let bestIdx = 0;
     let bestDist = Infinity;
@@ -130,29 +111,111 @@ export function orderRouteStops<
     const [picked] = rem.splice(bestIdx, 1);
     curLat = picked.lat;
     curLng = picked.lng;
-    greedy.push(picked);
+    out.push(picked);
+  }
+  return out;
+}
+
+function stableFallbackOrder<T extends { id: string; debt?: string | number; name?: string }>(pool: T[]): T[] {
+  return [...pool].sort((a, b) => {
+    const da = Number(a.debt || 0);
+    const db = Number(b.debt || 0);
+    if (db !== da) return db - da;
+    return String(a.name || a.id).localeCompare(String(b.name || b.id), "uz");
+  });
+}
+
+export function orderRouteStops<
+  T extends {
+    id: string;
+    lat: number;
+    lng: number;
+    visitedToday: boolean;
+    visitedAt?: string | null;
+    debt?: string | number;
+    name?: string;
+    exact?: boolean;
+    exactGps?: boolean;
+  },
+>(
+  stops: T[],
+  startLat?: number | null,
+  startLng?: number | null,
+): Array<T & { step: number; isNext: boolean; distanceM: number | null; fromAgentM: number | null }> {
+  const visited = stops
+    .filter((s) => s.visitedToday)
+    .sort((a, b) => String(a.visitedAt || "").localeCompare(String(b.visitedAt || "")));
+
+  const unvisited = stops.filter((s) => !s.visitedToday);
+  const exactUnvisited = unvisited.filter((s) => stopExact(s));
+  const inferredUnvisited = unvisited.filter((s) => !stopExact(s));
+
+  const hasStart =
+    startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng);
+
+  let seedLat: number | null = hasStart
+    ? (startLat as number)
+    : visited.length
+      ? visited[visited.length - 1].lat
+      : exactUnvisited.length
+        ? exactUnvisited[0].lat
+        : null;
+  let seedLng: number | null = hasStart
+    ? (startLng as number)
+    : visited.length
+      ? visited[visited.length - 1].lng
+      : exactUnvisited.length
+        ? exactUnvisited[0].lng
+        : null;
+
+  let greedyExact: T[] = [];
+  let greedyInferred: T[] = [];
+
+  if (seedLat != null && seedLng != null) {
+    // Avval aniq GPS nuqtalar — taxminiy (hudud) pinlar marshrutni buzmasin
+    const exactPool =
+      !hasStart && !visited.length && exactUnvisited.length
+        ? exactUnvisited.slice(1)
+        : exactUnvisited;
+    const firstExact =
+      !hasStart && !visited.length && exactUnvisited.length ? [exactUnvisited[0]] : [];
+    greedyExact = [...firstExact, ...greedyNearest(exactPool, seedLat, seedLng)];
+    const afterExactLat = greedyExact.length ? greedyExact[greedyExact.length - 1].lat : seedLat;
+    const afterExactLng = greedyExact.length ? greedyExact[greedyExact.length - 1].lng : seedLng;
+    greedyInferred = greedyNearest(inferredUnvisited, afterExactLat, afterExactLng);
+  } else {
+    // GPS umuman yo‘q — Toshkent markazini o‘ylab topmaymiz
+    greedyExact = stableFallbackOrder(exactUnvisited);
+    greedyInferred = stableFallbackOrder(inferredUnvisited);
   }
 
-  const ordered = [...visited, ...greedy];
+  const ordered = [...visited, ...greedyExact, ...greedyInferred];
   let nextAssigned = false;
-  const hasStart = startLat != null && startLng != null && Number.isFinite(startLat) && Number.isFinite(startLng);
 
   return ordered.map((item, idx) => {
     const isNext = !item.visitedToday && !nextAssigned;
     if (isNext) nextAssigned = true;
-    // Agent→customer when live start known (Bordim distance guard); else stop→stop leg
+
+    const fromAgentM =
+      hasStart ? distanceMeters(startLat as number, startLng as number, item.lat, item.lng) : null;
+
+    // distanceM = marshrut oyog‘i (prev→current). Keyingi nuqta uchun agent→nuqta.
     let distanceM: number | null = null;
-    if (hasStart) {
-      distanceM = distanceMeters(startLat as number, startLng as number, item.lat, item.lng);
+    if (isNext && hasStart) {
+      distanceM = fromAgentM;
     } else if (idx > 0) {
       const prev = ordered[idx - 1];
       distanceM = distanceMeters(prev.lat, prev.lng, item.lat, item.lng);
+    } else if (hasStart) {
+      distanceM = fromAgentM;
     }
+
     return {
       ...item,
       step: idx + 1,
       isNext,
       distanceM,
+      fromAgentM,
     };
   });
 }

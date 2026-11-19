@@ -7,6 +7,8 @@ import { kpiFetch, uzs } from '@/kpi/api';
 import { RouteMap, type RouteStop } from './route-map';
 import './kpi.css';
 
+type WatchStatus = 'live' | 'away' | 'silent' | 'no_signal' | 'off_hours';
+
 type AgentPin = {
   id: string;
   fullName: string;
@@ -16,6 +18,12 @@ type AgentPin = {
   lng: number | null;
   accuracyM: number | null;
   lastSeenAt: string | null;
+  firstSeenAt?: string | null;
+  leftAt?: string | null;
+  pingCountToday?: number;
+  watchStatus?: WatchStatus;
+  watchSource?: string | null;
+  watchLabel?: string;
   customersCount: number;
   debtorsCount: number;
   visitedToday: number;
@@ -60,6 +68,9 @@ type Overview = {
   points: GpsPoint[];
   routeLog: RouteEntry[];
   agentTrack?: Array<{ lat: number; lng: number; at: string }>;
+  workHours?: { start: string; end: string; active: boolean; label: string };
+  watchSummary?: { live: number; away: number; silent: number; noSignal: number; total: number };
+  watchAlerts?: Array<{ agentId: string; fullName: string; watchLabel: string; lastSeenAt: string | null }>;
 };
 
 function fmtTime(iso: string | null) {
@@ -75,11 +86,29 @@ function fmtTime(iso: string | null) {
   }
 }
 
-/** Agent counts as "live" only if last ping is fresh (5 min). */
-function isAgentLive(lastSeenAt: string | null | undefined, lat: number | null | undefined, lng: number | null | undefined) {
-  if (lat == null || lng == null || !lastSeenAt) return false;
-  const age = Date.now() - new Date(lastSeenAt).getTime();
-  return Number.isFinite(age) && age >= 0 && age <= 5 * 60_000;
+function agentWatch(a: AgentPin, workActive?: boolean): WatchStatus {
+  if (workActive === false) return 'off_hours';
+  if (a.watchStatus) return a.watchStatus;
+  if (a.lat == null || a.lng == null || !a.lastSeenAt) return 'no_signal';
+  const age = Date.now() - new Date(a.lastSeenAt).getTime();
+  if (Number.isFinite(age) && age >= 0 && age <= 3 * 60_000) return 'live';
+  if (Number.isFinite(age) && age >= 0 && age <= 15 * 60_000) return 'away';
+  return a.pingCountToday ? 'silent' : 'no_signal';
+}
+
+function isAgentLive(a: AgentPin, workActive?: boolean) {
+  return agentWatch(a, workActive) === 'live';
+}
+
+function hasDayPosition(a: AgentPin) {
+  return a.lat != null && a.lng != null && Boolean(a.lastSeenAt);
+}
+
+function watchChipClass(status: WatchStatus) {
+  if (status === 'live') return 'ok';
+  if (status === 'away') return 'active';
+  if (status === 'silent') return 'pending';
+  return '';
 }
 
 export function GpsPage() {
@@ -131,13 +160,17 @@ export function GpsPage() {
   });
 
   const d = q.data;
+  const workActive = d?.workHours?.active;
   const currentAgentId = agentId || d?.selectedAgentId || '';
-  const liveAgents = (d?.agents || []).filter((a) => isAgentLive(a.lastSeenAt, a.lat, a.lng));
+  const liveAgents = (d?.agents || []).filter((a) => isAgentLive(a, workActive));
+  const silentAgents = (d?.agents || []).filter((a) => {
+    const s = agentWatch(a, workActive);
+    return s === 'silent' || s === 'no_signal';
+  });
   const visitedCount = (d?.points || []).filter((p) => p.visitedToday).length;
   const selectedAgent = (d?.agents || []).find((a) => a.id === currentAgentId);
-  const selectedLive = selectedAgent
-    ? isAgentLive(selectedAgent.lastSeenAt, selectedAgent.lat, selectedAgent.lng)
-    : false;
+  const selectedLive = selectedAgent ? isAgentLive(selectedAgent, workActive) : false;
+  const selectedHasPos = selectedAgent ? hasDayPosition(selectedAgent) : false;
 
   const focusStop = (stopId: string) => {
     setSelectedStopId(stopId);
@@ -150,6 +183,10 @@ export function GpsPage() {
       <header className="kpi-head">
         <div>
           <h1>GPS va marshrut {selectedAgent ? `— ${selectedAgent.fullName}` : ''}</h1>
+          <p className="kpi-muted" style={{ margin: '.25rem 0 0' }}>
+            Kuzatuv: {d?.workHours?.label || '06:00–18:00 (Toshkent)'}
+            {d?.workHours?.active ? ' · hozir ish soati' : ' · ish soati tashqarida'}
+          </p>
         </div>
         <div className="kpi-actions">
           <button type="button" className="btn" onClick={() => void q.refetch()}>
@@ -158,10 +195,17 @@ export function GpsPage() {
         </div>
       </header>
 
+      {d?.workHours?.active && silentAgents.length ? (
+        <p className="kpi-status-banner">
+          Ish soatida aloqa yo‘q / uzilgan: {silentAgents.map((a) => a.fullName).join(', ')}
+        </p>
+      ) : null}
+
       {/* Clickable Agent Selector Pills (one agent at a time) */}
       <div className="gps-agent-strip">
         {(d?.agents || []).map((a) => {
-          const isOnline = isAgentLive(a.lastSeenAt, a.lat, a.lng);
+          const status = agentWatch(a, workActive);
+          const isOnline = status === 'live';
           const isActive = currentAgentId === a.id;
           return (
             <button
@@ -171,12 +215,19 @@ export function GpsPage() {
               onClick={() => { setAgentId(a.id); setSelectedStopId(null); }}
             >
               <span className="gps-agent-pill-top">
-                <i className={`gps-dot ${isOnline ? 'is-on' : ''}`} />
+                <i className={`gps-dot ${isOnline ? 'is-on' : status === 'away' ? 'is-away' : status === 'silent' ? 'is-silent' : ''}`} />
                 <b>{a.fullName}</b>
               </span>
               <small className="gps-agent-pill-meta">✓ {a.visitedToday} / {a.customersCount} nuqta</small>
               <small className="gps-agent-pill-status">
-                {isOnline ? 'Jonli GPS' : a.lastSeenAt ? `Oxirgi ${fmtTime(a.lastSeenAt)}` : 'GPS yo‘q'}
+                {a.watchLabel ||
+                  (isOnline
+                    ? a.watchSource === 'native' || a.watchSource === 'heartbeat'
+                      ? 'Fon GPS'
+                      : 'Jonli GPS'
+                    : a.lastSeenAt
+                      ? `Oxirgi ${fmtTime(a.lastSeenAt)}`
+                      : 'GPS yo‘q')}
               </small>
             </button>
           );
@@ -189,7 +240,7 @@ export function GpsPage() {
             <span>GPS faol</span>
             <span className="ag-stat-ico"><Navigation size={18} /></span>
           </div>
-          <strong>{liveAgents.length} / {d?.agents.length || 0}</strong>
+          <strong>{d?.watchSummary?.live ?? liveAgents.length} / {d?.agents.length || 0}</strong>
         </article>
         <article className="ag-stat is-green">
           <div className="ag-stat-head">
@@ -217,11 +268,11 @@ export function GpsPage() {
       {/* Live navigator-style map for selected agent (admin sees same trail) */}
       <RouteMap
         stops={(d?.points || []) as RouteStop[]}
-        agents={selectedAgent && selectedLive ? [selectedAgent] : []}
+        agents={selectedAgent && selectedHasPos ? [selectedAgent] : []}
         agentName={selectedAgent?.fullName}
         viewer="admin"
         agentPos={
-          selectedLive && selectedAgent?.lat != null && selectedAgent?.lng != null
+          selectedHasPos && selectedAgent?.lat != null && selectedAgent?.lng != null
             ? { lat: selectedAgent.lat, lng: selectedAgent.lng }
             : null
         }
@@ -353,45 +404,57 @@ export function GpsPage() {
             <thead>
               <tr>
                 <th>Agent</th>
+                <th>Kuzatuv holati</th>
                 <th>Oxirgi GPS</th>
+                <th>Bugun ping</th>
                 <th>Mijozlari</th>
-                <th>Qarzdor nuqtalar</th>
                 <th>Bugun bordi</th>
                 <th>Marshrutni ko‘rish</th>
               </tr>
             </thead>
             <tbody>
-              {(d?.agents || []).map((a) => (
-                <tr key={a.id}>
-                  <td data-label="Agent"><b>{a.fullName}</b></td>
-                  <td data-label="Oxirgi GPS">
-                    {isAgentLive(a.lastSeenAt, a.lat, a.lng) ? (
-                      <span className="kpi-chip ok">Faol · {fmtTime(a.lastSeenAt)}</span>
-                    ) : a.lat != null && a.lng != null ? (
-                      <span className="kpi-chip">Eski · {fmtTime(a.lastSeenAt)}</span>
-                    ) : (
-                      <span className="kpi-chip">GPS yo‘q</span>
-                    )}
-                  </td>
-                  <td data-label="Mijozlari">{a.customersCount} ta</td>
-                  <td data-label="Qarzdor nuqtalar">{a.debtorsCount} ta</td>
-                  <td data-label="Bugun bordi"><b>✓ {a.visitedToday} ta</b></td>
-                  <td data-label="">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => {
-                        setAgentId(a.id);
-                        setSelectedStopId(null);
-                        setSub('points');
-                        setMapFullscreen(true);
-                      }}
-                    >
-                      <RouteIcon size={14} /> Marshrutini ochish
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {(d?.agents || []).map((a) => {
+                const status = agentWatch(a, workActive);
+                return (
+                  <tr key={a.id}>
+                    <td data-label="Agent"><b>{a.fullName}</b></td>
+                    <td data-label="Kuzatuv holati">
+                      <span className={`kpi-chip ${watchChipClass(status)}`}>
+                        {a.watchLabel || status}
+                      </span>
+                    </td>
+                    <td data-label="Oxirgi GPS">
+                      {a.lastSeenAt ? (
+                        <span>
+                          {fmtTime(a.lastSeenAt)}
+                          {a.lat != null && a.lng != null ? (
+                            <div className="kpi-muted">{a.lat.toFixed(4)}, {a.lng.toFixed(4)}</div>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="kpi-chip">GPS yo‘q</span>
+                      )}
+                    </td>
+                    <td data-label="Bugun ping"><b>{a.pingCountToday || 0}</b></td>
+                    <td data-label="Mijozlari">{a.customersCount} ta</td>
+                    <td data-label="Bugun bordi"><b>✓ {a.visitedToday} ta</b></td>
+                    <td data-label="">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          setAgentId(a.id);
+                          setSelectedStopId(null);
+                          setSub('points');
+                          setMapFullscreen(true);
+                        }}
+                      >
+                        <RouteIcon size={14} /> Marshrutini ochish
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

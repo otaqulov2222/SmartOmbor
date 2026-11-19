@@ -665,11 +665,25 @@ export function RouteMap({
       } else {
         const trimmed = pathFromLive(active.fullPath, markerLat, markerLng);
         paintActiveLine(L, activeLayer, trimmed, active.ok);
+        // Qolgan masofa — yo‘l bo‘yicha (0.85 taxmin emas)
+        let remainM = 0;
+        for (let i = 1; i < trimmed.length; i += 1) {
+          remainM += haversineM(
+            { lat: trimmed[i - 1][0], lng: trimmed[i - 1][1] },
+            { lat: trimmed[i][0], lng: trimmed[i][1] },
+          );
+        }
+        if (trimmed.length < 2) {
+          remainM = haversineM({ lat: markerLat, lng: markerLng }, dest);
+        }
+        const ratio = active.distanceM && active.distanceM > 0
+          ? Math.min(1, Math.max(0, remainM / active.distanceM))
+          : null;
         setRoadHint({
-          distanceM: active.distanceM != null
-            ? Math.max(0, Math.round(active.distanceM - moved * 0.85))
-            : Math.round(haversineM({ lat: markerLat, lng: markerLng }, dest)),
-          durationSec: active.durationSec,
+          distanceM: Math.round(remainM),
+          durationSec: active.durationSec != null && ratio != null
+            ? Math.max(0, Math.round(active.durationSec * ratio))
+            : active.durationSec,
           roadOk: active.ok,
         });
       }

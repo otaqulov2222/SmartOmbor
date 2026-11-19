@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import {
   db,
   kpiAgentsTable,
@@ -72,7 +72,7 @@ router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
     const agents = await db.select().from(kpiAgentsTable);
     const settleAgents = agents
       .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
-      .map((a) => ({ login: a.login, fullName: a.fullName }));
+      .map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag }));
     // Fondа yangilanadi — UI eski to‘liq raqamlarni ko‘rsatishda davom etadi, keyin almashtiriladi.
     void refreshMsSettlements(settleAgents, period.from, period.to).catch(() => undefined);
     res.json({ ok: true, ...result, preset: period.preset, label: period.label, msSettlements: "warming" });
@@ -292,6 +292,43 @@ async function activeAssignment(customerId: string) {
   return rows[0] ?? null;
 }
 
+/** GPS/KPI uzviyligi: MS yoki lokal mijozni agentga biriktirish (qo‘lda berilgan assignmentni buzmaydi). */
+async function ensureAgentCustomerLink(
+  customerId: string,
+  agentId: string,
+  assignedBy: "moysklad" | "gps-link" | "staff" = "gps-link",
+) {
+  const [row] = await db
+    .select()
+    .from(kpiCustomerAssignmentsTable)
+    .where(
+      and(
+        eq(kpiCustomerAssignmentsTable.customerId, customerId),
+        eq(kpiCustomerAssignmentsTable.active, true),
+      ),
+    )
+    .limit(1);
+  if (!row) {
+    await db.insert(kpiCustomerAssignmentsTable).values({
+      customerId,
+      agentId,
+      active: true,
+      assignedBy,
+    });
+    return true;
+  }
+  if (row.agentId === agentId) return true;
+  // Qo‘lda boshqa agentga berilgan — tortib olmaymiz.
+  if (row.assignedBy && row.assignedBy !== "moysklad" && row.assignedBy !== "gps-link") {
+    return false;
+  }
+  await db
+    .update(kpiCustomerAssignmentsTable)
+    .set({ agentId, assignedBy, updatedAt: new Date() })
+    .where(eq(kpiCustomerAssignmentsTable.id, row.id));
+  return true;
+}
+
 /* ---------- Agent auth ---------- */
 router.post("/kpi/agent/login", async (req, res, next) => {
   try {
@@ -477,7 +514,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
     );
     // Cache'dan darhol; MS skani fonda (UI millisekundda).
     const settled = await getAgentsMsSettlementSummaries(
-      agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+      agents.map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag })),
       period.from,
       period.to,
     ).catch(() => ({ map: new Map(), status: "warming" as const }));
@@ -510,6 +547,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         startedAt: agent.startedAt,
         salesPlan,
         notes: agent.notes,
+        msTag: agent.msTag || "",
         customers: hasMsData ? (ms?.customers ?? 0) : 0,
         salesTotal,
         monthSales: salesTotal,
@@ -546,12 +584,13 @@ router.get("/kpi/agents/:id/settlements", requireKpiAdmin(), async (req, res, ne
     const allAgents = await db.select().from(kpiAgentsTable);
     const warmAgents = allAgents
       .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
-      .map((a) => ({ login: a.login, fullName: a.fullName }));
+      .map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag }));
     const [data, kpiTotal] = await Promise.all([
       getAgentMsSettlements(
         {
           login: agent.login,
           fullName: agent.fullName,
+          msTag: agent.msTag,
           from: period.from,
           to: period.to,
         },
@@ -611,6 +650,10 @@ router.patch("/kpi/agents/:id", requireKpiAdmin(), async (req, res, next) => {
     for (const key of ["fullName", "phone", "status", "notes"] as const) {
       if (req.body?.[key] != null) patch[key] = String(req.body[key]);
     }
+    if (req.body?.msTag != null) {
+      const { normalizeMsTag } = await import("../lib/kpi/ms-agent-tags");
+      patch.msTag = normalizeMsTag(req.body.msTag);
+    }
     if (req.body?.territoryId !== undefined) patch.territoryId = req.body.territoryId || null;
     if (req.body?.startedAt !== undefined) patch.startedAt = req.body.startedAt || null;
     if (req.body?.salesPlan != null) patch.salesPlan = money(req.body.salesPlan);
@@ -620,6 +663,15 @@ router.patch("/kpi/agents/:id", requireKpiAdmin(), async (req, res, next) => {
     if (!row) {
       res.status(404).json({ error: "Agent topilmadi." });
       return;
+    }
+    if (patch.msTag != null || patch.login != null || patch.fullName != null) {
+      try {
+        const { invalidateAgentTagCache, probeAgentMsTag } = await import("../lib/kpi/ms-settlements");
+        invalidateAgentTagCache(row.login);
+        void probeAgentMsTag({ login: row.login, fullName: row.fullName, msTag: row.msTag });
+      } catch {
+        /* ignore */
+      }
     }
     await recordAudit({ action: "kpi.agent.updated", entityType: "kpi_agent", entityId: id, actorName: actor.name, details: row.fullName });
     res.json(row);
@@ -1500,14 +1552,37 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
     const cMap = new Map(allCustomers.map((c) => [c.id, c]));
     const period = defaultKpiPeriod();
     const msSettle = await getAgentMsSettlements(
-      { login: agent.login, fullName: agent.fullName || agent.login, from: period.from, to: period.to },
-      [{ login: agent.login, fullName: agent.fullName || agent.login }],
+      {
+        login: agent.login,
+        fullName: agent.fullName || agent.login,
+        msTag: agentRow?.msTag,
+        from: period.from,
+        to: period.to,
+      },
+      [{ login: agent.login, fullName: agent.fullName || agent.login, msTag: agentRow?.msTag }],
     );
-    // Marshrut = MoySklad взаиморасчеты (KPI bilan bir xil)
-    const myCustomers =
+    // Marshrut = MoySklad взаиморасчеты (KPI bilan bir xil); MS bo‘lmasa — lokal biriktirilganlar.
+    let myCustomers =
       msSettle.rows.length > 0
         ? matchCustomersToMsRows(assignedOrOwned.length ? assignedOrOwned : allCustomers, msSettle.rows)
         : assignedOrOwned;
+    // MS dan kelgan mijozlar Bordim/GPS uchun ham agentga bog‘lansin.
+    if (msSettle.rows.length > 0 && myCustomers.length) {
+      await Promise.all(
+        myCustomers.map((c) => ensureAgentCustomerLink(c.id, agent.id, "moysklad").catch(() => false)),
+      );
+      // Yangi assignmentlar bilan qayta filtr (createdBy ham saqlanadi)
+      const refreshed = await db
+        .select()
+        .from(kpiCustomerAssignmentsTable)
+        .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
+      const refreshedIds = new Set(refreshed.map((a) => a.customerId));
+      const owned = allCustomers.filter((c) => refreshedIds.has(c.id) || c.createdByAgentId === agent.id);
+      myCustomers =
+        msSettle.rows.length > 0
+          ? matchCustomersToMsRows(owned.length ? owned : allCustomers, msSettle.rows)
+          : owned;
+    }
 
     const orders = await db
       .select()
@@ -1545,17 +1620,34 @@ router.get("/kpi/agent/cabinet", requireKpiAgent(), async (_req, res, next) => {
     const planPct = computePlanPct(monthSales, salesPlan);
     const visitPct =
       visitPlanCount > 0 ? Math.min(100, Math.round((todayVisitMap.size / visitPlanCount) * 100)) : 0;
-    const locRows = await db
+    const cabinetDayStart = new Date(`${today}T00:00:00+05:00`);
+    const cabinetDayEnd = new Date(`${today}T23:59:59.999+05:00`);
+    const todayLocRows = await db
+      .select()
+      .from(kpiLocationEventsTable)
+      .where(
+        and(
+          eq(kpiLocationEventsTable.agentId, agent.id),
+          gte(kpiLocationEventsTable.recordedAt, cabinetDayStart),
+          lte(kpiLocationEventsTable.recordedAt, cabinetDayEnd),
+        ),
+      )
+      .orderBy(asc(kpiLocationEventsTable.recordedAt))
+      .limit(2500);
+    const latestAnyRows = await db
       .select()
       .from(kpiLocationEventsTable)
       .where(eq(kpiLocationEventsTable.agentId, agent.id))
       .orderBy(desc(kpiLocationEventsTable.recordedAt))
-      .limit(500);
-    const latestAgentLoc = locRows[0] ?? null;
-    const todayTrack = locRows
-      .filter((l) => tashkentDate(l.recordedAt) === today)
-      .reverse()
-      .map((l) => ({ lat: Number(l.lat), lng: Number(l.lng), at: l.recordedAt.toISOString() }));
+      .limit(1);
+    const latestAgentLoc = todayLocRows.length
+      ? todayLocRows[todayLocRows.length - 1]
+      : (latestAnyRows[0] ?? null);
+    const todayTrack = todayLocRows.map((l) => ({
+      lat: Number(l.lat),
+      lng: Number(l.lng),
+      at: l.recordedAt.toISOString(),
+    }));
 
     const addDays = (base: Date, days: number) => {
       const d = new Date(base);
@@ -1711,9 +1803,26 @@ router.post("/kpi/agent/visit", requireKpiAgent(), async (req, res, next) => {
       .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
     const allowed = new Set(assigns.map((a) => a.customerId));
     const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
-    if (!cust || (!allowed.has(customerId) && cust.createdByAgentId !== agent.id)) {
+    if (!cust) {
       res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
       return;
+    }
+    if (!allowed.has(customerId) && cust.createdByAgentId !== agent.id) {
+      // MS teg guruhidagi mijoz — avtomatik biriktirib Bordimga ruxsat.
+      const [agentRow] = await db.select().from(kpiAgentsTable).where(eq(kpiAgentsTable.id, agent.id)).limit(1);
+      const period = defaultKpiPeriod();
+      const msSettle = await getAgentMsSettlements({
+        login: agent.login,
+        fullName: agent.fullName || agent.login,
+        msTag: agentRow?.msTag,
+        from: period.from,
+        to: period.to,
+      });
+      const matched = matchCustomersToMsRows([cust], msSettle.rows || []);
+      if (!matched.length || !(await ensureAgentCustomerLink(customerId, agent.id, "moysklad"))) {
+        res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
+        return;
+      }
     }
     const storeGps = hasAdminGps(cust);
     if (!storeGps.ok) {
@@ -1867,9 +1976,25 @@ router.post("/kpi/agent/customers/:id/pin", requireKpiAgent(), async (req, res, 
       .where(and(eq(kpiCustomerAssignmentsTable.agentId, agent.id), eq(kpiCustomerAssignmentsTable.active, true)));
     const allowed = new Set(assigns.map((a) => a.customerId));
     const [cust] = await db.select().from(kpiCustomersTable).where(eq(kpiCustomersTable.id, customerId)).limit(1);
-    if (!cust || (!allowed.has(customerId) && cust.createdByAgentId !== agent.id)) {
+    if (!cust) {
       res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
       return;
+    }
+    if (!allowed.has(customerId) && cust.createdByAgentId !== agent.id) {
+      const [agentRow] = await db.select().from(kpiAgentsTable).where(eq(kpiAgentsTable.id, agent.id)).limit(1);
+      const period = defaultKpiPeriod();
+      const msSettle = await getAgentMsSettlements({
+        login: agent.login,
+        fullName: agent.fullName || agent.login,
+        msTag: agentRow?.msTag,
+        from: period.from,
+        to: period.to,
+      });
+      const matched = matchCustomersToMsRows([cust], msSettle.rows || []);
+      if (!matched.length || !(await ensureAgentCustomerLink(customerId, agent.id, "moysklad"))) {
+        res.status(403).json({ error: "Bu mijoz sizga biriktirilmagan." });
+        return;
+      }
     }
     if (String(cust.gpsSource || "") === "admin") {
       res.status(403).json({
@@ -1906,15 +2031,32 @@ router.post("/kpi/agent/location", requireKpiAgent(), async (req, res, next) => 
       res.status(400).json({ error: "lat/lng kerak." });
       return;
     }
+    const accuracyRaw = req.body?.accuracy != null ? Number(req.body.accuracy) : null;
+    const accuracyM = Number.isFinite(accuracyRaw) ? Math.round(accuracyRaw as number) : null;
+    // Juda noaniq nuqtalar trekni buzmasin (browser BAD_ACC ~80 m bilan uyg‘un)
+    if (accuracyM != null && accuracyM > 120) {
+      res.status(202).json({ ok: false, skipped: "accuracy", accuracyM });
+      return;
+    }
     await ensureDailyVisitPlan(agent.id).catch(() => undefined);
+    const rawSource = String(req.body?.source ?? "live").trim().toLowerCase();
+    const source = ["live", "heartbeat", "leave", "visit", "pin", "native"].includes(rawSource)
+      ? rawSource
+      : "live";
+    const heading = req.body?.heading != null ? Number(req.body.heading) : null;
+    const speed = req.body?.speed != null ? Number(req.body.speed) : null;
+    const meta: Record<string, unknown> = {};
+    if (Number.isFinite(heading)) meta.heading = Math.round(heading as number);
+    if (Number.isFinite(speed)) meta.speed = Number((speed as number).toFixed(2));
     const [row] = await db
       .insert(kpiLocationEventsTable)
       .values({
         agentId: agent.id,
         lat: lat.toFixed(6),
         lng: lng.toFixed(6),
-        accuracyM: req.body?.accuracy != null ? String(Math.round(Number(req.body.accuracy))) : null,
-        source: String(req.body?.source ?? "live"),
+        accuracyM: accuracyM != null ? String(accuracyM) : null,
+        source,
+        meta: Object.keys(meta).length ? meta : null,
       })
       .returning();
     res.status(201).json(row);
@@ -2089,7 +2231,11 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
 
     const allAgents = await db.select().from(kpiAgentsTable).orderBy(asc(kpiAgentsTable.fullName));
     const agents = allAgents.filter(
-      (a) => a.login !== "ofis" && a.login !== "vanseling" && a.status === "active",
+      (a) =>
+        a.status === "active"
+        && a.login !== "ofis"
+        && a.login !== "vanseling"
+        && a.login !== "bordouzadmin",
     );
     const assigns = await db
       .select()
@@ -2124,47 +2270,103 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       (v) => tashkentDate(v.finishedAt || v.createdAt) === dateFilter && v.status === "done",
     );
 
-    // Wide recent window so each agent still has a last ping (was capped at 400 globally)
-    const recentLocEvents = await db
+    // Kun oralig‘i (Toshkent) — global 8000 limmit trekni kesmasin.
+    const dayStart = new Date(`${dateFilter}T00:00:00+05:00`);
+    const dayEnd = new Date(`${dateFilter}T23:59:59.999+05:00`);
+    const dayLocEvents = await db
+      .select()
+      .from(kpiLocationEventsTable)
+      .where(
+        and(
+          gte(kpiLocationEventsTable.recordedAt, dayStart),
+          lte(kpiLocationEventsTable.recordedAt, dayEnd),
+        ),
+      )
+      .orderBy(desc(kpiLocationEventsTable.recordedAt))
+      .limit(20000);
+    // Bugun ping yo‘q agentlar uchun oxirgi ma’lum joy (fallback).
+    const recentAnyEvents = await db
       .select()
       .from(kpiLocationEventsTable)
       .orderBy(desc(kpiLocationEventsTable.recordedAt))
-      .limit(2500);
-    const lastLocByAgent = new Map<string, (typeof recentLocEvents)[number]>();
-    for (const ev of recentLocEvents) {
-      if (!lastLocByAgent.has(ev.agentId)) lastLocByAgent.set(ev.agentId, ev);
+      .limit(3000);
+    const lastLocByAgent = new Map<string, (typeof dayLocEvents)[number]>();
+    const lastAnyByAgent = new Map<string, (typeof dayLocEvents)[number]>();
+    const firstLocByAgent = new Map<string, (typeof dayLocEvents)[number]>();
+    const pingCountByAgent = new Map<string, number>();
+    const leftAtByAgent = new Map<string, Date>();
+    for (const ev of recentAnyEvents) {
+      if (!lastAnyByAgent.has(ev.agentId)) lastAnyByAgent.set(ev.agentId, ev);
     }
+    for (const ev of dayLocEvents) {
+      pingCountByAgent.set(ev.agentId, (pingCountByAgent.get(ev.agentId) || 0) + 1);
+      if (!lastLocByAgent.has(ev.agentId)) lastLocByAgent.set(ev.agentId, ev);
+      firstLocByAgent.set(ev.agentId, ev); // eng eski (desc iter → oxirgi yozuv = first)
+      if (String(ev.source || "") === "leave" && !leftAtByAgent.has(ev.agentId)) {
+        leftAtByAgent.set(ev.agentId, ev.recordedAt);
+      }
+    }
+
+    const { agentWorkHours, isWithinWorkHours, resolveWatchStatus, watchStatusLabel } = await import(
+      "../lib/kpi/work-hours"
+    );
+    const workHours = agentWorkHours();
+    const withinWork = isWithinWorkHours();
 
     const agentMap = new Map(allAgents.map((a) => [a.id, a.fullName]));
     const msPeriod = defaultKpiPeriod();
     const msSummaries = await getAgentsMsSettlementSummaries(
-      agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+      agents.map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag })),
       msPeriod.from,
       msPeriod.to,
     );
     const msCountByAgentId = new Map<string, number>();
+    const localCountByAgentId = new Map<string, number>();
     for (const a of agents) {
       const settle = msSummaries.map.get(a.login.toLowerCase());
       msCountByAgentId.set(a.id, settle?.customers ?? 0);
     }
+    for (const row of assigns) {
+      localCountByAgentId.set(row.agentId, (localCountByAgentId.get(row.agentId) || 0) + 1);
+    }
 
     const agentPins = agents.map((a) => {
-      const last = lastLocByAgent.get(a.id);
+      const lastToday = lastLocByAgent.get(a.id);
+      const lastAny = lastAnyByAgent.get(a.id);
+      // Bugungi ping ustun; bo‘lmasa oxirgi ma’lum joy (admin kuzatuvi uzilmasin).
+      const last = lastToday || lastAny;
+      const first = firstLocByAgent.get(a.id);
       const myVisitCustomers = new Set(
         todayVisits.filter((v) => v.agentId === a.id).map((v) => v.customerId),
       );
-      // KPI / MoySklad взаиморасчеты bilan bir xil (nol aylanmasizlar yo‘q)
-      const customersCount = msCountByAgentId.get(a.id) || 0;
+      // MS bor → KPI bilan bir xil; MS yo‘q → lokal biriktirilgan mijozlar (yangi agentlar uchun).
+      const msCount = msCountByAgentId.get(a.id) || 0;
+      const localCount = localCountByAgentId.get(a.id) || 0;
+      const customersCount = msCount > 0 ? msCount : localCount;
       const myDebtors = [...debtByCustomer.entries()].filter(([cid]) => assignByCustomer.get(cid) === a.id).length;
+      const hadPingToday = (pingCountByAgent.get(a.id) || 0) > 0;
+      const watchStatus = resolveWatchStatus({
+        lastSeenAt: last?.recordedAt || null,
+        hadPingToday,
+        withinWorkHours: withinWork,
+      });
+      const watchSource = last?.source ? String(last.source) : null;
       return {
         id: a.id,
         fullName: a.fullName,
         login: a.login,
         phone: a.phone,
+        // Oxirgi ma’lum joy — chiqib ketgan / aloqa uzilgan bo‘lsa ham xaritada qoladi.
         lat: last?.lat ? Number(last.lat) : null,
         lng: last?.lng ? Number(last.lng) : null,
         accuracyM: last?.accuracyM != null ? Number(last.accuracyM) : null,
         lastSeenAt: last?.recordedAt ? last.recordedAt.toISOString() : null,
+        firstSeenAt: first?.recordedAt ? first.recordedAt.toISOString() : null,
+        leftAt: leftAtByAgent.get(a.id)?.toISOString() || null,
+        pingCountToday: pingCountByAgent.get(a.id) || 0,
+        watchStatus,
+        watchSource,
+        watchLabel: watchStatusLabel(watchStatus, watchSource),
         customersCount,
         debtorsCount: myDebtors,
         visitedToday: myVisitCustomers.size,
@@ -2173,8 +2375,10 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
 
     const activeAgentId =
       agentFilter ||
+      agentPins.find((a) => a.watchStatus === "live")?.id ||
       agentPins.find((a) => a.debtorsCount > 0)?.id ||
       agentPins.find((a) => a.customersCount > 0)?.id ||
+      agentPins.find((a) => a.lastSeenAt)?.id ||
       agentPins[0]?.id ||
       "";
 
@@ -2200,10 +2404,11 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
           {
             login: selectedAgentRow.login,
             fullName: selectedAgentRow.fullName,
+            msTag: selectedAgentRow.msTag,
             from: msPeriod.from,
             to: msPeriod.to,
           },
-          agents.map((a) => ({ login: a.login, fullName: a.fullName })),
+          agents.map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag })),
         )
       : null;
     const assignedIds = assigns.filter((a) => a.agentId === activeAgentId).map((a) => a.customerId);
@@ -2218,10 +2423,16 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .where(sql`${kpiCustomersTable.contractNumber} like 'ms:%'`);
     const poolById = new Map<string, (typeof localPool)[number]>();
     for (const c of [...localPool, ...extraMsLocals]) poolById.set(c.id, c);
-    const selectedCustomers = matchCustomersToMsRows(
+    const msMatched = matchCustomersToMsRows(
       [...poolById.values()],
       msDetail?.rows || [],
     );
+    // MS + lokal biriktirilgan mijozlar (yangi agent / qo‘lda qo‘shilgan marshrut uchun).
+    const selectedById = new Map(msMatched.map((c) => [c.id, c]));
+    for (const c of localPool) {
+      if (!selectedById.has(c.id)) selectedById.set(c.id, c);
+    }
+    const selectedCustomers = [...selectedById.values()];
     const rawPoints = selectedCustomers.map((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
@@ -2263,14 +2474,22 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       ? await db
           .select()
           .from(kpiLocationEventsTable)
-          .where(eq(kpiLocationEventsTable.agentId, activeAgentId))
-          .orderBy(desc(kpiLocationEventsTable.recordedAt))
-          .limit(500)
+          .where(
+            and(
+              eq(kpiLocationEventsTable.agentId, activeAgentId),
+              gte(kpiLocationEventsTable.recordedAt, dayStart),
+              lte(kpiLocationEventsTable.recordedAt, dayEnd),
+            ),
+          )
+          .orderBy(asc(kpiLocationEventsTable.recordedAt))
+          .limit(2500)
       : [];
-    const agentTrack = agentTrackRows
-      .filter((e) => tashkentDate(e.recordedAt) === dateFilter)
-      .reverse()
-      .map((e) => ({ lat: Number(e.lat), lng: Number(e.lng), at: e.recordedAt.toISOString() }));
+    const agentTrack = agentTrackRows.map((e) => ({
+      lat: Number(e.lat),
+      lng: Number(e.lng),
+      at: e.recordedAt.toISOString(),
+      accuracyM: e.accuracyM != null ? Number(e.accuracyM) : null,
+    }));
 
     const customerById = new Map(selectedCustomers.map((c) => [c.id, c]));
     const missingLogIds = todayVisits
@@ -2301,11 +2520,36 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         };
       });
 
+    const watchAlerts = agentPins
+      .filter((a) => withinWork && (a.watchStatus === "silent" || a.watchStatus === "no_signal"))
+      .map((a) => ({
+        agentId: a.id,
+        fullName: a.fullName,
+        login: a.login,
+        watchStatus: a.watchStatus,
+        watchLabel: a.watchLabel,
+        lastSeenAt: a.lastSeenAt,
+      }));
+
     res.json({
       date: dateFilter,
       selectedAgentId: activeAgentId,
       msPeriod,
       msFolder: msDetail?.folderName || null,
+      workHours: {
+        start: workHours.start,
+        end: workHours.end,
+        active: withinWork,
+        label: `${workHours.start}–${workHours.end} (Toshkent)`,
+      },
+      watchSummary: {
+        live: agentPins.filter((a) => a.watchStatus === "live").length,
+        away: agentPins.filter((a) => a.watchStatus === "away").length,
+        silent: agentPins.filter((a) => a.watchStatus === "silent").length,
+        noSignal: agentPins.filter((a) => a.watchStatus === "no_signal").length,
+        total: agentPins.length,
+      },
+      watchAlerts,
       agents: agentPins,
       points,
       routeLog,
