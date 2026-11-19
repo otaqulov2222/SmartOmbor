@@ -254,15 +254,21 @@ export function OfficePayrollPage() {
   });
 
   const saveSiteHours = useMutation({
-    mutationFn: () =>
-      api('/api/office/site', {
+    mutationFn: () => {
+      const norm = (v: string) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+        if (!m) throw new Error('hours');
+        return `${String(Math.min(23, Number(m[1]))).padStart(2, '0')}:${m[2]}`;
+      };
+      return api('/api/office/site', {
         method: 'POST',
         body: JSON.stringify({
-          start: siteStart,
-          end: siteEnd,
+          start: norm(siteStart),
+          end: norm(siteEnd),
           offDays: siteOffDays,
         }),
-      }),
+      });
+    },
     onSuccess: () => {
       setFlash(t('pay.savedOk'));
       invalidate();
@@ -411,24 +417,54 @@ export function OfficePayrollPage() {
         </div>
       </div>
 
-      <div className="pay-panel">
-        <div className="pay-panel-grid pay-panel-hours">
+      <div className="pay-setup">
+        <div className="pay-setup-top">
           <div>
-            <div className="pay-label">{t('pay.workHours')}</div>
-            <div className="pay-settings-row">
-              <label className="pay-time">
+            <h2>{t('pay.setupTitle')}</h2>
+            <p>{t('pay.setupSub')}</p>
+          </div>
+          <div className="pay-setup-stat">
+            <span>{t('pay.workdays')}</span>
+            <strong>{data?.workdays ?? '—'}</strong>
+            <small>
+              {data?.from && data?.to
+                ? `${data.from.slice(8, 10)}.${data.from.slice(5, 7)}.${data.from.slice(0, 4)} — ${data.to.slice(8, 10)}.${data.to.slice(5, 7)}.${data.to.slice(0, 4)}`
+                : '—'}
+            </small>
+          </div>
+        </div>
+
+        <div className="pay-setup-grid">
+          <div className="pay-setup-block">
+            <div className="pay-setup-head">{t('pay.workHours')}</div>
+            <div className="pay-setup-times">
+              <label>
                 <span>{t('pay.from')}</span>
-                <input className="input" type="time" value={siteStart} onChange={(e) => setSiteStart(e.target.value)} />
+                <input
+                  className="input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="06:00"
+                  maxLength={5}
+                  value={siteStart}
+                  onChange={(e) => setSiteStart(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
+                />
               </label>
-              <label className="pay-time">
+              <span className="pay-setup-dash">—</span>
+              <label>
                 <span>{t('pay.to')}</span>
-                <input className="input" type="time" value={siteEnd} onChange={(e) => setSiteEnd(e.target.value)} />
+                <input
+                  className="input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="18:00"
+                  maxLength={5}
+                  value={siteEnd}
+                  onChange={(e) => setSiteEnd(e.target.value.replace(/[^\d:]/g, '').slice(0, 5))}
+                />
               </label>
-              <button type="button" className="btn primary" disabled={saveSiteHours.isPending} onClick={() => saveSiteHours.mutate()}>
-                {t('pay.save')}
-              </button>
             </div>
-            <div className="pay-days">
+            <div className="pay-days" role="group" aria-label={t('pay.workHours')}>
               {DAY_OPTS.map((d) => {
                 const off = siteOffDays.includes(d.id);
                 return (
@@ -436,6 +472,7 @@ export function OfficePayrollPage() {
                     key={d.id}
                     type="button"
                     className={`pay-day-chip ${off ? 'is-off' : 'is-on'}`}
+                    title={off ? t('pay.dayOff') : t('pay.dayOn')}
                     onClick={() =>
                       setSiteOffDays((prev) => {
                         if (off) {
@@ -451,11 +488,22 @@ export function OfficePayrollPage() {
                 );
               })}
             </div>
-            <p className="pay-hint">{t('pay.workHoursHint')}</p>
+            <p className="pay-hint">
+              {siteStart || '06:00'}–{siteEnd || '18:00'} · {t('pay.workHoursHintShort')}
+            </p>
+            <button
+              type="button"
+              className="pay-setup-save"
+              disabled={saveSiteHours.isPending}
+              onClick={() => saveSiteHours.mutate()}
+            >
+              {saveSiteHours.isPending ? t('pay.saving') : t('pay.saveHours')}
+            </button>
           </div>
-          <div>
-            <div className="pay-label"><Percent size={13} /> {t('pay.latePct')}</div>
-            <div className="pay-settings-row">
+
+          <div className="pay-setup-block">
+            <div className="pay-setup-head"><Percent size={13} /> {t('pay.latePct')}</div>
+            <div className="pay-setup-late">
               <input
                 className="input"
                 type="number"
@@ -464,16 +512,17 @@ export function OfficePayrollPage() {
                 value={latePct}
                 onChange={(e) => setLatePct(e.target.value)}
               />
-              <button type="button" className="btn primary" disabled={saveSettings.isPending} onClick={() => saveSettings.mutate()}>
-                {t('pay.save')}
-              </button>
+              <span className="pay-setup-unit">%</span>
             </div>
             <p className="pay-hint">{t('pay.latePctHint')}</p>
-            <div className="pay-meta-card" style={{ marginTop: 12 }}>
-              <span>{t('pay.workdays')}</span>
-              <b>{data?.workdays ?? '—'}</b>
-              <small>{data?.from || '—'} → {data?.to || '—'}</small>
-            </div>
+            <button
+              type="button"
+              className="pay-setup-save"
+              disabled={saveSettings.isPending}
+              onClick={() => saveSettings.mutate()}
+            >
+              {saveSettings.isPending ? t('pay.saving') : t('pay.save')}
+            </button>
           </div>
         </div>
       </div>
