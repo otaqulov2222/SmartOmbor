@@ -497,7 +497,72 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   };
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => { document.body.classList.toggle('nav-open', open); return () => document.body.classList.remove('nav-open'); }, [open]);
-  return <div className={`app ${effectiveRail ? 'is-rail' : ''}`}>
+
+  const homeHref = has('dashboard')
+    ? '/dashboard'
+    : homeForRole(role, permissions);
+  const workHref = showOfficeMenu
+    ? '/office'
+    : has('my_cabinet')
+      ? cabinetHref
+      : has('products')
+        ? '/products'
+        : has('employees')
+          ? '/employees'
+          : homeHref;
+  const workKey: TKey = showOfficeMenu
+    ? 'nav.office'
+    : has('my_cabinet')
+      ? 'nav.myCabinet'
+      : has('products')
+        ? 'nav.products'
+        : has('employees')
+          ? 'nav.employees'
+          : 'nav.dashboard';
+  const toolHref = has('gps')
+    ? '/gps'
+    : has('scanner')
+      ? '/scanner'
+      : has('partners')
+        ? '/partners'
+        : has('stock')
+          ? '/stock'
+          : homeHref;
+  const toolKey: TKey = has('gps')
+    ? 'nav.gps'
+    : has('scanner')
+      ? 'nav.scanner'
+      : has('partners')
+        ? 'nav.partners'
+        : has('stock')
+          ? 'nav.stock'
+          : 'nav.dashboard';
+  const WorkIcon = showOfficeMenu
+    ? Fingerprint
+    : has('my_cabinet')
+      ? Gauge
+      : has('products')
+        ? Package
+        : has('employees')
+          ? Users
+          : LayoutDashboard;
+  const ToolIcon = has('gps')
+    ? MapPin
+    : has('scanner')
+      ? ScanBarcode
+      : has('partners')
+        ? Handshake
+        : has('stock')
+          ? Warehouse
+          : LayoutDashboard;
+  const dockActive = (href: string) => {
+    if (href === '/office') return path === '/office' || path.startsWith('/office/');
+    if (href === '/kpi' || href === '/my-kpi') return path === href || path.startsWith(`${href}/`);
+    return path === href;
+  };
+  const showMobileDock = !isAgentRole(role);
+
+  return <div className={`app ${effectiveRail ? 'is-rail' : ''} ${showMobileDock ? 'has-mobile-dock' : ''}`}>
     {open && <button className="scrim" aria-label={t('common.menuClose')} onClick={() => setOpen(false)} data-testid="button-close-navigation"/>}
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-top"><BrandMark light/>{!compactNav && <button type="button" className="icon-btn sidebar-collapse" onClick={() => setRail(value => !value)} aria-label={rail ? t('nav.expand') : t('nav.collapse')} title={rail ? t('nav.expand') : t('nav.collapse')} data-testid="button-navigation-collapse">{rail ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</button>}<button className="icon-btn sidebar-close" onClick={() => setOpen(false)} aria-label={t('common.menuClose')} data-testid="button-navigation-close"><X size={18}/></button></div>
@@ -564,6 +629,43 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       <ServerBillingBanner />
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
+    {showMobileDock ? (
+      <nav className="app-mobile-dock" aria-label={t('brand.name')} data-testid="app-mobile-dock">
+        <Link
+          href={homeHref}
+          className={`app-dock-item ${dockActive(homeHref) ? 'is-active' : ''}`}
+          data-testid="dock-home"
+        >
+          <LayoutDashboard strokeWidth={1.9} />
+          <span>{t(has('dashboard') ? 'nav.dashboard' : 'brand.name')}</span>
+        </Link>
+        <Link
+          href={workHref}
+          className={`app-dock-item ${dockActive(workHref) ? 'is-active' : ''}`}
+          data-testid="dock-work"
+        >
+          <WorkIcon strokeWidth={1.9} />
+          <span>{t(workKey)}</span>
+        </Link>
+        <Link
+          href={toolHref}
+          className={`app-dock-item ${dockActive(toolHref) ? 'is-active' : ''}`}
+          data-testid="dock-tool"
+        >
+          <ToolIcon strokeWidth={1.9} />
+          <span>{t(toolKey)}</span>
+        </Link>
+        <button
+          type="button"
+          className={`app-dock-item ${open || inMore ? 'is-active' : ''}`}
+          onClick={() => setOpen(true)}
+          data-testid="dock-menu"
+        >
+          <Menu strokeWidth={1.9} />
+          <span>{t('nav.more')}</span>
+        </button>
+      </nav>
+    ) : null}
   </div>;
 }
 

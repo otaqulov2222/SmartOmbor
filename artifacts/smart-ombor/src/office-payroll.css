@@ -837,6 +837,18 @@
   .pay-meta { justify-items: stretch; text-align: left; }
 }
 @media (max-width: 720px) {
+  .pay-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pay-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pay-strip-item { min-width: 0; }
+  .pay-strip-item b {
+    font-size: clamp(.95rem, 3.6vw, 1.15rem);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .pay-head h1 { font-size: 1.22rem; }
+  .pay-head-actions { width: 100%; justify-content: stretch; }
+  .pay-export { width: 100%; }
+  .pay-export-btn { flex: 1; justify-content: center; min-height: 2.7rem; }
   .pay-table-wrap { padding: 0; background: transparent; border: 0; box-shadow: none; overflow: visible; }
   .pay-table thead { display: none; }
   .pay-table, .pay-table tbody { display: block; width: 100%; }

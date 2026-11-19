@@ -632,7 +632,14 @@
 /* ---------- GPS & Route Map ---------- */
 .gps-map-card { background: #fff; border: 1px solid #e4e8ee; border-radius: 18px; overflow: hidden; display: grid; }
 .gps-map-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid #eef2f6; flex-wrap: wrap; }
-.gps-iframe { width: 100%; height: 340px; border: 0; display: block; background: #eef2f6; }
+.gps-iframe {
+  width: 100%;
+  height: min(52dvh, 420px);
+  min-height: 280px;
+  border: 0;
+  display: block;
+  background: #eef2f6;
+}
 .gps-pins-bar { display: flex; gap: .45rem; flex-wrap: wrap; padding: .75rem 1rem; background: #f8fafc; border-top: 1px solid #eef2f6; }
 .gps-pin-chip {
   display: inline-flex; align-items: center; gap: .35rem;
@@ -677,6 +684,8 @@
 .gps-agent-pill-status { color: #94a3b8; }
 .gps-dot { width: 8px; height: 8px; border-radius: 999px; background: #cbd5e1; display: inline-block; }
 .gps-dot.is-on { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, .22); }
+.gps-dot.is-away { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, .22); }
+.gps-dot.is-silent { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, .18); }
 
 .rm-card {
   background: #fff; border: 1px solid #e4e8ee; border-radius: 16px;
@@ -1092,11 +1101,31 @@
 
   /* GPS & Route map on mobile */
   .gps-agent-strip {
-    flex-wrap: nowrap; overflow-x: auto; padding-bottom: .2rem;
-    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: .15rem .05rem .35rem;
+    margin-inline: -.15rem;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
   }
   .gps-agent-strip::-webkit-scrollbar { display: none; }
-  .gps-agent-pill { width: 152px; flex: 0 0 152px; min-height: 74px; }
+  .gps-agent-pill {
+    width: min(152px, 42vw);
+    flex: 0 0 min(152px, 42vw);
+    min-height: 74px;
+    scroll-snap-align: start;
+  }
+  .gps-iframe {
+    height: min(48dvh, 380px);
+    min-height: 240px;
+  }
+  .gps-map-card { border-radius: 14px; }
+  .gps-map-top {
+    padding: .7rem .85rem;
+    gap: .55rem;
+  }
 
   .rm-card { border-radius: 14px; }
   .rm-agent-banner { padding: .65rem .85rem; gap: .4rem; }
@@ -1126,8 +1155,13 @@
   .rm-node { padding: .32rem .55rem .32rem .3rem; font-size: .76rem; }
   .rm-node-name { max-width: 78px; }
   .rm-canvas-wrap {
-    height: min(50dvh, 420px) !important;
-    min-height: 280px !important;
+    height: min(52dvh, 440px) !important;
+    min-height: 260px !important;
+  }
+  .rm-card.is-fullscreen .rm-canvas-wrap {
+    height: auto !important;
+    min-height: 0 !important;
+    flex: 1 1 auto !important;
   }
   .rm-gps-banner { font-size: .72rem; padding: .4rem .55rem; left: 8px; right: 8px; }
   .rm-legend {
