@@ -1,11 +1,12 @@
 /**
  * MoySklad «Взаиморасчеты» — agent TEGidagi kontragentlar.
  *
- * Qoida: taxmin yo‘q, tenglashtirish yo‘q — har bir raqam MS dagi bilan 1:1.
- *   Приход / Расход — har kontragent uchun agent= filter (to‘liq hujjatlar)
- *   Summa           — doc.sum × rate.value (valyuta kursi; UZS da rate yo‘q)
- *   Конечный        — /report/counterparty
- *   Начальный       — closing − Приход + Расход
+ * Qoida: har bir raqam MS UI bilan 1:1 (oxirgi tiyingacha).
+ *   Приход     — credit hujjatlar (sum × rate.value)
+ *   Расход     — debit hujjatlar; agar demand.payedSum > sum va MS balansi
+ *                ortiqcha to‘lovni ko‘rsatmasa — farq Расход ga qo‘shiladi
+ *   Конечный   — /report/counterparty
+ *   Начальный  — closing − Приход + Расход
  *
  * MS yordam hujjatlari:
  *   Приход: Приемки, Входящие платежи, Приходные ордера, Полученные отчёты комиссионера,
@@ -23,42 +24,8 @@ import {
   setMoySkladMaxInFlight,
   setMoySkladMinGapMs,
 } from "../moysklad";
-import { money } from "./money";
-
-/** Login → asosiy MS teg (probe qilmasdan). */
-const PRIMARY_TAG: Record<string, string> = {
-  shaxzod: "шахзод",
-  oysha: "oisha",
-  farzona: "farzona",
-  elyor: "elyor",
-  abbos: "abbos",
-  baxodir: "боходир",
-  muzaffar: "музаффар",
-  avliyo: "avliyo",
-  gulzoda: "gulzoda",
-  nafisa: "nafisa",
-  nozim: "nozim",
-  abdugani: "abdugani",
-  farxodaka: "farxodaka",
-  sevinch: "sevinch",
-};
-
-const AGENT_TAG_ALIASES: Record<string, string[]> = {
-  shaxzod: ["шахзод", "shaxzod"],
-  oysha: ["oisha", "oysha", "ойша"],
-  farzona: ["farzona"],
-  elyor: ["elyor"],
-  abbos: ["abbos"],
-  baxodir: ["боходир", "baxodir", "баходир"],
-  muzaffar: ["музаффар", "muzaffar"],
-  avliyo: ["avliyo"],
-  gulzoda: ["gulzoda"],
-  nafisa: ["nafisa"],
-  nozim: ["nozim"],
-  abdugani: ["abdugani", "abdug'ani"],
-  farxodaka: ["farxodaka", "farxod aka"],
-  sevinch: ["sevinch"],
-};
+import { money, moneyAdd } from "./money";
+import { PRIMARY_TAG, tagCandidatesForAgent } from "./ms-agent-tags";
 
 /**
  * MS UI «Взаиморасчеты» hujjatlari.
@@ -77,10 +44,11 @@ const PAGE = 1000;
 const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
- * v16: tezlik — agent= OR-batch (global period skan yo‘q). Raqamlar v15 bilan bir xil.
+ * v17: ortiqcha to‘lov (payedSum > sum) MS balansida aks etmasa — Расход ga qo‘shiladi.
+ * v16: tezlik — agent= OR-batch (global period skan yo‘q).
  * v15: salesreturn. v14: rate.value.
  */
-const CACHE_VERSION = "v16";
+const CACHE_VERSION = "v17";
 const MS_ENTITY_BASE = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty";
 const CREDIT_ENRICH_CONCURRENCY = 4;
 const MS_FAST = { maxAttempts: 6 } as const;
@@ -97,18 +65,30 @@ type MsCp = { id?: string; name?: string; tags?: string[]; meta?: { href?: strin
 type MsDoc = {
   sum?: number;
   applicable?: boolean;
+  /** Asosiy valyutada (tiyin) — bog‘langan to‘lovlar jami. */
+  payedSum?: number;
   /** MS: sum — hujjat valyutasida; rate.value — asosiy valyutaga kurs (masalan USD→UZS 12000). */
   rate?: { value?: number; currency?: { meta?: { href?: string } } };
   agent?: { id?: string; meta?: { href?: string }; name?: string };
 };
 
-/** Взаиморасчеты sum — asosiy valyutada (kopecks). rate.value bo‘lsa ko‘paytiriladi. */
+type CpMovement = { credit: number; debit: number; overpay: number };
+
+/** Взаиморасчеты sum — asosiy valyutada (tiyin). rate.value bo‘lsa ko‘paytiriladi. */
 function docSumKop(doc: MsDoc) {
   const sum = Number(doc.sum || 0);
   if (!Number.isFinite(sum) || sum === 0) return 0;
   const rate = Number(doc.rate?.value);
-  if (Number.isFinite(rate) && rate > 0) return sum * rate;
-  return sum;
+  if (Number.isFinite(rate) && rate > 0) return Math.round(sum * rate);
+  return Math.round(sum);
+}
+
+/** Отгрузка bo‘yicha ortiqcha to‘lov (payedSum − sum), asosiy valyutada. */
+function demandOverpayKop(doc: MsDoc) {
+  const sum = docSumKop(doc);
+  const payed = Number(doc.payedSum);
+  if (!Number.isFinite(payed) || payed <= 0) return 0;
+  return Math.max(0, Math.round(payed) - sum);
 }
 type MsReportRow = {
   balance?: number;
@@ -124,13 +104,8 @@ function foldName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function aliasesForLogin(login: string, fullName?: string) {
-  const key = foldName(login);
-  const fromMap = AGENT_TAG_ALIASES[key] || [];
-  const extra = [login, key, fullName || "", foldName(fullName || "")]
-    .map(foldName)
-    .filter(Boolean);
-  return [...new Set([...fromMap.map(foldName), ...extra])];
+function aliasesForLogin(login: string, fullName?: string, msTag?: string) {
+  return tagCandidatesForAgent({ login, fullName, msTag });
 }
 
 function cpIdFromHref(href?: string) {
@@ -145,7 +120,7 @@ function docAgentId(doc: MsDoc) {
 const tagCache = new Map<string, { at: number; tag: string | null }>();
 const groupCache = new Map<string, { at: number; rows: Array<{ id: string; name: string }> }>();
 const balanceCache = new Map<string, { at: number; byCp: Map<string, number> }>();
-const movementCache = new Map<string, { at: number; byCp: Map<string, { credit: number; debit: number }> }>();
+const movementCache = new Map<string, { at: number; byCp: Map<string, CpMovement> }>();
 const settlementsCache = new Map<string, { at: number; data: AgentSettlement }>();
 const summaryMem = new Map<string, { at: number; byLogin: Record<string, AgentSettlement> }>();
 const warming = new Map<string, Promise<void>>();
@@ -235,18 +210,23 @@ function writeDiskMap(path: string, entries: Record<string, unknown>) {
   }
 }
 
-async function resolveAgentTag(login: string, fullName?: string): Promise<string | null> {
+async function resolveAgentTag(
+  login: string,
+  fullName?: string,
+  msTag?: string,
+): Promise<string | null> {
   const cacheKey = foldName(login);
   const hit = tagCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 30 * 60_000) return hit.tag;
 
+  // Seed agentlar: PRIMARY_TAG darhol (MS probe kutmasdan).
   const primary = PRIMARY_TAG[cacheKey];
-  if (primary) {
+  if (primary && !msTag) {
     tagCache.set(cacheKey, { at: Date.now(), tag: primary });
     return primary;
   }
 
-  for (const tag of aliasesForLogin(login, fullName)) {
+  for (const tag of aliasesForLogin(login, fullName, msTag)) {
     const page = await moysklad<{ meta?: { size?: number } }>(
       `/entity/counterparty?limit=1&filter=${encodeURIComponent(`tags=${tag}`)}`,
     ).catch(() => null);
@@ -254,6 +234,13 @@ async function resolveAgentTag(login: string, fullName?: string): Promise<string
       tagCache.set(cacheKey, { at: Date.now(), tag });
       return tag;
     }
+  }
+  // msTag berilgan bo‘lsa — MS da hali mijoz yo‘q bo‘lsa ham shu tegni saqlaymiz
+  // (keyinroq teglangan kontragentlar shu bilan tortiladi).
+  if (msTag && foldName(msTag)) {
+    const forced = foldName(msTag);
+    tagCache.set(cacheKey, { at: Date.now(), tag: forced });
+    return forced;
   }
   tagCache.set(cacheKey, { at: Date.now(), tag: null });
   return null;
@@ -473,15 +460,21 @@ function sumApplicable(rows: MsDoc[]) {
   return total;
 }
 
+function emptyMovement(): CpMovement {
+  return { credit: 0, debit: 0, overpay: 0 };
+}
+
 function bumpMovement(
-  byCp: Map<string, { credit: number; debit: number }>,
+  byCp: Map<string, CpMovement>,
   id: string,
   side: "credit" | "debit",
   sum: number,
+  overpay = 0,
 ) {
-  if (!id || !Number.isFinite(sum) || sum === 0) return;
-  const cur = byCp.get(id) || { credit: 0, debit: 0 };
-  cur[side] += sum;
+  if (!id) return;
+  const cur = byCp.get(id) || emptyMovement();
+  if (Number.isFinite(sum) && sum !== 0) cur[side] += sum;
+  if (Number.isFinite(overpay) && overpay > 0) cur.overpay += overpay;
   byCp.set(id, cur);
 }
 
@@ -499,7 +492,7 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
 
 /** Tez: 8 entity parallel (burst slotlar bilan). */
 async function scanMovementsGlobal(from: string, to: string) {
-  const byCp = new Map<string, { credit: number; debit: number }>();
+  const byCp = new Map<string, CpMovement>();
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
   const all = [
     ...CREDIT_ENTITIES.map((entity) => ({ entity, side: "credit" as const })),
@@ -509,7 +502,8 @@ async function scanMovementsGlobal(from: string, to: string) {
     const rows = await fetchEntityDocs(entity, moment);
     for (const row of rows) {
       if (row.applicable === false) continue;
-      bumpMovement(byCp, docAgentId(row), side, docSumKop(row));
+      const overpay = side === "debit" && entity === "demand" ? demandOverpayKop(row) : 0;
+      bumpMovement(byCp, docAgentId(row), side, docSumKop(row), overpay);
     }
   });
   return byCp;
@@ -520,7 +514,7 @@ async function scanMovementsGlobal(from: string, to: string) {
  * Расход globaldan qoladi.
  */
 async function enrichCreditsExact(
-  byCp: Map<string, { credit: number; debit: number }>,
+  byCp: Map<string, CpMovement>,
   cpIds: string[],
   from: string,
   to: string,
@@ -533,16 +527,16 @@ async function enrichCreditsExact(
       CREDIT_ENTITIES.map(async (entity) => sumApplicable(await fetchEntityDocs(entity, agentFilter))),
     );
     const credit = parts.reduce((acc, n) => acc + n, 0);
-    const cur = byCp.get(cpId) || { credit: 0, debit: 0 };
+    const cur = byCp.get(cpId) || emptyMovement();
     cur.credit = credit;
     byCp.set(cpId, cur);
   });
 }
 
-function persistMovements(from: string, to: string, byCp: Map<string, { credit: number; debit: number }>) {
+function persistMovements(from: string, to: string, byCp: Map<string, CpMovement>) {
   const at = Date.now();
   movementCache.set(`${from}:${to}`, { at, byCp });
-  const entries: Record<string, { credit: number; debit: number }> = {};
+  const entries: Record<string, CpMovement> = {};
   for (const [id, v] of byCp) entries[id] = v;
   writeDiskMap(movementsPath(from, to), entries);
 }
@@ -553,10 +547,10 @@ function persistMovements(from: string, to: string, byCp: Map<string, { credit: 
  * MS: bir xil maydon bo‘yicha bir nechta shart = OR.
  */
 async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: string) {
-  const byCp = new Map<string, { credit: number; debit: number }>();
+  const byCp = new Map<string, CpMovement>();
   if (!cpIds.length) return byCp;
   const want = new Set(cpIds);
-  for (const id of cpIds) byCp.set(id, { credit: 0, debit: 0 });
+  for (const id of cpIds) byCp.set(id, emptyMovement());
   const moment = `moment>=${from} 00:00:00;moment<=${to} 23:59:59`;
 
   const chunks: string[][] = [];
@@ -578,7 +572,8 @@ async function loadMovementsForCpIdsExact(cpIds: string[], from: string, to: str
       if (row.applicable === false) continue;
       const id = docAgentId(row);
       if (!want.has(id)) continue;
-      bumpMovement(byCp, id, side, docSumKop(row));
+      const overpay = side === "debit" && entity === "demand" ? demandOverpayKop(row) : 0;
+      bumpMovement(byCp, id, side, docSumKop(row), overpay);
     }
   });
 
@@ -651,6 +646,7 @@ async function computeOneAgentFast(input: {
   fullName: string;
   from: string;
   to: string;
+  msTag?: string;
 }): Promise<AgentSettlement> {
   const started = Date.now();
   agentFastActive += 1;
@@ -658,10 +654,10 @@ async function computeOneAgentFast(input: {
   setMoySkladMaxInFlight(8);
   setMoySkladMinGapMs(10);
   try {
-    let tag = await resolveAgentTag(input.login, input.fullName);
+    let tag = await resolveAgentTag(input.login, input.fullName, input.msTag);
     let group = tag ? await listTagCounterparties(tag) : [];
     if (!group.length) {
-      for (const alt of aliasesForLogin(input.login, input.fullName)) {
+      for (const alt of aliasesForLogin(input.login, input.fullName, input.msTag)) {
         if (tag && foldName(alt) === foldName(tag)) continue;
         const rows = await listTagCounterparties(alt);
         if (rows.length) {
@@ -684,7 +680,7 @@ async function computeOneAgentFast(input: {
 
     // Period movement cache’ga merge
     const periodKey = `${input.from}:${input.to}`;
-    const prevMov = movementCache.get(periodKey)?.byCp || new Map<string, { credit: number; debit: number }>();
+    const prevMov = movementCache.get(periodKey)?.byCp || new Map<string, CpMovement>();
     const merged = new Map(prevMov);
     for (const [id, v] of movements) merged.set(id, v);
     persistMovements(input.from, input.to, merged);
@@ -723,6 +719,7 @@ export function ensureAgentSettlement(input: {
   fullName: string;
   from: string;
   to: string;
+  msTag?: string;
 }): Promise<AgentSettlement> {
   const key = `${foldName(input.login)}:${input.from}:${input.to}`;
   const hit = settlementsCache.get(key);
@@ -752,10 +749,14 @@ async function loadPeriodMovementsFast(from: string, to: string) {
 
   const disk = readDiskMap(movementsPath(from, to));
   if (disk && Date.now() - disk.at < FRESH_MS) {
-    const byCp = new Map<string, { credit: number; debit: number }>();
+    const byCp = new Map<string, CpMovement>();
     for (const [id, v] of Object.entries(disk.entries)) {
-      const row = v as { credit?: number; debit?: number };
-      byCp.set(id, { credit: Number(row.credit || 0), debit: Number(row.debit || 0) });
+      const row = v as { credit?: number; debit?: number; overpay?: number };
+      byCp.set(id, {
+        credit: Number(row.credit || 0),
+        debit: Number(row.debit || 0),
+        overpay: Number(row.overpay || 0),
+      });
     }
     movementCache.set(key, { at: disk.at, byCp });
     return byCp;
@@ -826,9 +827,11 @@ function emptySettlement(input: { login: string; fullName: string; from: string;
 }
 
 /**
- * income/expense — faqat hujjat skani (HECH QACHON boshqa ustunga tenglashtirilmaydi).
- * closing — faqat MS report.
- * opening — identitetdan (aylanma invent qilinmaydi).
+ * income — credit hujjatlar (rate.value bilan).
+ * expense — debit hujjatlar; MS balansi ortiqcha to‘lovni yutganda (payedSum > sum
+ *   va closing kredit ko‘rsatmasa) farq Расход ga qo‘shiladi — MS UI 1:1.
+ * closing — /report/counterparty.
+ * opening — closing − income + expense (identitet).
  */
 function buildSettlement(input: {
   login: string;
@@ -837,18 +840,25 @@ function buildSettlement(input: {
   to: string;
   tag: string | null;
   group: Array<{ id: string; name: string }>;
-  movements: Map<string, { credit: number; debit: number }>;
+  movements: Map<string, CpMovement>;
   closings: Map<string, number>;
 }): AgentSettlement {
   if (!input.tag) return emptySettlement(input);
 
   const rows = input.group
     .map((cp) => {
-      const mv = input.movements.get(cp.id) || { credit: 0, debit: 0 };
-      // Raw MS docs — no overwrite / no force-equalize.
-      const creditKop = Number(mv.credit) || 0;
-      const debitKop = Number(mv.debit) || 0;
-      const closingKop = input.closings.has(cp.id) ? Number(input.closings.get(cp.id)) || 0 : 0;
+      const mv = input.movements.get(cp.id) || emptyMovement();
+      const creditKop = Math.round(Number(mv.credit) || 0);
+      let debitKop = Math.round(Number(mv.debit) || 0);
+      const overpayKop = Math.round(Number(mv.overpay) || 0);
+      const closingKop = input.closings.has(cp.id) ? Math.round(Number(input.closings.get(cp.id)) || 0) : 0;
+      // Ortiqcha to‘lov MS balansida kredit bo‘lib chiqmasa — UI Расход ni ko‘taradi.
+      if (overpayKop > 0 && closingKop <= 0) {
+        const openingRaw = closingKop - creditKop + debitKop;
+        if (openingRaw < 0) {
+          debitKop += Math.min(-openingRaw, overpayKop);
+        }
+      }
       const openingKop = closingKop - creditKop + debitKop;
       return {
         id: cp.id,
@@ -865,7 +875,7 @@ function buildSettlement(input: {
     .sort((a, b) => a.name.localeCompare(b.name, "uz"));
 
   const sum = (key: "opening" | "income" | "expense" | "closing") =>
-    money(rows.reduce((acc, row) => acc + Number(row[key] || 0), 0));
+    moneyAdd(...rows.map((row) => row[key]));
 
   return {
     agentLogin: input.login,
@@ -883,7 +893,7 @@ function buildSettlement(input: {
 
 function publishSettlements(
   tags: Array<{ agent: { login: string; fullName: string }; tag: string | null }>,
-  movements: Map<string, { credit: number; debit: number }>,
+  movements: Map<string, CpMovement>,
   closings: Map<string, number>,
   from: string,
   to: string,
@@ -912,7 +922,7 @@ function publishSettlements(
 
 function startEnrichBackground(
   tags: Array<{ agent: { login: string; fullName: string }; tag: string | null }>,
-  movements: Map<string, { credit: number; debit: number }>,
+  movements: Map<string, CpMovement>,
   closings: Map<string, number>,
   from: string,
   to: string,
@@ -961,7 +971,7 @@ function startEnrichBackground(
  * Global ombor skani yo‘q — Render 460MB / MS limit uchun.
  */
 export function warmMsSettlements(
-  agents: Array<{ login: string; fullName: string }>,
+  agents: Array<{ login: string; fullName: string; msTag?: string }>,
   from: string,
   to: string,
   force = false,
@@ -992,6 +1002,7 @@ export function warmMsSettlements(
         await ensureAgentSettlement({
           login: agent.login,
           fullName: agent.fullName,
+          msTag: agent.msTag,
           from,
           to,
         });
@@ -1064,12 +1075,44 @@ export function invalidateMsSettlementsCache(from?: string, to?: string) {
   clearVersionedDiskCache();
 }
 
+/** Yangi/tahrirlangan agent uchun MS teg cache ni yangilash (to‘liq settlements tozalanmasin). */
+export function invalidateAgentTagCache(login?: string) {
+  if (!login) {
+    tagCache.clear();
+    return;
+  }
+  const key = foldName(login);
+  tagCache.delete(key);
+  for (const k of [...settlementsCache.keys()]) {
+    if (k.startsWith(`${key}:`)) settlementsCache.delete(k);
+  }
+  for (const k of [...summaryMem.keys()]) summaryMem.delete(k);
+}
+
+/** Staff sync: yangi agent tegini oldindan cache qilish. */
+export async function probeAgentMsTag(input: {
+  login: string;
+  fullName?: string;
+  msTag?: string;
+}): Promise<string | null> {
+  invalidateAgentTagCache(input.login);
+  if (!moyskladConfigured()) {
+    const forced = foldName(input.msTag || "");
+    if (forced) {
+      tagCache.set(foldName(input.login), { at: Date.now(), tag: forced });
+      return forced;
+    }
+    return PRIMARY_TAG[foldName(input.login)] || null;
+  }
+  return resolveAgentTag(input.login, input.fullName, input.msTag);
+}
+
 /**
  * Soft refresh: eski raqamlar ekranda qoladi, yangisi tayyor bo‘lgach almashtiriladi.
  * Disk o‘chirilmaydi — UI nollanmaydi.
  */
 export async function refreshMsSettlements(
-  agents: Array<{ login: string; fullName: string }>,
+  agents: Array<{ login: string; fullName: string; msTag?: string }>,
   from: string,
   to: string,
   priorityLogin?: string,
@@ -1094,7 +1137,7 @@ export async function refreshMsSettlements(
 }
 
 export async function getAgentsMsSettlementSummaries(
-  agents: Array<{ login: string; fullName: string }>,
+  agents: Array<{ login: string; fullName: string; msTag?: string }>,
   from: string,
   to: string,
 ): Promise<{ map: Map<string, AgentSettlement>; status: MsSettleStatus }> {
@@ -1150,8 +1193,9 @@ export async function getAgentMsSettlements(
     fullName: string;
     from: string;
     to: string;
+    msTag?: string;
   },
-  warmAgents?: Array<{ login: string; fullName: string }>,
+  warmAgents?: Array<{ login: string; fullName: string; msTag?: string }>,
 ): Promise<AgentSettlement & { msStatus: MsSettleStatus }> {
   const empty = emptySettlement(input);
   void warmAgents;
