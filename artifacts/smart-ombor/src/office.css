@@ -288,34 +288,43 @@
   display: flex; flex-direction: column;
 }
 .office-stage.is-confirm { background: linear-gradient(160deg, #07111f 0%, #0b1a33 48%, #0a1222 100%); }
-/* Apple Face ID uslubi: to‘liq ekran kamera + katta markaziy oval */
+/* Face ID: to‘liq ekran, contain (hech narsa kesilmaydi), oval JS bilan joylashadi */
 .office-stage-cam {
   position: absolute; inset: 0;
-  display: flex; align-items: stretch; justify-content: stretch;
+  display: block;
   padding: 0; min-height: 0;
 }
 .office-stage-viewport {
-  position: relative;
+  position: absolute; inset: 0;
   width: 100%;
   height: 100%;
   border-radius: 0;
   overflow: hidden;
   background: #000;
 }
-.office-stage-viewport video {
+.office-stage-video,
+.office-stage-viewport video.office-stage-video,
+.office-stage video.office-stage-video {
   display: block !important;
-  position: absolute; inset: 0;
-  width: 100% !important; height: 100% !important;
-  /* Full-screen cover — iOS selfie tabiiy ko‘rinadi (kichik card crop yo‘q) */
-  object-fit: cover !important;
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  aspect-ratio: auto !important;
+  /* contain = butun kadr ko‘rinadi — cover iOS’da yuzni zoom/kesardi */
+  object-fit: contain !important;
   object-position: center center !important;
-  margin: 0; border-radius: 0; aspect-ratio: auto;
-  background: #000;
+  background: #000 !important;
 }
-.office-stage-viewport.is-mirror video {
+.office-stage-viewport.is-mirror .office-stage-video {
   transform: scaleX(-1);
 }
-.office-stage video { display: block !important; }
 .office-confirm {
   flex: 1; display: grid; place-items: center; padding: 24px 18px calc(24px + env(safe-area-inset-bottom));
   position: relative;
@@ -368,17 +377,16 @@
     linear-gradient(0deg, rgb(5 7 13 / .78) 0%, transparent 34%);
 }
 .office-oval {
-  position: absolute; left: 50%; top: 42%;
-  /* Katta oval — butun yuz bemalol sig‘adi */
-  width: min(72vw, 300px);
-  height: min(92vw, 380px);
-  transform: translate(-50%, -50%);
+  position: absolute;
+  left: 14%; top: 14%;
+  width: 72%; height: 62%;
   border: 3px solid rgb(255 255 255 / .96);
   border-radius: 50%;
   box-shadow:
     0 0 0 9999px rgb(0 0 0 / .55),
     0 0 0 1px rgb(59 99 240 / .35);
   pointer-events: none; z-index: 2;
+  box-sizing: border-box;
   animation: office-oval-pulse 2.4s ease-in-out infinite;
   transition: border-color .25s ease, box-shadow .25s ease;
 }
@@ -402,10 +410,11 @@
   50% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .55), 0 0 0 4px rgb(59 99 240 / .48); }
 }
 .office-qr-frame {
-  position: absolute; left: 50%; top: 42%;
-  width: min(70vw, 280px); height: min(70vw, 280px);
-  transform: translate(-50%, -50%); border: 3px solid #34d399; border-radius: 22px;
+  position: absolute; left: 18%; top: 22%;
+  width: 64%; height: 40%;
+  border: 3px solid #34d399; border-radius: 22px;
   pointer-events: none; z-index: 2;
+  box-sizing: border-box;
   box-shadow: 0 0 0 9999px rgb(0 0 0 / .5);
 }
 .office-stage-top {

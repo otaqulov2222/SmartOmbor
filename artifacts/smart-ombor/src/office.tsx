@@ -162,6 +162,9 @@ export function OfficePage() {
   const [faceReady, setFaceReady] = useState(false);
   const [enrollCount, setEnrollCount] = useState(0);
   const video = useRef<HTMLVideoElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const ovalRef = useRef<HTMLDivElement>(null);
+  const qrFrameRef = useRef<HTMLDivElement>(null);
   const markRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -453,27 +456,73 @@ export function OfficePage() {
     return () => window.clearTimeout(timer);
   }, [stage, inZone, meters, t]);
 
+  /** Video contain-rect ichida oval/QR — CSS crop emas, aniq o‘lcham. */
+  const layoutFaceGuide = () => {
+    const vp = viewportRef.current;
+    const el = video.current;
+    if (!vp || !el || !el.videoWidth || !el.videoHeight) return;
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    const vr = el.videoWidth / el.videoHeight;
+    const br = vw / Math.max(1, vh);
+    let contentW = vw;
+    let contentH = vh;
+    let left = 0;
+    let top = 0;
+    if (vr > br) {
+      contentW = vw;
+      contentH = vw / vr;
+      top = (vh - contentH) / 2;
+    } else {
+      contentH = vh;
+      contentW = vh * vr;
+      left = (vw - contentW) / 2;
+    }
+    const ovalW = Math.min(contentW * 0.72, 320);
+    const ovalH = Math.min(contentH * 0.78, ovalW * 1.28);
+    const ovalLeft = left + (contentW - ovalW) / 2;
+    const ovalTop = top + contentH * 0.12;
+    if (ovalRef.current) {
+      const o = ovalRef.current;
+      o.style.width = `${ovalW}px`;
+      o.style.height = `${ovalH}px`;
+      o.style.left = `${ovalLeft}px`;
+      o.style.top = `${ovalTop}px`;
+      o.style.transform = 'none';
+    }
+    if (qrFrameRef.current) {
+      const side = Math.min(contentW, contentH) * 0.62;
+      const q = qrFrameRef.current;
+      q.style.width = `${side}px`;
+      q.style.height = `${side}px`;
+      q.style.left = `${left + (contentW - side) / 2}px`;
+      q.style.top = `${top + (contentH - side) / 2}px`;
+      q.style.transform = 'none';
+    }
+  };
+
+  useEffect(() => {
+    if (!stage || stage === 'face-confirm' || stage === 'qr-confirm') return;
+    const onResize = () => layoutFaceGuide();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    const id = window.setInterval(onResize, 500);
+    onResize();
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+      window.clearInterval(id);
+    };
+  }, [stage, facing]);
+
   const startCam = async (mode: 'user' | 'environment') => {
     try {
       stream.current?.getTracks().forEach(track => track.stop());
-      // iOS’da majburiy landscape resolution yuzni zoom/kesib yuboradi — facingMode + aspect.
-      let media: MediaStream;
-      try {
-        media = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: mode },
-            // Portraitga yaqin — kesilmasin.
-            aspectRatio: { ideal: mode === 'user' ? 0.75 : 1.33 },
-            frameRate: { ideal: 30, max: 30 },
-          },
-          audio: false,
-        });
-      } catch {
-        media = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: mode },
-          audio: false,
-        });
-      }
+      // Faqat facingMode — resolution/aspect iOS’da crop/zoom berardi.
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode },
+        audio: false,
+      });
       stream.current = media;
       const track = media.getVideoTracks()[0];
       const caps = track?.getCapabilities?.() as (MediaTrackCapabilities & {
@@ -485,7 +534,6 @@ export function OfficePage() {
         const advanced: Array<Record<string, string | number>> = [];
         if (caps.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
         if (caps.whiteBalanceMode?.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
-        // Zoom bo‘lsa — 1x (eng keng), yaqin zoom yo‘q.
         if (caps.zoom && Number.isFinite(caps.zoom.min)) advanced.push({ zoom: Number(caps.zoom.min) });
         if (advanced.length) {
           void track.applyConstraints({ advanced } as MediaTrackConstraints).catch(() => undefined);
@@ -500,6 +548,9 @@ export function OfficePage() {
         el.setAttribute('webkit-playsinline', 'true');
         el.setAttribute('autoplay', 'true');
         await el.play().catch(() => undefined);
+        window.requestAnimationFrame(() => layoutFaceGuide());
+        window.setTimeout(() => layoutFaceGuide(), 120);
+        window.setTimeout(() => layoutFaceGuide(), 400);
       }
       setCamDenied(false);
       setCamReady(true);
@@ -1240,6 +1291,7 @@ export function OfficePage() {
         <p className="lead" style={{ marginTop: 8 }}>{t('office.faceCardBody')}</p>
       </div>
     </div>
+    </div>
     {stage && <div className={`office-stage ${(stage === 'face-confirm' || stage === 'qr-confirm') ? 'is-confirm' : ''}`}>
       {(stage === 'face-confirm' || stage === 'qr-confirm') ? (
         <div className="office-confirm">
@@ -1271,18 +1323,29 @@ export function OfficePage() {
       ) : (
         <>
           <div className="office-stage-cam">
-            <div className={`office-stage-viewport ${facing === 'user' ? 'is-mirror' : ''}`}>
-              <video ref={video} className="is-on" playsInline muted autoPlay />
+            <div ref={viewportRef} className={`office-stage-viewport ${facing === 'user' ? 'is-mirror' : ''}`}>
+              <video
+                ref={video}
+                className="office-stage-video"
+                playsInline
+                muted
+                autoPlay
+                onLoadedMetadata={() => layoutFaceGuide()}
+                onPlay={() => layoutFaceGuide()}
+              />
               {(stage === 'face' || stage === 'enroll') && (
-                <div className={`office-oval ${
-                  scanStatus === 'recognized' ? 'is-ok'
-                    : scanStatus === 'unknown' || scanStatus === 'multi' || scanStatus === 'partial'
-                      || scanStatus === 'close' || scanStatus === 'far' ? 'is-bad'
-                      : scanStatus === 'found' ? 'is-found'
-                        : ''
-                }`} />
+                <div
+                  ref={ovalRef}
+                  className={`office-oval ${
+                    scanStatus === 'recognized' ? 'is-ok'
+                      : scanStatus === 'unknown' || scanStatus === 'multi' || scanStatus === 'partial'
+                        || scanStatus === 'close' || scanStatus === 'far' ? 'is-bad'
+                        : scanStatus === 'found' ? 'is-found'
+                          : ''
+                  }`}
+                />
               )}
-              {stage === 'qr' && <div className="office-qr-frame" />}
+              {stage === 'qr' && <div ref={qrFrameRef} className="office-qr-frame" />}
             </div>
           </div>
           <div className="office-stage-top">
@@ -1348,6 +1411,5 @@ export function OfficePage() {
       <b>{t('office.deniedTitle')}</b>
       <p>{t('office.deniedBody')}</p>
     </div>}
-  </div>
   </div>;
 }
