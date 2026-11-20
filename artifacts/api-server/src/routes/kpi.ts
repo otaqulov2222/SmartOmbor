@@ -2431,12 +2431,16 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       [...poolById.values()],
       msDetail?.rows || [],
     );
-    // MS + lokal biriktirilgan mijozlar (yangi agent / qo‘lda qo‘shilgan marshrut uchun).
-    const selectedById = new Map(msMatched.map((c) => [c.id, c]));
-    for (const c of localPool) {
-      if (!selectedById.has(c.id)) selectedById.set(c.id, c);
-    }
-    const selectedCustomers = [...selectedById.values()];
+    /**
+     * Marshrut nuqtalari = KPI mijozlari bilan 1:1.
+     * MS взаиморасчеты (shu oy aylanmasi) bor → faqat shu qatorlar.
+     * MS yo‘q / yangi agent → lokal biriktirilgan mijozlar (fallback).
+     * Avvalgi merge (MS+barcha lokal) 6 vs 29 kabi chalkashlik berardi.
+     */
+    const selectedCustomers =
+      msMatched.length > 0
+        ? msMatched
+        : localPool;
     const rawPoints = selectedCustomers.map((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
