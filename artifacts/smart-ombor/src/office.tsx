@@ -1028,14 +1028,6 @@ export function OfficePage() {
           onNudge={pingGps}
           onEnableGps={pingGps}
         />}
-        {gps && <p className="office-gps-meta" data-testid="office-gps-meta">
-          {t('office.gpsMeta', {
-            lat: gps.lat.toFixed(6),
-            lng: gps.lng.toFixed(6),
-            acc: Math.round(gps.accuracy),
-            office: `${me?.office.lat.toFixed(6) || '—'}, ${me?.office.lng.toFixed(6) || '—'}`,
-          })}
-        </p>}
         {ok && <p className="office-ok">{ok}</p>}
         {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <p className="office-warn">{note}</p>}
         <h2>{t('office.method')}</h2>
