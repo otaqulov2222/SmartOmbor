@@ -662,7 +662,11 @@ export function KpiDashboardPage() {
             {detail.error ? <p className="kpi-error">{(detail.error as Error).message}</p> : null}
             <>
                 <div className="kpi-grid kpi-grid-4" style={{ marginBottom: '.75rem' }}>
-                  <Card label="Mijozlar" value={cardCustomers} tone="slate" />
+                  <Card
+                    label="Mijozlar"
+                    value={cardCustomers}
+                    tone="slate"
+                  />
                   <Card label="Kirim" value={cardKirim} tone="ok" />
                   <Card label="Chiqim" value={cardChiqim} tone="blue" />
                   <Card label="KPI" value={uzs(detail.data?.kpiTotal ?? openAgent?.kpiTotal ?? 0)} tone="purple" />

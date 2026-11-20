@@ -45,6 +45,7 @@ const FRESH_MS = 10 * 60_000;
 const STALE_MS = 6 * 60 * 60_000;
 /**
  * v17: ortiqcha to‘lov (payedSum > sum) MS balansida aks etmasa — Расход ga qo‘shiladi.
+ *      Qatorlar = tanlangan DAVR uchun MS bilan 1:1 (nol qoldiq yashiriladi).
  * v16: tezlik — agent= OR-batch (global period skan yo‘q).
  * v15: salesreturn. v14: rate.value.
  */
@@ -812,6 +813,7 @@ export type AgentSettlement = {
   agentName: string;
   folderName: string | null;
   period: { from: string; to: string };
+  /** Tanlangan davrda MS dagi faol/qoldiqli mijozlar (1:1). */
   customers: number;
   income: string;
   expense: string;
@@ -872,6 +874,8 @@ function emptySettlement(input: { login: string; fullName: string; from: string;
  *   va closing kredit ko‘rsatmasa) farq Расход ga qo‘shiladi — MS UI 1:1.
  * closing — /report/counterparty.
  * opening — closing − income + expense (identitet).
+ * Qatorlar — TANLANGAN DAVR uchun aylanma/qoldiq != 0 (MS «nol qoldiqni yashirish» bilan bir xil).
+ * Eski sanaga o‘tsangiz — o‘sha davrdagi MS mijozlari chiqadi.
  */
 function buildSettlement(input: {
   login: string;

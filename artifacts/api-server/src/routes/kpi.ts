@@ -2343,6 +2343,7 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       // MS bor → KPI bilan bir xil; MS yo‘q → lokal biriktirilgan mijozlar (yangi agentlar uchun).
       const msCount = msCountByAgentId.get(a.id) || 0;
       const localCount = localCountByAgentId.get(a.id) || 0;
+      // MS davr mijozlari (KPI bilan bir xil); yo‘q bo‘lsa lokal biriktirish.
       const customersCount = msCount > 0 ? msCount : localCount;
       const myDebtors = [...debtByCustomer.entries()].filter(([cid]) => assignByCustomer.get(cid) === a.id).length;
       const hadPingToday = (pingCountByAgent.get(a.id) || 0) > 0;
@@ -2427,20 +2428,57 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
       .where(sql`${kpiCustomersTable.contractNumber} like 'ms:%'`);
     const poolById = new Map<string, (typeof localPool)[number]>();
     for (const c of [...localPool, ...extraMsLocals]) poolById.set(c.id, c);
-    const msMatched = matchCustomersToMsRows(
-      [...poolById.values()],
-      msDetail?.rows || [],
-    );
+    const msRows = msDetail?.rows || [];
+    const msMatched = matchCustomersToMsRows([...poolById.values()], msRows);
+    const matchedByMsId = new Map<string, (typeof msMatched)[number]>();
+    const matchedByName = new Map<string, (typeof msMatched)[number]>();
+    for (const c of msMatched) {
+      const cn = String(c.contractNumber || "");
+      if (cn.startsWith("ms:")) matchedByMsId.set(cn.slice(3), c);
+      matchedByName.set(foldCustName(c.name), c);
+    }
     /**
-     * Marshrut nuqtalari = KPI mijozlari bilan 1:1.
-     * MS взаиморасчеты (shu oy aylanmasi) bor → faqat shu qatorlar.
-     * MS yo‘q / yangi agent → lokal biriktirilgan mijozlar (fallback).
-     * Avvalgi merge (MS+barcha lokal) 6 vs 29 kabi chalkashlik berardi.
+     * Marshrut = tanlangan davr MS взаиморасчеты qatorlari (KPI bilan 1:1).
+     * Lokal kartochka bo‘lmasa ham MS qatoridan nuqta yaratiladi.
+     * MS yo‘q / yangi agent → lokal biriktirilganlar.
      */
-    const selectedCustomers =
-      msMatched.length > 0
-        ? msMatched
-        : localPool;
+    type RouteCust = {
+      id: string;
+      name: string;
+      phone?: string | null;
+      address?: string | null;
+      lat?: string | number | null;
+      lng?: string | number | null;
+      gpsSource?: string | null;
+      createdByAgentId?: string | null;
+      contractNumber?: string | null;
+    };
+    let routeCustomers: RouteCust[] = [];
+    if (msRows.length > 0) {
+      for (const row of msRows) {
+        const hit =
+          matchedByMsId.get(row.id) ||
+          matchedByName.get(foldCustName(row.name)) ||
+          null;
+        if (hit) routeCustomers.push(hit);
+        else {
+          routeCustomers.push({
+            id: `ms:${row.id}`,
+            name: row.name,
+            phone: "",
+            address: "",
+            lat: null,
+            lng: null,
+            gpsSource: null,
+            createdByAgentId: activeAgentId || null,
+            contractNumber: `ms:${row.id}`,
+          });
+        }
+      }
+    } else {
+      routeCustomers = localPool;
+    }
+    const selectedCustomers = routeCustomers;
     const rawPoints = selectedCustomers.map((c) => {
         const owner = assignByCustomer.get(c.id) || c.createdByAgentId || "";
         const visit = visitedByCustomer.get(c.id);
@@ -2450,17 +2488,17 @@ router.get("/kpi/gps/overview", requireKpiAdmin(), async (req, res, next) => {
         const geo = inferCoordinates(
           c.id,
           c.name,
-          c.address,
+          c.address || "",
           adminGps.ok ? adminGps.lat : c.lat,
           adminGps.ok ? adminGps.lng : c.lng,
         );
         return {
           id: c.id,
           name: c.name,
-          phone: c.phone,
-          address: c.address,
-          agentId: owner || null,
-          agentName: owner ? agentMap.get(owner) || "—" : "—",
+          phone: c.phone || "",
+          address: c.address || "",
+          agentId: owner || activeAgentId || null,
+          agentName: owner ? agentMap.get(owner) || selectedAgentRow?.fullName || "—" : (selectedAgentRow?.fullName || "—"),
           lat: geo.lat,
           lng: geo.lng,
           exactGps: adminGps.ok,
