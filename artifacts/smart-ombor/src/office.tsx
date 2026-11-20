@@ -315,13 +315,8 @@ export function OfficePage() {
   const maxAcc = me?.office.accuracyM || 500;
   const radiusM = me?.office.radiusM || 100;
   const gpsAccurate = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= maxAcc);
-  const nearOffice = Boolean(
-    meters != null && (
-      meters <= radiusM
-      || (gpsAccurate && gps!.accuracy <= 80 && meters <= radiusM + 20)
-    ),
-  );
-  // Server bilan bir xil: radius ichidagi nuqta — ofisda (accuracy doirasini majburlamaymiz).
+  // Qattiq geofence: faqat belgilangan radius ichida — soft buffer yo‘q.
+  const nearOffice = Boolean(meters != null && meters <= radiusM);
   const inZone = Boolean(me && gps && gpsAccurate && nearOffice);
   const geoStatus = !me
     ? t('common.loading')
@@ -440,12 +435,7 @@ export function OfficePage() {
     const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= accLimit;
     if (!accOk) { setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) })); return false; }
     const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
-    const zoneOk = Boolean(
-      distNow != null && (
-        distNow <= (me?.office.radiusM || 100)
-        || (fix.accuracy <= 80 && distNow <= (me?.office.radiusM || 100) + 20)
-      ),
-    );
+    const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
     if (!zoneOk) {
       setNote(t('office.distFar', { m: Math.round(distNow || 0) }));
       return false;
@@ -499,12 +489,7 @@ export function OfficePage() {
       }
       const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
       const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= (me?.office.accuracyM || 500);
-      const zoneOk = Boolean(
-        distNow != null && (
-          distNow <= (me?.office.radiusM || 100)
-          || (accOk && fix.accuracy <= 80 && distNow <= (me?.office.radiusM || 100) + 20)
-        ),
-      );
+      const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
       if (!accOk) {
         setBusy(false);
         setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
@@ -539,12 +524,7 @@ export function OfficePage() {
     }
     const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
     const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= (me?.office.accuracyM || 500);
-    const zoneOk = Boolean(
-      distNow != null && (
-        distNow <= (me?.office.radiusM || 100)
-        || (accOk && fix.accuracy <= 80 && distNow <= (me?.office.radiusM || 100) + 20)
-      ),
-    );
+    const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
     if (!accOk) {
       setBusy(false);
       setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
@@ -956,37 +936,6 @@ export function OfficePage() {
     requestGpsFix(true);
   };
 
-  const bindOfficeHere = async () => {
-    if (!me?.director) return;
-    if (!gps) { setNote(t('office.gpsNeed')); return; }
-    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
-    setBusy(true); setNote(''); setOk('');
-    try {
-      const response = await fetch('/api/office/site', {
-        method: 'POST',
-        headers: officeHeaders(),
-        body: JSON.stringify({
-          lat: gps.lat,
-          lng: gps.lng,
-          radiusM: me.office.radiusM || 100,
-        }),
-      });
-      const payload = await response.json().catch(() => ({})) as { error?: string; office?: Me['office'] };
-      if (!response.ok) {
-        setNote(t(payload.error === 'geo' ? 'office.gpsBad' : 'office.fail', { m: Math.round(gps.accuracy) }));
-        return;
-      }
-      if (payload.office) setMe(prev => (prev ? { ...prev, office: payload.office! } : prev));
-      else await loadMe();
-      setOk(t('office.siteBound', {
-        lat: gps.lat.toFixed(6),
-        lng: gps.lng.toFixed(6),
-      }));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const jumpSection = (id: 'mark' | 'history' | 'settings') => {
     setSection(id);
     const node = id === 'mark'
@@ -1087,11 +1036,6 @@ export function OfficePage() {
             office: `${me?.office.lat.toFixed(6) || '—'}, ${me?.office.lng.toFixed(6) || '—'}`,
           })}
         </p>}
-        {me?.director && gps && !inZone ? (
-          <button type="button" className="office-bind-site" disabled={busy || !gpsAccurate} onClick={() => void bindOfficeHere()}>
-            {t('office.bindSite')}
-          </button>
-        ) : null}
         {ok && <p className="office-ok">{ok}</p>}
         {note && !camDenied && note !== t('office.gpsNeed') && note !== t('office.gpsOff') && <p className="office-warn">{note}</p>}
         <h2>{t('office.method')}</h2>

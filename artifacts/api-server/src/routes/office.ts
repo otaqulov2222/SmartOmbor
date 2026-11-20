@@ -76,10 +76,9 @@ router.get("/office/me", (req, res) => {
 router.post("/office/site", async (req, res) => {
   if (!requireOfficeDirector(req, res)) return;
   try {
-    const hasGeo = req.body?.lat != null && req.body?.lng != null;
+    // Ofis GPS nuqtasini API orqali ko‘chirish taqiqlangan (davomat bypass).
+    // Faqat ish soatlari / nom / radius sozlamalari.
     const site = setOfficeSite({
-      lat: hasGeo ? Number(req.body?.lat) : undefined,
-      lng: hasGeo ? Number(req.body?.lng) : undefined,
       radiusM: req.body?.radiusM != null ? Number(req.body.radiusM) : undefined,
       accuracyM: req.body?.accuracyM != null ? Number(req.body.accuracyM) : undefined,
       name: req.body?.name != null ? String(req.body.name) : undefined,

@@ -6,7 +6,7 @@ import { dataFile } from "./data-dir";
 
 const DEFAULT_OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.258556;
 const DEFAULT_OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.150964;
-const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 150);
+const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
 /** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
 const DEFAULT_OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
 /** Keldim → Ketdim orasidagi minimal vaqt (tasodifiy ikki marta bosish). */
@@ -291,13 +291,29 @@ function normalizePayrollSettings(raw: Partial<PayrollSettings> | undefined): Pa
   };
 }
 
+/** .env dagi ofis nuqtasi — JSON/Postgres orqali “telefon GPS ga biriktirish” bypassini yo‘qotadi. */
+function envPinnedSite(site: OfficeSite): OfficeSite {
+  const lat = Number(process.env.OFFICE_LAT);
+  const lng = Number(process.env.OFFICE_LNG);
+  const radiusM = Number(process.env.OFFICE_RADIUS_M);
+  const accuracyM = Number(process.env.OFFICE_ACCURACY_M);
+  return normalizeSite({
+    ...site,
+    lat: Number.isFinite(lat) ? lat : site.lat,
+    lng: Number.isFinite(lng) ? lng : site.lng,
+    radiusM: Number.isFinite(radiusM) ? radiusM : site.radiusM,
+    accuracyM: Number.isFinite(accuracyM) ? accuracyM : site.accuracyM,
+  });
+}
+
 function load(): Store {
   if (memory) return memory;
   try {
     const parsed = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Store>;
+    const site = envPinnedSite(normalizeSite(parsed.site));
     memory = {
       secret: parsed.secret || randomBytes(24).toString("hex"),
-      site: normalizeSite(parsed.site),
+      site,
       punches: Array.isArray(parsed.punches)
         ? parsed.punches.map((row) => ({
             ...row,
@@ -334,10 +350,11 @@ function load(): Store {
       advances: Array.isArray(parsed.advances) ? (parsed.advances as PayrollAdvance[]) : [],
       fineOverrides: Array.isArray(parsed.fineOverrides) ? (parsed.fineOverrides as FineOverride[]) : [],
       adjustments: Array.isArray(parsed.adjustments) ? (parsed.adjustments as PayrollAdjustment[]) : [],
-      schedules: normalizeSchedules(parsed.schedules, normalizeSite(parsed.site)),
+      schedules: normalizeSchedules(parsed.schedules, site),
     };
   } catch {
     memory = empty();
+    memory.site = envPinnedSite(memory.site);
     save(memory);
   }
   return memory;
@@ -400,7 +417,9 @@ export async function hydrateOffice() {
     if (remote && (Array.isArray(remote.punches) || Array.isArray(remote.tasks))) {
       writeFileSync(FILE, JSON.stringify(remote));
       memory = null;
-      load();
+      const store = load(); // envPinnedSite — ofis GPS .env dan qotiriladi
+      // Pinlangan site ni disk + Postgres ga qayta yozamiz (eski bind qolmasin).
+      save(store);
       const active = activeAccountIdsFromDisk();
       if (active.length) pruneOrphanFaces(active);
       return;
@@ -460,10 +479,18 @@ export function setOfficeSite(input: {
   start?: string;
   end?: string;
   offDays?: number[];
+  /** Faqat server env + confirm bilan — telefon GPS orqali ko‘chirish taqiqlangan. */
+  allowRelocate?: boolean;
 }) {
   const store = load();
-  const lat = input.lat != null ? Number(input.lat) : store.site.lat;
-  const lng = input.lng != null ? Number(input.lng) : store.site.lng;
+  const wantsMove = input.lat != null || input.lng != null;
+  const relocateOk =
+    Boolean(input.allowRelocate) && String(process.env.OFFICE_ALLOW_RELOCATE || "").trim() === "1";
+  if (wantsMove && !relocateOk) {
+    throw Object.assign(new Error("relocate-locked"), { status: 403 });
+  }
+  const lat = wantsMove && relocateOk ? Number(input.lat) : store.site.lat;
+  const lng = wantsMove && relocateOk ? Number(input.lng) : store.site.lng;
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     throw Object.assign(new Error("geo"), { status: 400 });
   }
@@ -553,15 +580,10 @@ export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
 
 export function insideOffice(lat: number, lng: number, accuracy?: number) {
   if (!geoPayloadOk(lat, lng, accuracy)) return false;
-  const acc = Number(accuracy);
   const site = officeSite();
   const dist = officeDistance(lat, lng);
-  // Nuqta radius ichida — ofisda. Accuracy doirasini radiusga “sig‘dirish” binoda 40–80 m
-  // masofani ham blok qilardi (masalan 44 m + accuracy/2).
-  if (dist <= site.radiusM) return true;
-  // Chegaraga yaqin + yaxshi aniqlik — biroz soft buffer (GPS drift).
-  if (acc <= 80 && dist <= site.radiusM + 20) return true;
-  return false;
+  // Qattiq geofence — soft buffer yo‘q. Faqat radius ichida punch.
+  return dist <= site.radiusM;
 }
 
 function hamming(left: string, right: string) {
