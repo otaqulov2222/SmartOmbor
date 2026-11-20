@@ -407,7 +407,7 @@ export function OfficeReportPage() {
           <thead><tr>
             <th>{t('office.colName')}</th><th>{t('office.colRole')}</th><th>{t('office.colDays')}</th>
             <th>{t('office.statAbsent')}</th><th>{t('office.statLate')}</th><th>{t('office.colDaysOff')}</th>
-            <th>{t('office.colWork')}</th><th>{t('office.colLate')}</th>
+            <th>{t('office.colWork')}</th><th>{t('office.colLate')}</th><th>{t('office.colEarlyOut')}</th><th>{t('office.colOver')}</th>
           </tr></thead>
           <tbody>
             {peopleRows.map(row => <tr key={row.accountId} className="is-clickable" onClick={() => { setPerson(row.accountId); setView('days'); }}>
@@ -419,6 +419,8 @@ export function OfficeReportPage() {
               <td data-label={t('office.colDaysOff')}>{fmt(row.off)}</td>
               <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
               <td data-label={t('office.colLate')}>{lateLabel(row.lateMin)}</td>
+              <td data-label={t('office.colEarlyOut')}>{lateLabel(row.earlyOut)}</td>
+              <td data-label={t('office.colOver')}>{lateLabel(row.overtime)}</td>
             </tr>)}
           </tbody>
         </table>
@@ -429,7 +431,7 @@ export function OfficeReportPage() {
             {ranged && <th>{t('common.date')}</th>}
             <th>{t('office.colName')}</th><th>{t('office.colN')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
             <th>{t('office.colIn')}</th><th>{t('office.colOut')}</th><th>{t('office.colWork')}</th>
-            <th>{t('office.colLate')}</th><th>{t('office.colEarlyOut')}</th><th>{t('office.colMethod')}</th>
+            <th>{t('office.colLate')}</th><th>{t('office.colEarlyOut')}</th><th>{t('office.colOver')}</th><th>{t('office.colMethod')}</th>
           </tr></thead>
           <tbody>
             {rows.map(row => <tr key={`${row.date || day}-${row.accountId}`} className="is-clickable" onClick={() => setOpen(row)}>
@@ -443,6 +445,7 @@ export function OfficeReportPage() {
               <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
               <td data-label={t('office.colLate')}>{lateLabel(row.lateIn)}</td>
               <td data-label={t('office.colEarlyOut')}>{lateLabel(row.earlyOut)}</td>
+              <td data-label={t('office.colOver')}>{lateLabel(row.overtime)}</td>
               <td data-label={t('office.colMethod')}>{methodText(row)}</td>
             </tr>)}
           </tbody>
