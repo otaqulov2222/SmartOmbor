@@ -137,17 +137,17 @@ export function faceQualityCheck(
   const minSide = Math.min(videoW, videoH);
   const faceRatio = box.height / minSide;
 
-  // Juda yaqin — yuz ovaldan chiqib ketadi / qora hoshiya.
-  if (faceRatio > 0.78 || box.width > minSide * 0.78) return { ok: false, reason: 'close' };
+  // Juda yaqin — faqat ekstremal (butun kadrni yuz egallasa).
+  if (faceRatio > 0.92 || box.width > minSide * 0.92) return { ok: false, reason: 'close' };
   // Juda uzoq — kichkina nuqta.
-  if (faceRatio < 0.28 || box.width < minSide * 0.22) return { ok: false, reason: 'far' };
+  if (faceRatio < 0.22 || box.width < minSide * 0.18) return { ok: false, reason: 'far' };
 
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  // Markaziy oval zonasi (viewport object-position bilan mos).
-  if (cx < videoW * 0.18 || cx > videoW * 0.82) return { ok: false, reason: 'partial' };
-  if (cy < videoH * 0.22 || cy > videoH * 0.62) return { ok: false, reason: 'partial' };
-  if (box.y < videoH * 0.04 || box.y + box.height > videoH * 0.82) return { ok: false, reason: 'partial' };
+  // Markaziy zona — to‘liq ekran selfie uchun kengroq.
+  if (cx < videoW * 0.12 || cx > videoW * 0.88) return { ok: false, reason: 'partial' };
+  if (cy < videoH * 0.12 || cy > videoH * 0.72) return { ok: false, reason: 'partial' };
+  if (box.y < videoH * -0.02 || box.y + box.height > videoH * 0.92) return { ok: false, reason: 'partial' };
 
   if (!landmarks || landmarks.length < 68) return { ok: false, reason: 'partial' };
   const leftEye = avgPoint(landmarks, 36, 41);

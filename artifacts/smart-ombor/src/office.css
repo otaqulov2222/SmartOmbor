@@ -288,25 +288,29 @@
   display: flex; flex-direction: column;
 }
 .office-stage.is-confirm { background: linear-gradient(160deg, #07111f 0%, #0b1a33 48%, #0a1222 100%); }
+/* Apple Face ID uslubi: to‘liq ekran kamera + katta markaziy oval */
 .office-stage-cam {
-  flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
-  padding: calc(64px + env(safe-area-inset-top)) 18px 168px;
+  position: absolute; inset: 0;
+  display: flex; align-items: stretch; justify-content: stretch;
+  padding: 0; min-height: 0;
 }
 .office-stage-viewport {
   position: relative;
-  width: min(100%, 360px);
-  aspect-ratio: 3 / 4;
-  border-radius: 28px;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   overflow: hidden;
-  background: #0a0f1a;
-  box-shadow: 0 28px 70px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .08);
+  background: #000;
 }
 .office-stage-viewport video {
   display: block !important;
+  position: absolute; inset: 0;
   width: 100% !important; height: 100% !important;
-  object-fit: cover; object-position: center 40%;
+  /* Full-screen cover — iOS selfie tabiiy ko‘rinadi (kichik card crop yo‘q) */
+  object-fit: cover !important;
+  object-position: center center !important;
   margin: 0; border-radius: 0; aspect-ratio: auto;
-  background: #0a0f1a;
+  background: #000;
 }
 .office-stage-viewport.is-mirror video {
   transform: scaleX(-1);
@@ -364,44 +368,45 @@
     linear-gradient(0deg, rgb(5 7 13 / .78) 0%, transparent 34%);
 }
 .office-oval {
-  position: absolute; left: 50%; top: 46%;
-  width: 62%; height: 70%;
-  max-width: 220px; max-height: 280px;
+  position: absolute; left: 50%; top: 42%;
+  /* Katta oval — butun yuz bemalol sig‘adi */
+  width: min(72vw, 300px);
+  height: min(92vw, 380px);
   transform: translate(-50%, -50%);
-  border: 2.5px solid rgb(255 255 255 / .95);
+  border: 3px solid rgb(255 255 255 / .96);
   border-radius: 50%;
   box-shadow:
-    0 0 0 9999px rgb(0 0 0 / .58),
-    0 0 0 1px rgb(59 99 240 / .4),
-    inset 0 0 0 1px rgb(255 255 255 / .08);
+    0 0 0 9999px rgb(0 0 0 / .55),
+    0 0 0 1px rgb(59 99 240 / .35);
   pointer-events: none; z-index: 2;
   animation: office-oval-pulse 2.4s ease-in-out infinite;
   transition: border-color .25s ease, box-shadow .25s ease;
 }
 .office-oval.is-found {
   border-color: #93c5fd;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / .55), 0 0 0 3px rgb(59 130 246 / .55);
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 4px rgb(59 130 246 / .55);
   animation: none;
 }
 .office-oval.is-ok {
   border-color: #34d399;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / .5), 0 0 0 4px rgb(52 211 153 / .55);
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .48), 0 0 0 5px rgb(52 211 153 / .55);
   animation: none;
 }
 .office-oval.is-bad {
   border-color: #f87171;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / .55), 0 0 0 3px rgb(248 113 113 / .5);
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .52), 0 0 0 4px rgb(248 113 113 / .5);
   animation: none;
 }
 @keyframes office-oval-pulse {
-  0%, 100% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .58), 0 0 0 1px rgb(59 99 240 / .3); }
-  50% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .58), 0 0 0 3px rgb(59 99 240 / .5); }
+  0%, 100% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .55), 0 0 0 1px rgb(59 99 240 / .28); }
+  50% { box-shadow: 0 0 0 9999px rgb(0 0 0 / .55), 0 0 0 4px rgb(59 99 240 / .48); }
 }
 .office-qr-frame {
-  position: absolute; left: 50%; top: 50%; width: 70%; height: 70%;
-  max-width: 240px; max-height: 240px;
-  transform: translate(-50%, -50%); border: 3px solid #34d399; border-radius: 22px; pointer-events: none; z-index: 2;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / .45);
+  position: absolute; left: 50%; top: 42%;
+  width: min(70vw, 280px); height: min(70vw, 280px);
+  transform: translate(-50%, -50%); border: 3px solid #34d399; border-radius: 22px;
+  pointer-events: none; z-index: 2;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / .5);
 }
 .office-stage-top {
   position: absolute; left: 12px; right: 12px; top: 12px;
@@ -421,9 +426,10 @@
   display: grid; place-items: center;
 }
 .office-stage-copy {
-  position: absolute; left: 16px; right: 16px; bottom: calc(118px + env(safe-area-inset-bottom));
+  position: absolute; left: 16px; right: 16px; bottom: calc(128px + env(safe-area-inset-bottom));
   text-align: center; color: #e2e8f0; z-index: 3;
-  font-size: .92rem; font-weight: 600; text-shadow: 0 1px 8px rgb(0 0 0 / .55);
+  font-size: .95rem; font-weight: 650;
+  text-shadow: 0 2px 12px rgb(0 0 0 / .85), 0 0 2px rgb(0 0 0 / .9);
   max-width: 28rem; margin: 0 auto;
 }
 .office-stage-copy small { display: block; opacity: .78; margin-top: 6px; font-weight: 500; font-size: .78rem; }

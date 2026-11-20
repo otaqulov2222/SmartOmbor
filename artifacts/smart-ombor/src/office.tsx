@@ -456,35 +456,50 @@ export function OfficePage() {
   const startCam = async (mode: 'user' | 'environment') => {
     try {
       stream.current?.getTracks().forEach(track => track.stop());
-      const base = {
-        facingMode: { ideal: mode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 },
-      };
+      // iOS’da majburiy landscape resolution yuzni zoom/kesib yuboradi — facingMode + aspect.
       let media: MediaStream;
       try {
-        media = await navigator.mediaDevices.getUserMedia({ video: base, audio: false });
+        media = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: mode },
+            // Portraitga yaqin — kesilmasin.
+            aspectRatio: { ideal: mode === 'user' ? 0.75 : 1.33 },
+            frameRate: { ideal: 30, max: 30 },
+          },
+          audio: false,
+        });
       } catch {
-        media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: false });
+        media = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: mode },
+          audio: false,
+        });
       }
       stream.current = media;
-      // Yorug‘lik — qo‘llab-quvvatlansa avtomatik ekspozitsiya.
       const track = media.getVideoTracks()[0];
-      const caps = track?.getCapabilities?.() as (MediaTrackCapabilities & { exposureMode?: string[]; whiteBalanceMode?: string[] }) | undefined;
+      const caps = track?.getCapabilities?.() as (MediaTrackCapabilities & {
+        exposureMode?: string[];
+        whiteBalanceMode?: string[];
+        zoom?: { min?: number; max?: number };
+      }) | undefined;
       if (track && caps) {
-        const advanced: Record<string, string>[] = [];
+        const advanced: Array<Record<string, string | number>> = [];
         if (caps.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
         if (caps.whiteBalanceMode?.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
+        // Zoom bo‘lsa — 1x (eng keng), yaqin zoom yo‘q.
+        if (caps.zoom && Number.isFinite(caps.zoom.min)) advanced.push({ zoom: Number(caps.zoom.min) });
         if (advanced.length) {
           void track.applyConstraints({ advanced } as MediaTrackConstraints).catch(() => undefined);
         }
       }
       if (video.current) {
-        video.current.srcObject = media;
-        video.current.setAttribute('playsinline', 'true');
-        video.current.setAttribute('webkit-playsinline', 'true');
-        await video.current.play();
+        const el = video.current;
+        el.srcObject = media;
+        el.muted = true;
+        el.playsInline = true;
+        el.setAttribute('playsinline', 'true');
+        el.setAttribute('webkit-playsinline', 'true');
+        el.setAttribute('autoplay', 'true');
+        await el.play().catch(() => undefined);
       }
       setCamDenied(false);
       setCamReady(true);

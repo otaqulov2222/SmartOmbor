@@ -1134,7 +1134,7 @@ const uz = {
   'office.faceReady': 'Yuz tasdiqlangan',
   'office.faceEnroll': 'Avval yuzni ro‘yxatdan o‘tkazing',
   'office.enrollTitle': 'Face ID ni bog‘lash',
-  'office.enrollBody': 'Yuzni oval markaziga tuting — yorug‘ joyda, telefon ~40–50 cm uzoqlikda.',
+  'office.enrollBody': 'Yuzingizni oval ichiga joylashtiring — telefonni biroz orqaga suring.',
   'office.enrollReady': 'Yuz skanerlandi — profilga bog‘lanmoqda…',
   'office.enrollProgress': 'Namuna: {n}/{max}',
   'office.enrollSave': 'Yuzni profilga bog‘lash',
