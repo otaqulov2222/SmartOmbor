@@ -14,8 +14,10 @@ type Punch = { date: string; inAt: string | null; outAt: string | null; workedMs
 type Me = {
   id: string; name: string; login: string; role: string; director: boolean; face: boolean;
   office: { name: string; lat: number; lng: number; radiusM: number; accuracyM: number; start: string; end: string };
+  punchAccuracyM?: number;
   clock: string; date: string; today: Punch | null; fiksa?: number;
 };
+type GpsFix = { lat: number; lng: number; accuracy: number; heading: number | null; at: number };
 const SESSION = 'smart-ombor-session';
 const QR_HINTS = new Map<DecodeHintType, unknown>([
   [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
@@ -104,6 +106,21 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(dLng / 2) ** 2;
   return 2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+/** Yashirin davomat zonasi — xarita/ofis sifatida ko‘rinmaydi, faqat geofence. */
+const SILENT_PUNCH = [{ lat: 41.219218, lng: 69.272864 }] as const;
+function nearestPunchMeters(
+  lat: number,
+  lng: number,
+  office: { lat: number; lng: number } | null | undefined,
+): number | null {
+  if (!office) return null;
+  let best = haversine(lat, lng, office.lat, office.lng);
+  for (const z of SILENT_PUNCH) {
+    const d = haversine(lat, lng, z.lat, z.lng);
+    if (d < best) best = d;
+  }
+  return best;
+}
 function hhmmss(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = String(Math.floor(total / 3600)).padStart(2, '0');
@@ -179,6 +196,9 @@ export function OfficePage() {
   }, []);
   const gpsWatch = useRef<number | null>(null);
   const gpsFails = useRef(0);
+  const gpsBuf = useRef<GpsFix[]>([]);
+  const gpsStable = useRef<GpsFix | null>(null);
+  const metersShown = useRef<number | null>(null);
   const applyGps = useRef<(pos: GeolocationPosition) => void>(() => undefined);
   const failGps = useRef<(err: GeolocationPositionError, fromUser: boolean) => void>(() => undefined);
 
@@ -187,13 +207,60 @@ export function OfficePage() {
     const accuracy = Number(pos.coords.accuracy);
     // Do not invent accuracy — fake 80m bypasses anti-spoof and breaks davomat checks
     if (!Number.isFinite(accuracy) || accuracy <= 0) return;
-    const heading = Number(pos.coords.heading);
-    gpsFails.current = 0;
-    setGps({
+    const headingRaw = Number(pos.coords.heading);
+    const heading = Number.isFinite(headingRaw) && headingRaw >= 0 ? headingRaw : null;
+    const sample: GpsFix = {
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
       accuracy,
-      heading: Number.isFinite(heading) && heading >= 0 ? heading : null,
+      heading,
+      at: Date.now(),
+    };
+    const prev = gpsStable.current;
+    // Yomonroq accuracy + katta sakrash — outlier, tashlaymiz.
+    if (prev) {
+      const jump = haversine(prev.lat, prev.lng, sample.lat, sample.lng);
+      if (jump > 25 && sample.accuracy > prev.accuracy * 1.15 && sample.accuracy > 18) {
+        return;
+      }
+    }
+    const buf = gpsBuf.current.filter((s) => sample.at - s.at < 12_000);
+    buf.push(sample);
+    gpsBuf.current = buf.slice(-10);
+
+    // Accuracy-weighted o‘rtacha — tinch o‘tirganda raqam raqsga tushmasin.
+    let wLat = 0;
+    let wLng = 0;
+    let wSum = 0;
+    let bestAcc = Infinity;
+    for (const s of buf) {
+      const w = 1 / Math.max(4, s.accuracy);
+      wLat += s.lat * w;
+      wLng += s.lng * w;
+      wSum += w;
+      if (s.accuracy < bestAcc) bestAcc = s.accuracy;
+    }
+    const next: GpsFix = {
+      lat: wLat / wSum,
+      lng: wLng / wSum,
+      accuracy: bestAcc,
+      heading: sample.heading ?? prev?.heading ?? null,
+      at: sample.at,
+    };
+    // EMA: oldingi barqaror nuqta bilan aralashtirish.
+    if (prev && sample.at - prev.at < 8000) {
+      const alpha = next.accuracy <= 15 ? 0.45 : 0.28;
+      next.lat = prev.lat * (1 - alpha) + next.lat * alpha;
+      next.lng = prev.lng * (1 - alpha) + next.lng * alpha;
+      next.accuracy = Math.min(prev.accuracy, next.accuracy);
+    }
+    gpsStable.current = next;
+    gpsFails.current = 0;
+    setGps({
+      lat: next.lat,
+      lng: next.lng,
+      accuracy: next.accuracy,
+      heading: next.heading,
     });
     setGpsState('ready');
     setNote('');
@@ -218,7 +285,7 @@ export function OfficePage() {
     gpsWatch.current = navigator.geolocation.watchPosition(
       pos => applyGps.current(pos),
       err => failGps.current(err, fromUser),
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 25000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
     );
   };
 
@@ -311,13 +378,32 @@ export function OfficePage() {
     stream.current?.getTracks().forEach(track => track.stop());
   }, []);
 
-  const meters = me && gps ? haversine(gps.lat, gps.lng, me.office.lat, me.office.lng) : null;
+  const rawMeters = me && gps ? nearestPunchMeters(gps.lat, gps.lng, me.office) : null;
+  // UI masofa: 2 m dan kam tebranishni yutib yuboramiz.
+  let meters = rawMeters;
+  if (rawMeters != null) {
+    const shown = metersShown.current;
+    if (shown == null || Math.abs(rawMeters - shown) >= 2 || rawMeters <= 1) {
+      metersShown.current = Math.round(rawMeters);
+      meters = metersShown.current;
+    } else {
+      meters = shown;
+    }
+  } else {
+    metersShown.current = null;
+  }
   const maxAcc = me?.office.accuracyM || 500;
+  const punchAcc = me?.punchAccuracyM || 55;
   const radiusM = me?.office.radiusM || 100;
   const gpsAccurate = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= maxAcc);
-  // Qattiq geofence: faqat belgilangan radius ichida — soft buffer yo‘q.
-  const nearOffice = Boolean(meters != null && meters <= radiusM);
-  const inZone = Boolean(me && gps && gpsAccurate && nearOffice);
+  const gpsPunchOk = Boolean(gps && Number.isFinite(gps.accuracy) && gps.accuracy > 0 && gps.accuracy <= punchAcc);
+  // Server bilan bir xil: dist + accuracy*0.35 <= radius (max 12 m slack).
+  const nearOffice = Boolean(
+    rawMeters != null
+    && gps
+    && rawMeters + Math.min(gps.accuracy * 0.35, 12) <= radiusM,
+  );
+  const inZone = Boolean(me && gps && gpsPunchOk && nearOffice);
   const geoStatus = !me
     ? t('common.loading')
     : gpsState === 'denied'
@@ -370,10 +456,34 @@ export function OfficePage() {
   const startCam = async (mode: 'user' | 'environment') => {
     try {
       stream.current?.getTracks().forEach(track => track.stop());
-      const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: false });
+      const base = {
+        facingMode: { ideal: mode },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 },
+      };
+      let media: MediaStream;
+      try {
+        media = await navigator.mediaDevices.getUserMedia({ video: base, audio: false });
+      } catch {
+        media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: false });
+      }
       stream.current = media;
+      // Yorug‘lik — qo‘llab-quvvatlansa avtomatik ekspozitsiya.
+      const track = media.getVideoTracks()[0];
+      const caps = track?.getCapabilities?.() as (MediaTrackCapabilities & { exposureMode?: string[]; whiteBalanceMode?: string[] }) | undefined;
+      if (track && caps) {
+        const advanced: Record<string, string>[] = [];
+        if (caps.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
+        if (caps.whiteBalanceMode?.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
+        if (advanced.length) {
+          void track.applyConstraints({ advanced } as MediaTrackConstraints).catch(() => undefined);
+        }
+      }
       if (video.current) {
         video.current.srcObject = media;
+        video.current.setAttribute('playsinline', 'true');
+        video.current.setAttribute('webkit-playsinline', 'true');
         await video.current.play();
       }
       setCamDenied(false);
@@ -434,8 +544,15 @@ export function OfficePage() {
     const accLimit = me?.office.accuracyM || 500;
     const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= accLimit;
     if (!accOk) { setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) })); return false; }
-    const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
-    const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
+    const punchAccLimit = me?.punchAccuracyM || 55;
+    if (!(fix.accuracy > 0 && fix.accuracy <= punchAccLimit)) {
+      setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
+      return false;
+    }
+    const distNow = me ? nearestPunchMeters(fix.lat, fix.lng, me.office) : null;
+    const radius = me?.office.radiusM || 100;
+    const slack = Math.min(fix.accuracy * 0.35, 12);
+    const zoneOk = Boolean(distNow != null && distNow + slack <= radius);
     if (!zoneOk) {
       setNote(t('office.distFar', { m: Math.round(distNow || 0) }));
       return false;
@@ -487,9 +604,11 @@ export function OfficePage() {
         setNote(t('office.gpsNeed'));
         return;
       }
-      const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
-      const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= (me?.office.accuracyM || 500);
-      const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
+      const distNow = me ? nearestPunchMeters(fix.lat, fix.lng, me.office) : null;
+      const punchLim = me?.punchAccuracyM || 55;
+      const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= punchLim;
+      const slack = Math.min(fix.accuracy * 0.35, 12);
+      const zoneOk = Boolean(distNow != null && distNow + slack <= (me?.office.radiusM || 100));
       if (!accOk) {
         setBusy(false);
         setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
@@ -522,9 +641,11 @@ export function OfficePage() {
       setNote(t('office.gpsNeed'));
       return;
     }
-    const distNow = me ? haversine(fix.lat, fix.lng, me.office.lat, me.office.lng) : null;
-    const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= (me?.office.accuracyM || 500);
-    const zoneOk = Boolean(distNow != null && distNow <= (me?.office.radiusM || 100));
+    const distNow = me ? nearestPunchMeters(fix.lat, fix.lng, me.office) : null;
+    const punchLim = me?.punchAccuracyM || 55;
+    const accOk = Number.isFinite(fix.accuracy) && fix.accuracy > 0 && fix.accuracy <= punchLim;
+    const slack = Math.min(fix.accuracy * 0.35, 12);
+    const zoneOk = Boolean(distNow != null && distNow + slack <= (me?.office.radiusM || 100));
     if (!accOk) {
       setBusy(false);
       setNote(t('office.gpsBad', { m: Math.round(fix.accuracy) }));
@@ -639,9 +760,9 @@ export function OfficePage() {
             await sleep(120);
             continue;
           }
-          if (shot.status === 'partial') {
+          if (shot.status === 'partial' || shot.status === 'close' || shot.status === 'far') {
             matchStreak.current = 0;
-            setScanStatus('partial');
+            setScanStatus(shot.status);
             setFaceReady(false);
             matchedDesc.current = null;
             await sleep(80);
@@ -853,7 +974,7 @@ export function OfficePage() {
 
   const openStage = async (kind: 'in' | 'out', used: 'face' | 'qr') => {
     if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
-    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    if (!gpsPunchOk) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
     if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
     if (kind === 'in' && (alreadyIn || alreadyOut)) { setNote(t(alreadyOut ? 'office.alreadyOut' : 'office.alreadyIn')); return; }
     if (kind === 'out' && !alreadyIn) { setNote(t('office.needIn')); return; }
@@ -918,7 +1039,7 @@ export function OfficePage() {
   const goPunch = async () => {
     if (alreadyOut) { setNote(t('office.alreadyOut')); return; }
     if (gpsState === 'denied' || !gps) { setNote(t('office.gpsNeed')); return; }
-    if (!gpsAccurate) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
+    if (!gpsPunchOk) { setNote(t('office.gpsBad', { m: Math.round(gps.accuracy) })); return; }
     if (!inZone) { setNote(t('office.distFar', { m: Math.round(meters || 0) })); return; }
     if (!camReady) { await askCamera(); return; }
     await openStage(nextKind, method);
@@ -1134,17 +1255,21 @@ export function OfficePage() {
         </div>
       ) : (
         <>
-          <video ref={video} className="is-on" playsInline muted autoPlay/>
-          <div className="office-stage-shade" aria-hidden="true"/>
-          {(stage === 'face' || stage === 'enroll') && (
-            <div className={`office-oval ${
-              scanStatus === 'recognized' ? 'is-ok'
-                : scanStatus === 'unknown' || scanStatus === 'multi' || scanStatus === 'partial' ? 'is-bad'
-                  : scanStatus === 'found' ? 'is-found'
-                    : ''
-            }`}/>
-          )}
-          {stage === 'qr' && <div className="office-qr-frame"/>}
+          <div className="office-stage-cam">
+            <div className={`office-stage-viewport ${facing === 'user' ? 'is-mirror' : ''}`}>
+              <video ref={video} className="is-on" playsInline muted autoPlay />
+              {(stage === 'face' || stage === 'enroll') && (
+                <div className={`office-oval ${
+                  scanStatus === 'recognized' ? 'is-ok'
+                    : scanStatus === 'unknown' || scanStatus === 'multi' || scanStatus === 'partial'
+                      || scanStatus === 'close' || scanStatus === 'far' ? 'is-bad'
+                      : scanStatus === 'found' ? 'is-found'
+                        : ''
+                }`} />
+              )}
+              {stage === 'qr' && <div className="office-qr-frame" />}
+            </div>
+          </div>
           <div className="office-stage-top">
             <div className="office-stage-title">
               {stage === 'qr' ? <QrCode size={16}/> : <ScanFace size={16}/>}
@@ -1161,17 +1286,25 @@ export function OfficePage() {
           </div>
           <div className="office-stage-copy">
             {stage === 'enroll'
-              ? (faceReady ? t('office.enrollReady') : t('office.enrollBody'))
+              ? (faceReady ? t('office.enrollReady')
+                : scanStatus === 'close' ? t('office.faceClose')
+                  : scanStatus === 'far' ? t('office.faceFar')
+                    : scanStatus === 'partial' ? t('office.facePartial')
+                      : t('office.enrollBody'))
               : stage === 'face'
                 ? (scanStatus === 'unknown'
                   ? t('office.faceUnknown')
-                  : scanStatus === 'partial'
-                    ? t('office.facePartial')
-                    : scanStatus === 'multi'
-                      ? t('office.faceMulti')
-                      : scanStatus === 'loading'
-                        ? t('office.faceLoading')
-                        : t('office.faceScanBody'))
+                  : scanStatus === 'close'
+                    ? t('office.faceClose')
+                    : scanStatus === 'far'
+                      ? t('office.faceFar')
+                      : scanStatus === 'partial'
+                        ? t('office.facePartial')
+                        : scanStatus === 'multi'
+                          ? t('office.faceMulti')
+                          : scanStatus === 'loading'
+                            ? t('office.faceLoading')
+                            : t('office.faceScanBody'))
                 : t('office.scanHint')}
             {(stage === 'face' || stage === 'enroll') && (
               <small>

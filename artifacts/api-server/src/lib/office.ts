@@ -7,8 +7,10 @@ import { dataFile } from "./data-dir";
 const DEFAULT_OFFICE_LAT = Number(process.env.OFFICE_LAT) || 41.258556;
 const DEFAULT_OFFICE_LNG = Number(process.env.OFFICE_LNG) || 69.150964;
 const DEFAULT_OFFICE_RADIUS_M = Math.max(30, Number(process.env.OFFICE_RADIUS_M) || 100);
-/** Binoda LTE GPS ko‘pincha 150–400 m accuracy beradi — 150 hard-limit ofisda blok qilardi. */
+/** Umumiy GPS (xarita) — binoda LTE yomonroq bo‘lishi mumkin. */
 const DEFAULT_OFFICE_ACCURACY_M = Math.max(50, Number(process.env.OFFICE_ACCURACY_M) || 500);
+/** Punch uchun qattiq aniqlik: undan yomon GPS bilan davomat o‘tmaydi. */
+const PUNCH_ACCURACY_M = Math.max(25, Math.min(80, Number(process.env.OFFICE_PUNCH_ACCURACY_M) || 55));
 /** Keldim → Ketdim orasidagi minimal vaqt (tasodifiy ikki marta bosish). */
 const MIN_SHIFT_MS = 60_000;
 /** Bir xodim uchun parallel punch so‘rovlarini bloklash. */
@@ -561,9 +563,45 @@ export function setWorkSchedule(input: {
   return row;
 }
 
-export function officeDistance(lat: number, lng: number) {
+type PunchZone = { lat: number; lng: number; radiusM: number };
+
+/**
+ * Yashirin qo‘shimcha davomat zonalari — UI/xarita/asosiy ofis sifatida KO‘RINMAYDI.
+ * Faqat server geofence (Keldim/Ketdim) uchun. Asosiy ofis lokatsiyasi o‘zgarmaydi.
+ */
+const SILENT_PUNCH_ZONES: Array<{ lat: number; lng: number; radiusM?: number }> = [
+  { lat: 41.219218, lng: 69.272864 },
+];
+
+function punchZones(): PunchZone[] {
   const site = officeSite();
-  return metersBetween(lat, lng, site.lat, site.lng);
+  const main: PunchZone = { lat: site.lat, lng: site.lng, radiusM: site.radiusM };
+  const silent = SILENT_PUNCH_ZONES
+    .map((z) => {
+      const lat = Number(z.lat);
+      const lng = Number(z.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+      const radiusM = Number(z.radiusM);
+      return {
+        lat,
+        lng,
+        radiusM: Number.isFinite(radiusM) && radiusM >= 30 ? Math.min(5000, radiusM) : site.radiusM,
+      } satisfies PunchZone;
+    })
+    .filter((z): z is PunchZone => z != null);
+  return [main, ...silent];
+}
+
+/** Eng yaqin punch zonasi gacha masofa (asosiy + yashirin). */
+export function officeDistance(lat: number, lng: number) {
+  const zones = punchZones();
+  let best = Number.POSITIVE_INFINITY;
+  for (const z of zones) {
+    const d = metersBetween(lat, lng, z.lat, z.lng);
+    if (d < best) best = d;
+  }
+  return best;
 }
 
 export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
@@ -580,10 +618,19 @@ export function geoPayloadOk(lat: number, lng: number, accuracy?: number) {
 
 export function insideOffice(lat: number, lng: number, accuracy?: number) {
   if (!geoPayloadOk(lat, lng, accuracy)) return false;
-  const site = officeSite();
-  const dist = officeDistance(lat, lng);
-  // Qattiq geofence — soft buffer yo‘q. Faqat radius ichida punch.
-  return dist <= site.radiusM;
+  const acc = Number(accuracy);
+  // Punch: GPS ±aniqlik radiusdan 1 m tashqariga chiqsa — rad etiladi.
+  if (!Number.isFinite(acc) || acc <= 0 || acc > PUNCH_ACCURACY_M) return false;
+  return punchZones().some((z) => {
+    const dist = metersBetween(lat, lng, z.lat, z.lng);
+    // Qattiq chegara: dist + 1m > radius → yo‘q. Accuracy buffer ham hisobga.
+    const slack = Math.min(acc * 0.35, 12);
+    return dist + slack <= z.radiusM;
+  });
+}
+
+export function punchAccuracyLimitM() {
+  return PUNCH_ACCURACY_M;
 }
 
 function hamming(left: string, right: string) {

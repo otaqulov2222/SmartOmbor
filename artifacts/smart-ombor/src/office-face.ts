@@ -39,6 +39,8 @@ export type FaceScanStatus =
   | 'unknown'
   | 'multi'
   | 'partial'
+  | 'close'
+  | 'far'
   | 'error';
 
 let modelsReady = false;
@@ -115,28 +117,39 @@ function avgPoint(points: Point[], from: number, to: number): Point {
   return { x: x / n, y: y / n };
 }
 
-/** To‘liq yuz: oval ichida, yetarli o‘lcham, ko‘z–burun–og‘iz joylashuvi. */
-export function faceQualityOk(
+export type FaceQualityResult =
+  | { ok: true }
+  | { ok: false; reason: 'partial' | 'close' | 'far' };
+
+/**
+ * Oval ichida to‘liq yuz: peshona→iyak, markazda, ortacha masofa.
+ * Juda yaqin (kesilgan) yoki juda uzoq (kichik) — rad.
+ */
+export function faceQualityCheck(
   box: { x: number; y: number; width: number; height: number },
   score: number,
   landmarks: Point[] | undefined,
   videoW: number,
   videoH: number,
-): boolean {
-  if (!Number.isFinite(score) || score < 0.58) return false;
-  if (!videoW || !videoH) return false;
+): FaceQualityResult {
+  if (!Number.isFinite(score) || score < 0.55) return { ok: false, reason: 'partial' };
+  if (!videoW || !videoH) return { ok: false, reason: 'partial' };
   const minSide = Math.min(videoW, videoH);
-  // Peshona/fragment — kichik yoki juda yuqori box.
-  if (box.width < minSide * 0.24 || box.height < minSide * 0.30) return false;
+  const faceRatio = box.height / minSide;
+
+  // Juda yaqin — yuz ovaldan chiqib ketadi / qora hoshiya.
+  if (faceRatio > 0.78 || box.width > minSide * 0.78) return { ok: false, reason: 'close' };
+  // Juda uzoq — kichkina nuqta.
+  if (faceRatio < 0.28 || box.width < minSide * 0.22) return { ok: false, reason: 'far' };
+
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  // Oval zonasi (markaz, biroz yuqoriroq).
-  if (cx < videoW * 0.20 || cx > videoW * 0.80) return false;
-  if (cy < videoH * 0.18 || cy > videoH * 0.58) return false;
-  // Box ovalga sig‘ishi kerak — juda past/yuqori emas.
-  if (box.y < videoH * 0.02 || box.y + box.height > videoH * 0.78) return false;
+  // Markaziy oval zonasi (viewport object-position bilan mos).
+  if (cx < videoW * 0.18 || cx > videoW * 0.82) return { ok: false, reason: 'partial' };
+  if (cy < videoH * 0.22 || cy > videoH * 0.62) return { ok: false, reason: 'partial' };
+  if (box.y < videoH * 0.04 || box.y + box.height > videoH * 0.82) return { ok: false, reason: 'partial' };
 
-  if (!landmarks || landmarks.length < 68) return false;
+  if (!landmarks || landmarks.length < 68) return { ok: false, reason: 'partial' };
   const leftEye = avgPoint(landmarks, 36, 41);
   const rightEye = avgPoint(landmarks, 42, 47);
   const nose = landmarks[30]!;
@@ -144,20 +157,30 @@ export function faceQualityOk(
   const mouth = avgPoint(landmarks, 48, 54);
   const eyeY = (leftEye.y + rightEye.y) / 2;
   const eyeSpan = Math.abs(rightEye.x - leftEye.x);
-  if (eyeSpan < box.width * 0.22) return false;
+  if (eyeSpan < box.width * 0.18) return { ok: false, reason: 'partial' };
 
   const rel = (y: number) => (y - box.y) / Math.max(1, box.height);
   const eyeR = rel(eyeY);
   const noseR = rel(nose.y);
   const mouthR = rel(mouth.y);
   const chinR = rel(chin.y);
-  // To‘liq yuz: ko‘zlar yuqorida, og‘iz/chin pastda. Faqat peshona bo‘lsa chin pastga tushmaydi.
-  if (eyeR < 0.12 || eyeR > 0.48) return false;
-  if (noseR < 0.28 || noseR > 0.68) return false;
-  if (mouthR < 0.48 || mouthR > 0.88) return false;
-  if (chinR < 0.78 || chinR > 1.12) return false;
-  if (!(eyeY < nose.y && nose.y < mouth.y && mouth.y < chin.y)) return false;
-  return true;
+  if (eyeR < 0.10 || eyeR > 0.52) return { ok: false, reason: 'partial' };
+  if (noseR < 0.26 || noseR > 0.70) return { ok: false, reason: 'partial' };
+  if (mouthR < 0.46 || mouthR > 0.90) return { ok: false, reason: 'partial' };
+  if (chinR < 0.72 || chinR > 1.15) return { ok: false, reason: 'partial' };
+  if (!(eyeY < nose.y && nose.y < mouth.y && mouth.y < chin.y)) return { ok: false, reason: 'partial' };
+  return { ok: true };
+}
+
+/** @deprecated — faceQualityCheck ishlating */
+export function faceQualityOk(
+  box: { x: number; y: number; width: number; height: number },
+  score: number,
+  landmarks: Point[] | undefined,
+  videoW: number,
+  videoH: number,
+): boolean {
+  return faceQualityCheck(box, score, landmarks, videoW, videoH).ok;
 }
 
 export async function detectFaceDescriptor(video: HTMLVideoElement): Promise<{
@@ -171,7 +194,8 @@ export async function detectFaceDescriptor(video: HTMLVideoElement): Promise<{
   if (!video.videoWidth || video.readyState < 2) {
     return { status: 'searching', descriptor: null, box: null, score: 0 };
   }
-  const options = new api.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.55 });
+  // 320 — telefon selfie uchun barqarorroq framing.
+  const options = new api.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
   const detections = await api.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
   if (!detections.length) return { status: 'searching', descriptor: null, box: null, score: 0 };
   if (detections.length > 1) return { status: 'multi', descriptor: null, box: null, score: 0 };
@@ -179,15 +203,16 @@ export async function detectFaceDescriptor(video: HTMLVideoElement): Promise<{
   const box = hit.detection.box;
   const score = Number(hit.detection.score) || 0;
   const positions = hit.landmarks?.positions;
-  if (!faceQualityOk(
+  const quality = faceQualityCheck(
     { x: box.x, y: box.y, width: box.width, height: box.height },
     score,
     positions,
     video.videoWidth,
     video.videoHeight,
-  )) {
+  );
+  if (!quality.ok) {
     return {
-      status: 'partial',
+      status: quality.reason,
       descriptor: null,
       box: { x: box.x, y: box.y, width: box.width, height: box.height },
       score,
