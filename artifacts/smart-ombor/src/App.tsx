@@ -498,68 +498,50 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => { document.body.classList.toggle('nav-open', open); return () => document.body.classList.remove('nav-open'); }, [open]);
 
-  const homeHref = has('dashboard')
-    ? '/dashboard'
-    : homeForRole(role, permissions);
-  const workHref = showOfficeMenu
-    ? '/office'
-    : has('my_cabinet')
-      ? cabinetHref
-      : has('products')
-        ? '/products'
-        : has('employees')
-          ? '/employees'
-          : homeHref;
-  const workKey: TKey = showOfficeMenu
-    ? 'nav.office'
-    : has('my_cabinet')
-      ? 'nav.myCabinet'
-      : has('products')
-        ? 'nav.products'
-        : has('employees')
-          ? 'nav.employees'
-          : 'nav.dashboard';
-  const toolHref = has('gps')
-    ? '/gps'
-    : has('scanner')
-      ? '/scanner'
-      : has('partners')
-        ? '/partners'
-        : has('stock')
-          ? '/stock'
-          : homeHref;
-  const toolKey: TKey = has('gps')
-    ? 'nav.gps'
-    : has('scanner')
-      ? 'nav.scanner'
-      : has('partners')
-        ? 'nav.partners'
-        : has('stock')
-          ? 'nav.stock'
-          : 'nav.dashboard';
-  const WorkIcon = showOfficeMenu
-    ? Fingerprint
-    : has('my_cabinet')
-      ? Gauge
-      : has('products')
-        ? Package
-        : has('employees')
-          ? Users
-          : LayoutDashboard;
-  const ToolIcon = has('gps')
-    ? MapPin
-    : has('scanner')
-      ? ScanBarcode
-      : has('partners')
-        ? Handshake
-        : has('stock')
-          ? Warehouse
-          : LayoutDashboard;
+  /**
+   * Pastki dock: 3 ta unique sahifa + Boshqalar.
+   * Bir xil href ikki marta chiqmasin (masalan partners → «Smart Ombor» + «Hamkor»).
+   * brand.name hech qachon dock label bo‘lmasin.
+   */
+  type DockItem = { href: string; key: TKey; Icon: typeof LayoutDashboard; testId: string };
+  const dockCandidates: DockItem[] = [];
+  if (has('dashboard')) dockCandidates.push({ href: '/dashboard', key: 'nav.dashboard', Icon: LayoutDashboard, testId: 'dock-home' });
+  if (has('partners')) dockCandidates.push({ href: '/partners', key: 'nav.partners', Icon: Handshake, testId: 'dock-partners' });
+  if (showOfficeMenu) dockCandidates.push({ href: '/office', key: 'nav.office', Icon: Fingerprint, testId: 'dock-office' });
+  else if (has('my_cabinet')) dockCandidates.push({ href: cabinetHref, key: 'nav.myCabinet', Icon: Gauge, testId: 'dock-cabinet' });
+  if (has('gps')) dockCandidates.push({ href: '/gps', key: 'nav.gps', Icon: MapPin, testId: 'dock-gps' });
+  if (has('scanner')) dockCandidates.push({ href: '/scanner', key: 'nav.scanner', Icon: ScanBarcode, testId: 'dock-scanner' });
+  if (has('products')) dockCandidates.push({ href: '/products', key: 'nav.products', Icon: Package, testId: 'dock-products' });
+  if (has('stock')) dockCandidates.push({ href: '/stock', key: 'nav.stock', Icon: Warehouse, testId: 'dock-stock' });
+  if (has('employees')) dockCandidates.push({ href: '/employees', key: 'nav.employees', Icon: Users, testId: 'dock-employees' });
+
+  const dockLinks: DockItem[] = [];
+  const dockUsed = new Set<string>();
+  for (const item of dockCandidates) {
+    if (dockUsed.has(item.href)) continue;
+    dockUsed.add(item.href);
+    dockLinks.push(item);
+    if (dockLinks.length >= 3) break;
+  }
+  // Kamida 1 ta bo‘lsin
+  if (!dockLinks.length) {
+    const fallbackHref = homeForRole(role, permissions);
+    const fallbackNav = navigation.find((n) => n.href === fallbackHref);
+    dockLinks.push({
+      href: fallbackHref,
+      key: (fallbackNav?.key || 'nav.myCabinet') as TKey,
+      Icon: fallbackNav?.icon || Gauge,
+      testId: 'dock-home',
+    });
+  }
+
   const dockActive = (href: string) => {
     if (href === '/office') return path === '/office' || path.startsWith('/office/');
     if (href === '/kpi' || href === '/my-kpi') return path === href || path.startsWith(`${href}/`);
     return path === href;
   };
+  // Faqat BITTA dock band aktiv (birinchi mos kelgan)
+  const activeDockHref = dockLinks.find((item) => dockActive(item.href))?.href || null;
   const showMobileDock = !isAgentRole(role);
 
   return <div className={`app ${effectiveRail ? 'is-rail' : ''} ${showMobileDock ? 'has-mobile-dock' : ''}`}>
@@ -631,35 +613,28 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
     </div>
     {showMobileDock ? (
       <nav className="app-mobile-dock" aria-label={t('brand.name')} data-testid="app-mobile-dock">
-        <Link
-          href={homeHref}
-          className={`app-dock-item ${dockActive(homeHref) ? 'is-active' : ''}`}
-          data-testid="dock-home"
-        >
-          <LayoutDashboard strokeWidth={1.9} />
-          <span>{t(has('dashboard') ? 'nav.dashboard' : 'brand.name')}</span>
-        </Link>
-        <Link
-          href={workHref}
-          className={`app-dock-item ${dockActive(workHref) ? 'is-active' : ''}`}
-          data-testid="dock-work"
-        >
-          <WorkIcon strokeWidth={1.9} />
-          <span>{t(workKey)}</span>
-        </Link>
-        <Link
-          href={toolHref}
-          className={`app-dock-item ${dockActive(toolHref) ? 'is-active' : ''}`}
-          data-testid="dock-tool"
-        >
-          <ToolIcon strokeWidth={1.9} />
-          <span>{t(toolKey)}</span>
-        </Link>
+        {dockLinks.map((item) => {
+          const Icon = item.Icon;
+          const active = activeDockHref === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`app-dock-item ${active ? 'is-active' : ''}`}
+              data-testid={item.testId}
+              aria-current={active ? 'page' : undefined}
+            >
+              <Icon strokeWidth={1.9} />
+              <span>{t(item.key)}</span>
+            </Link>
+          );
+        })}
         <button
           type="button"
-          className={`app-dock-item ${open || inMore ? 'is-active' : ''}`}
+          className={`app-dock-item ${open ? 'is-active' : ''}`}
           onClick={() => setOpen(true)}
           data-testid="dock-menu"
+          aria-expanded={open}
         >
           <Menu strokeWidth={1.9} />
           <span>{t('nav.more')}</span>

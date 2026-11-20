@@ -948,17 +948,24 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     justify-items: center;
     align-content: center;
     gap: .12rem;
+    flex: 1 1 0;
     min-width: 0;
     min-height: 3.15rem;
     padding: .2rem .15rem;
+    border: 0;
     border-radius: .75rem;
+    background: transparent;
     color: var(--muted);
+    font: inherit;
     font-size: .68rem;
     font-weight: 700;
     letter-spacing: .01em;
+    text-decoration: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
+    cursor: pointer;
   }
+  a.app-dock-item { color: var(--muted); }
   .app-dock-item span {
     max-width: 100%;
     overflow: hidden;
@@ -966,7 +973,8 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
     white-space: nowrap;
   }
   .app-dock-item svg { width: 1.25rem; height: 1.25rem; }
-  .app-dock-item.is-active {
+  .app-dock-item.is-active,
+  a.app-dock-item.is-active {
     color: var(--brand-ink);
     background: var(--brand-soft);
   }
