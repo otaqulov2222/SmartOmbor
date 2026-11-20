@@ -878,9 +878,10 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 @media (max-width: 900px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
-    --dock-h: 3.85rem;
+    --dock-h: 0px;
   }
-  .app.has-mobile-dock { --dock-h: 3.85rem; }
+  /* Asosiy ilova pastki docksiz — faqat yon menyu. Agent portal o‘z dockiga ega. */
+  .app.has-mobile-dock { --dock-h: 0px; }
   .app:has(.ag-mobile-dock),
   .app:has(.rm-card.is-fullscreen) { --dock-h: 0px; }
   html { overflow-x: clip; }
@@ -914,26 +915,11 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
   }
 
   /* App-like bottom tab bar */
-  .app-mobile-dock {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 42;
-    height: calc(var(--dock-h) + var(--safe-bottom));
-    padding: .28rem .35rem var(--safe-bottom);
-    background: rgb(255 255 255 / .96);
-    border-top: 1px solid var(--line);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 -10px 28px rgb(15 27 45 / .08);
-  }
+  .app-mobile-dock { display: none !important; }
   .app:has(.ag-mobile-dock) .app-mobile-dock,
   .app:has(.rm-card.is-fullscreen) .app-mobile-dock,
   .app:has(.office-stage) .app-mobile-dock {
-    display: none;
+    display: none !important;
   }
   .app:has(.office-stage),
   .app:has(.rm-card.is-fullscreen) { --dock-h: 0px; }
