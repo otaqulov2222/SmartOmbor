@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Banknote, CalendarRange, Download, ExternalLink, Gauge, Handshake,
+  Banknote, CalendarRange, Download, Gauge, Handshake,
   Pencil, RefreshCw, Trash2, Users, Wallet, X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -505,7 +505,8 @@ export function KpiDashboardPage() {
     queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`),
     refetchInterval: (query) => {
       const rows = query.state.data;
-      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 800;
+      // 800ms → MS/API ni urib tashlamasin; warm paytida 2.5s yetarli.
+      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 2500;
       return false;
     },
   });
@@ -525,7 +526,7 @@ export function KpiDashboardPage() {
     ),
     refetchInterval: (query) => {
       const st = query.state.data?.msStatus;
-      if (st === 'warming' || st === 'stale') return 1000;
+      if (st === 'warming' || st === 'stale') return 2500;
       return false;
     },
   });
@@ -572,9 +573,6 @@ export function KpiDashboardPage() {
           <div className="kpi-dash-title-row">
             <h1>KPI boshqaruv</h1>
           </div>
-        </div>
-        <div className="kpi-actions">
-          <a className="btn" href="/agent" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Agent portal</a>
         </div>
       </header>
       <PeriodBar
@@ -791,7 +789,7 @@ function AgentsSection({
     queryFn: () => kpiFetch<Agent[]>(`/kpi/agents${qs}`),
     refetchInterval: (query) => {
       const rows = query.state.data;
-      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 800;
+      if (rows?.some((a) => a.msStatus === 'warming' || a.msStatus === 'stale')) return 2500;
       return false;
     },
   });

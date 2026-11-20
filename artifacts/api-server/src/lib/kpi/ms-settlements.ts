@@ -127,6 +127,43 @@ const warming = new Map<string, Promise<void>>();
 const enriching = new Map<string, Promise<void>>();
 /** Ochilgan agent modal — enrich navbatida birinchi. */
 let enrichPriorityLogin = "";
+/**
+ * Bir vaqtda faqat BITTA period isitiladi.
+ * Eng so‘nggi so‘ralgan period ustun — eski navbatdagi days30/quarter «Shu oy»ni bloklamaydi.
+ */
+let warmGate: Promise<void> = Promise.resolve();
+let warmGeneration = 0;
+let preferredWarmKey = "";
+/** Settlements kerak emas (admin / ofis). */
+const SKIP_SETTLE_LOGINS = new Set([
+  "ofis",
+  "vanseling",
+  "bordouzadmin",
+  "bordoomboradmin",
+  "administrator",
+  "admin",
+]);
+
+function isSkipSettleLogin(login: string) {
+  return SKIP_SETTLE_LOGINS.has(foldName(login).replace(/\s+/g, ""));
+}
+
+function isWarmSuperseded(key: string, gen: number) {
+  return preferredWarmKey !== key && gen !== warmGeneration;
+}
+
+/** Summary da hali hisoblanmagan agent bormi — «fresh» bo‘lsa ham isitish kerak. */
+function summaryMissingAgents(
+  byLogin: Record<string, AgentSettlement> | undefined,
+  agents: Array<{ login: string }>,
+) {
+  if (!byLogin) return true;
+  for (const a of agents) {
+    if (isSkipSettleLogin(a.login)) continue;
+    if (!byLogin[a.login.toLowerCase()]) return true;
+  }
+  return false;
+}
 
 function ensureCacheDir() {
   try {
@@ -648,6 +685,9 @@ async function computeOneAgentFast(input: {
   to: string;
   msTag?: string;
 }): Promise<AgentSettlement> {
+  if (isSkipSettleLogin(input.login)) {
+    return emptySettlement(input);
+  }
   const started = Date.now();
   agentFastActive += 1;
   enrichPriorityLogin = foldName(input.login);
@@ -967,8 +1007,8 @@ function startEnrichBackground(
 }
 
 /**
- * Fon isitish: agentlarni KETMA-KET hisoblaydi (parallel emas).
- * Global ombor skani yo‘q — Render 460MB / MS limit uchun.
+ * Fon isitish: agentlar 2 parallel; periodlar GLOBAL navbat + so‘nggi so‘rov ustun.
+ * Eski kesh HECH QACHON «bo‘sh UI» uchun o‘chirilmaydi (qarang: refreshMsSettlements).
  */
 export function warmMsSettlements(
   agents: Array<{ login: string; fullName: string; msTag?: string }>,
@@ -981,34 +1021,72 @@ export function warmMsSettlements(
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   const key = `${from}:${to}`;
   const existing = peekSummary(from, to);
-  if (!force && existing && Date.now() - existing.at < FRESH_MS) return Promise.resolve();
+  const settleAgents = agents.filter((a) => !isSkipSettleLogin(a.login));
+  const incomplete = summaryMissingAgents(existing?.byLogin, settleAgents);
+  // To‘liq va yangi kesh — qayta isitma. Qisman kesh bo‘lsa — yetishmaganlarni to‘ldir.
+  if (!force && existing && Date.now() - existing.at < FRESH_MS && !incomplete) {
+    return Promise.resolve();
+  }
   const inflight = warming.get(key);
-  if (inflight) return inflight;
+  if (inflight) {
+    preferredWarmKey = key;
+    warmGeneration += 1;
+    return inflight;
+  }
 
+  preferredWarmKey = key;
+  const myGen = ++warmGeneration;
   const job = (async () => {
-    const remaining = [...agents];
-    const takeNext = () => {
-      const prefer = enrichPriorityLogin;
-      let idx = prefer ? remaining.findIndex((a) => foldName(a.login) === prefer) : 0;
-      if (idx < 0) idx = 0;
-      return remaining.splice(idx, 1)[0];
-    };
-    // 2 agent parallel — ro‘yxat tez to‘ladi, MS limitni yemaydi.
-    const workers = Array.from({ length: Math.min(2, Math.max(agents.length, 1)) }, async () => {
-      while (remaining.length) {
-        const agent = takeNext();
-        if (!agent) return;
-        await waitForAgentFastSlot(agent.login);
-        await ensureAgentSettlement({
-          login: agent.login,
-          fullName: agent.fullName,
-          msTag: agent.msTag,
-          from,
-          to,
-        });
-      }
+    const prev = warmGate;
+    let release!: () => void;
+    warmGate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    await Promise.all(workers);
+    await prev.catch(() => undefined);
+    try {
+      if (isWarmSuperseded(key, myGen)) {
+        logger.info({ from, to }, "ms-settlements warm skipped — newer period preferred");
+        return;
+      }
+      const already = peekSummary(from, to)?.byLogin || {};
+      const remaining = settleAgents.filter((a) => force || !already[a.login.toLowerCase()]);
+      logger.info(
+        { from, to, agents: settleAgents.length, todo: remaining.length },
+        "ms-settlements warm start",
+      );
+      if (!remaining.length) return;
+      const takeNext = () => {
+        const prefer = enrichPriorityLogin;
+        let idx = prefer ? remaining.findIndex((a) => foldName(a.login) === prefer) : 0;
+        if (idx < 0) idx = 0;
+        return remaining.splice(idx, 1)[0];
+      };
+      const workers = Array.from({ length: Math.min(2, Math.max(remaining.length, 1)) }, async () => {
+        while (remaining.length) {
+          if (isWarmSuperseded(key, myGen)) {
+            remaining.length = 0;
+            logger.info({ from, to }, "ms-settlements warm aborted — newer period preferred");
+            return;
+          }
+          const agent = takeNext();
+          if (!agent) return;
+          await waitForAgentFastSlot(agent.login);
+          await ensureAgentSettlement({
+            login: agent.login,
+            fullName: agent.fullName,
+            msTag: agent.msTag,
+            from,
+            to,
+          });
+        }
+      });
+      await Promise.all(workers);
+      if (!isWarmSuperseded(key, myGen)) {
+        logger.info({ from, to }, "ms-settlements warm done");
+      }
+    } finally {
+      release();
+    }
   })()
     .then(() => undefined)
     .catch((error) => {
@@ -1108,8 +1186,8 @@ export async function probeAgentMsTag(input: {
 }
 
 /**
- * Soft refresh: eski raqamlar ekranda qoladi, yangisi tayyor bo‘lgach almashtiriladi.
- * Disk o‘chirilmaydi — UI nollanmaydi.
+ * Soft refresh: eski summary ekranda qoladi; faqat agent cache + movements yangilanadi.
+ * Summary/diskni o‘chirmaymiz — aks holda Boshqaruv daqiqalarlab «…» bo‘lib qoladi.
  */
 export async function refreshMsSettlements(
   agents: Array<{ login: string; fullName: string; msTag?: string }>,
@@ -1118,20 +1196,13 @@ export async function refreshMsSettlements(
   priorityLogin?: string,
 ) {
   if (!moyskladConfigured()) return;
-  // Eski noto‘g‘ri Kirim qolmasin — RAM + disk movements/summary periodini tozalash.
-  summaryMem.delete(`${from}:${to}`);
   for (const k of [...settlementsCache.keys()]) {
     if (k.endsWith(`:${from}:${to}`)) settlementsCache.delete(k);
   }
   for (const k of [...movementCache.keys()]) {
     if (k.startsWith(`${from}:${to}`)) movementCache.delete(k);
   }
-  try {
-    unlinkQuiet(movementsPath(from, to));
-    unlinkQuiet(summaryPath(from, to));
-  } catch {
-    /* ignore */
-  }
+  unlinkQuiet(movementsPath(from, to));
   if (priorityLogin) enrichPriorityLogin = foldName(priorityLogin);
   await warmMsSettlements(agents, from, to, true, priorityLogin);
 }
@@ -1160,16 +1231,18 @@ export async function getAgentsMsSettlementSummaries(
         cached.byLogin[agent.login.toLowerCase()] || emptySettlement({ ...agent, from, to }),
       );
     }
-    if (busy || age >= FRESH_MS) {
-      if (age >= FRESH_MS && !warming.has(key)) void warmMsSettlements(agents, from, to, true);
-      return { map: out, status: "stale" };
+    const incomplete = summaryMissingAgents(cached.byLogin, agents);
+    if (busy || age >= FRESH_MS || incomplete) {
+      // Qisman kesh yoki eskirgan — fonda to‘ldiramiz; ekrandagi bor raqamlar saqlanadi.
+      if (!warming.has(key)) void warmMsSettlements(agents, from, to, false);
+      return { map: out, status: incomplete || busy ? "warming" : "stale" };
     }
     return { map: out, status: "ready" };
   }
 
   // Modal ochilishiga yo‘l berish — warm biroz kechiktiriladi.
   setTimeout(() => {
-    void warmMsSettlements(agents, from, to, true);
+    void warmMsSettlements(agents, from, to, false);
   }, 400);
   for (const agent of agents) {
     const login = agent.login.toLowerCase();

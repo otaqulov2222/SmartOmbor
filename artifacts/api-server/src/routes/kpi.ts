@@ -70,10 +70,11 @@ router.post("/kpi/sync", requireKpiAdmin(), async (req, res, next) => {
     await ensureTargetStages();
     const result = await syncKpiFromMoySklad(true, period);
     const agents = await db.select().from(kpiAgentsTable);
+    const skipSettle = new Set(["ofis", "vanseling", "bordouzadmin", "bordoomboradmin", "administrator", "admin"]);
     const settleAgents = agents
-      .filter((a) => a.login !== "ofis" && a.login !== "vanseling")
+      .filter((a) => !skipSettle.has(a.login.toLowerCase().replace(/\s+/g, "")))
       .map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag }));
-    // Fondа yangilanadi — UI eski to‘liq raqamlarni ko‘rsatishda davom etadi, keyin almashtiriladi.
+    // Soft refresh: eski summary saqlanadi, UI «…» bo‘lmaydi.
     void refreshMsSettlements(settleAgents, period.from, period.to).catch(() => undefined);
     res.json({ ok: true, ...result, preset: period.preset, label: period.label, msSettlements: "warming" });
   } catch (error) {
@@ -512,7 +513,7 @@ router.get("/kpi/agents", requireKpiAdmin(), async (req, res, next) => {
         && a.login !== "vanseling"
         && (includeInactive || a.status === "active"),
     );
-    // Cache'dan darhol; MS skani fonda (UI millisekundda).
+    // Cache'dan darhol; MS skani fonda. Summary hech qachon bo‘sh UI uchun o‘chirilmaydi.
     const settled = await getAgentsMsSettlementSummaries(
       agents.map((a) => ({ login: a.login, fullName: a.fullName, msTag: a.msTag })),
       period.from,
