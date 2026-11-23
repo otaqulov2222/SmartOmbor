@@ -670,7 +670,8 @@ export function linkShipmentLine(shipmentId: string, lineId: string, product: { 
   return shipmentView(shipment);
 }
 
-export function clearShipmentPosted(shipmentId: string) {
+/** MS bog‘lanishini uzish. Default: status → sent (qayta kirim mumkin). */
+export function clearShipmentPosted(shipmentId: string, opts?: { reopen?: boolean }) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -678,6 +679,9 @@ export function clearShipmentPosted(shipmentId: string) {
   shipment.moyskladNumber = null;
   shipment.postedUnits = null;
   shipment.postedUnitsTotal = null;
+  if (opts?.reopen !== false && shipment.status === "accepted") {
+    shipment.status = "sent";
+  }
   save(store);
   return shipmentView(shipment);
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { dataFile } from "../lib/data-dir";
 import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, catalogForRead, compactCode, findProductsByLabel, lastNumericToken, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
-import { buildSupplyPositions, pieceCount, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
+import { buildSupplyPositions, ensurePachka, packSizeOf, pieceCount, productPackSize, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
 import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
@@ -393,10 +393,10 @@ async function fillZeroSupplyPrices(supplyId: string, lines: Array<{ factoryCode
 }
 
 /**
- * HARD GUARD: MoySklad kirim = yuk xati (orta/ortiqcha/kam — hech qaysisi yo‘q).
- * - jami dona
- * - qatorlar soni
- * - miqdorlar to‘plami (sorted multiset)
+ * HARD GUARD: MoySklad kirim = yuk xati.
+ * - jami dona + qator soni + miqdor multiset
+ * - hujjat o‘chirilmagan / o‘tkazilgan (applicable)
+ * - agent + store + organization majburiy
  */
 async function verifySupplyQuantities(
   supplyId: string,
@@ -443,19 +443,87 @@ async function verifySupplyQuantities(
   return actualTotal;
 }
 
+type SupplyDocMeta = {
+  id: string;
+  name?: string;
+  deleted?: string | boolean;
+  applicable?: boolean;
+  agent?: { name?: string; meta?: unknown } | null;
+  store?: { name?: string; meta?: unknown } | null;
+  organization?: { name?: string; meta?: unknown } | null;
+};
+
+async function forceSupplyApplicable(supplyId: string) {
+  await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: true }, "PUT");
+}
+
+async function verifySupplyIntegrity(
+  supplyId: string,
+  expectedPositions: Array<{ quantity: number }>,
+) {
+  let doc = await moysklad<SupplyDocMeta>(
+    `/entity/supply/${encodeURIComponent(supplyId)}?expand=agent,organization,store`,
+  );
+  if (doc.deleted) {
+    throw Object.assign(new Error("supply_deleted"), {
+      status: 502,
+      detail: "MoySklad kirim o‘chirilgan (korzina). Lokal bog‘lanish uziladi.",
+    });
+  }
+  if (doc.applicable === false) {
+    try {
+      await forceSupplyApplicable(supplyId);
+      doc = await moysklad<SupplyDocMeta>(
+        `/entity/supply/${encodeURIComponent(supplyId)}?expand=agent,organization,store`,
+      );
+    } catch (error) {
+      throw Object.assign(new Error("supply_not_applicable"), {
+        status: 502,
+        detail: `MoySklad kirim o‘tkazilmadi: ${error instanceof Error ? error.message : "applicable"}`,
+      });
+    }
+  }
+  if (doc.applicable === false) {
+    throw Object.assign(new Error("supply_not_applicable"), {
+      status: 502,
+      detail: "MoySklad kirim hali o‘tkazilmagan (applicable=yo‘q). Kirim tasdiqlanmadi.",
+    });
+  }
+  if (!doc.agent) {
+    throw Object.assign(new Error("agent"), {
+      status: 502,
+      detail: "MoySklad kirimda kontragent (agent) yo‘q. Kirim tasdiqlanmadi.",
+    });
+  }
+  if (!doc.store) {
+    throw Object.assign(new Error("store"), {
+      status: 502,
+      detail: "MoySklad kirimda ombor (store) yo‘q. Kirim tasdiqlanmadi.",
+    });
+  }
+  if (!doc.organization) {
+    throw Object.assign(new Error("currency"), {
+      status: 502,
+      detail: "MoySklad kirimda tashkilot (organization) yo‘q. Kirim tasdiqlanmadi.",
+    });
+  }
+  const total = await verifySupplyQuantities(supplyId, expectedPositions);
+  return { total, doc };
+}
+
 async function assertSupplyMatchesOrRollback(
   supplyId: string,
   expectedPositions: Array<{ quantity: number }>,
   meta: { shipmentId: string; allowDelete: boolean },
 ) {
   try {
-    return await verifySupplyQuantities(supplyId, expectedPositions);
+    return await verifySupplyIntegrity(supplyId, expectedPositions);
   } catch (error) {
     logger.error({
       shipment: meta.shipmentId,
       supply: supplyId,
       err: error instanceof Error ? error.message : error,
-    }, "MoySklad kirim qty verify failed — rolling back");
+    }, "MoySklad kirim integrity verify failed — rolling back");
     if (meta.allowDelete) {
       try {
         await deleteSupplyDocument(supplyId);
@@ -467,6 +535,120 @@ async function assertSupplyMatchesOrRollback(
       }
     }
     throw error;
+  }
+}
+
+/** Sticky moyskladId: MS o‘chirilgan/buzilgan bo‘lsa uziladi → qayta kirim mumkin. */
+async function ensureLinkedSupplyOrClear(shipment: {
+  id: string;
+  number: string;
+  moyskladId?: string | null;
+  moyskladNumber?: string | null;
+  lines: Array<{ pairs: number; boxes: number; quantity: number; colors?: Array<{ quantity: number }>; pachka?: number; productId?: string | null }>;
+  postedUnitsTotal?: number | null;
+}): Promise<{ id: string; name: string } | null> {
+  const supplyId = String(shipment.moyskladId || "").trim();
+  if (!supplyId) return null;
+  try {
+    const doc = await moysklad<SupplyDocMeta>(
+      `/entity/supply/${encodeURIComponent(supplyId)}?expand=agent,organization,store`,
+    );
+    if (doc.deleted) {
+      logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply deleted — clearing local post");
+      clearShipmentPosted(shipment.id);
+      supplyLookup.delete(shipment.id);
+      return null;
+    }
+    const page = await moyskladAll<{ quantity?: number }>(
+      `/entity/supply/${encodeURIComponent(supplyId)}/positions`,
+    );
+    const actualTotal = page.rows.reduce((sum, row) => sum + Math.round(Number(row.quantity) || 0), 0);
+    const expectedTotal = shipment.postedUnitsTotal != null && shipment.postedUnitsTotal > 0
+      ? Math.round(Number(shipment.postedUnitsTotal))
+      : shipment.lines.reduce((sum, line) => sum + lineUnits({
+        pairs: Number(line.pairs) || 0,
+        boxes: Number(line.boxes) || 0,
+        quantity: Number(line.quantity) || 0,
+        colors: Array.isArray(line.colors) ? line.colors.map((c) => ({ quantity: Number(c.quantity) || 0 })) : [],
+      }), 0);
+    const broken =
+      !doc.agent
+      || !doc.store
+      || !doc.organization
+      || page.rows.length === 0
+      || (expectedTotal > 0 && actualTotal !== expectedTotal)
+      || doc.applicable === false;
+    if (broken) {
+      if (doc.applicable === false && doc.agent && doc.store && doc.organization && actualTotal === expectedTotal && actualTotal > 0) {
+        try {
+          await forceSupplyApplicable(supplyId);
+          const again = await moysklad<SupplyDocMeta>(`/entity/supply/${encodeURIComponent(supplyId)}`);
+          if (again.applicable !== false && !again.deleted) {
+            return { id: supplyId, name: doc.name || shipment.moyskladNumber || shipment.number };
+          }
+        } catch (error) {
+          logger.warn({ shipment: shipment.id, supply: supplyId, err: error instanceof Error ? error.message : error }, "Linked supply applicable fix failed");
+        }
+      }
+      logger.warn({
+        shipment: shipment.id,
+        supply: supplyId,
+        actualTotal,
+        expectedTotal,
+        positions: page.rows.length,
+        applicable: doc.applicable,
+        hasAgent: Boolean(doc.agent),
+        hasStore: Boolean(doc.store),
+        hasOrg: Boolean(doc.organization),
+      }, "Linked MS supply unhealthy — clearing for repost");
+      clearShipmentPosted(shipment.id);
+      supplyLookup.delete(shipment.id);
+      return null;
+    }
+    return { id: supplyId, name: doc.name || shipment.moyskladNumber || shipment.number };
+  } catch (error) {
+    if (supplyGone(error) || (error instanceof MoySkladError && error.status === 404)) {
+      logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply gone — clearing local post");
+      clearShipmentPosted(shipment.id);
+      supplyLookup.delete(shipment.id);
+      return null;
+    }
+    logger.warn({
+      shipment: shipment.id,
+      supply: supplyId,
+      err: error instanceof Error ? error.message : error,
+    }, "Linked MS supply health check failed");
+    // Xavfsiz tomon: sticky broken ID ni ushlab qolmaslik
+    clearShipmentPosted(shipment.id);
+    supplyLookup.delete(shipment.id);
+    return null;
+  }
+}
+
+async function ensureLinePachkas(
+  lines: Array<{ productId?: string | null; pachka?: number; pairs?: number; productCode?: string }>,
+) {
+  const issues: string[] = [];
+  for (const line of lines) {
+    const want = packSizeOf({ pachka: line.pachka, pairs: line.pairs });
+    const productId = String(line.productId || "").trim();
+    if (!(want > 1) || !productId) continue;
+    try {
+      await ensurePachka(productId, want);
+      const actual = await productPackSize(productId);
+      if (actual !== want) {
+        issues.push(`${line.productCode || productId}: pachka ${want}≠${actual}`);
+      }
+    } catch (error) {
+      issues.push(`${line.productCode || productId}: pachka yozilmadi`);
+      logger.warn({ productId, want, err: error instanceof Error ? error.message : error }, "ensureLinePachkas failed");
+    }
+  }
+  if (issues.length) {
+    throw Object.assign(new Error("pachka_mismatch"), {
+      status: 502,
+      detail: `Pachka mos emas: ${issues.slice(0, 4).join("; ")}`,
+    });
   }
 }
 
@@ -759,7 +941,7 @@ async function runSupplyJob(
       moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
       parameter: error instanceof MoySkladError ? error.parameter : undefined,
     }, "MoySklad supply failed");
-    const code = codeRaw === "store" || codeRaw === "agent" || codeRaw === "currency" || codeRaw === "declined" || codeRaw === "pairs_suspect" || codeRaw === "qty_mismatch"
+    const code = codeRaw === "store" || codeRaw === "agent" || codeRaw === "currency" || codeRaw === "declined" || codeRaw === "pairs_suspect" || codeRaw === "qty_mismatch" || codeRaw === "pachka_mismatch" || codeRaw === "supply_deleted" || codeRaw === "supply_not_applicable"
       ? codeRaw
       : "rejected";
     setSupplyJob(shipmentId, { status: "error", error: code, detail, storeId });
@@ -771,13 +953,21 @@ export function resumePendingSupplies() {
   for (const [id, job] of supplyJobs) {
     if (job.status !== "pending") continue;
     const shipment = listShipments().find((item) => item.id === id);
-    if (!shipment || shipment.moyskladId) {
-      if (shipment?.moyskladId) {
-        setSupplyJob(id, { status: "done", result: { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true } });
-      } else {
-        supplyJobs.delete(id);
-        persistSupplyJobs();
-      }
+    if (!shipment) {
+      supplyJobs.delete(id);
+      persistSupplyJobs();
+      continue;
+    }
+    if (shipment.moyskladId) {
+      void ensureLinkedSupplyOrClear(shipment).then((healthy) => {
+        if (healthy) {
+          const fresh = listShipments().find((item) => item.id === id) ?? shipment;
+          setSupplyJob(id, { status: "done", result: { id: healthy.id, number: healthy.name, shipment: fresh, already: true } });
+          return;
+        }
+        logger.info({ shipment: id }, "Resume pending MoySklad kirim after cleared sticky link");
+        void runSupplyJob(id, job.storeId || "", job.counterpartyId ? { id: job.counterpartyId, name: job.counterpartyName || "" } : undefined);
+      });
       continue;
     }
     logger.info({ shipment: id }, "Resume pending MoySklad kirim");
@@ -937,11 +1127,20 @@ async function writeShipmentSupply(
     logger.info({ shipment: shipmentId, step, ms: Date.now() - started, totalMs: Date.now() - t0 }, "MoySklad kirim timing");
   };
   try {
-    const shipment = listShipments().find((item) => item.id === shipmentId);
+    let shipment = listShipments().find((item) => item.id === shipmentId);
     if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
     if (shipment.status === "declined") throw Object.assign(new Error("declined"), { status: 409 });
     if (shipment.moyskladId) {
-      return { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true };
+      const healthy = await ensureLinkedSupplyOrClear(shipment);
+      if (healthy) {
+        const freshPosted = listShipments().find((item) => item.id === shipmentId) ?? shipment;
+        return { id: healthy.id, number: healthy.name, shipment: freshPosted, already: true };
+      }
+      shipment = listShipments().find((item) => item.id === shipmentId);
+      if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+      if (shipment.moyskladId) {
+        return { id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment, already: true };
+      }
     }
     const account = getAccount(shipment.factoryId);
     let stepAt = Date.now();
@@ -1107,7 +1306,7 @@ async function writeShipmentSupply(
     stepAt = Date.now();
     let created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
     mark("post-supply", stepAt);
-    // HARD GUARD: yangi ham, conflict-reuse ham — MS aniq yuk xatiga teng bo‘lsin
+    // HARD GUARD: qty + agent/store/org + applicable — aks holda rollback
     try {
       await assertSupplyMatchesOrRollback(
         created.id,
@@ -1115,7 +1314,6 @@ async function writeShipmentSupply(
         { shipmentId, allowDelete: true },
       );
     } catch (error) {
-      // Verify fail → hujjat o‘chirilgan. Bir marta qayta yozamiz (reuse/yarim yozuv).
       logger.warn({
         shipment: shipmentId,
         supply: created.id,
@@ -1129,7 +1327,29 @@ async function writeShipmentSupply(
         { shipmentId, allowDelete: true },
       );
     }
-    // Verify OK → darhol mark (UI ochiladi). Agent/narx fonida — 5–10 daqiqa kutishning asosiy sababi shu edi.
+    // Agent majburiy — mark qilishdan OLDIN
+    await ensureSupplyAgent(created.id, agentMeta);
+    // Pachka kartada bo‘lsin (post verify)
+    const linkedFresh = listShipments().find((item) => item.id === shipment.id) ?? current;
+    try {
+      await ensureLinePachkas(linkedFresh.lines.map((line) => ({
+        productId: line.productId,
+        pachka: line.pachka,
+        pairs: line.pairs,
+        productCode: line.productCode,
+      })));
+    } catch (error) {
+      logger.error({ shipment: shipmentId, supply: created.id, err: error instanceof Error ? error.message : error }, "Pachka verify failed — rolling back");
+      try { await deleteSupplyDocument(created.id); } catch { /* ignore */ }
+      throw error;
+    }
+    // Yakuniy integrity (agent yozilgach)
+    await assertSupplyMatchesOrRollback(
+      created.id,
+      supplyPositions,
+      { shipmentId, allowDelete: true },
+    );
+
     const wanted = shipment.number.trim();
     const currentName = (created.name || "").trim();
     const number = currentName || wanted;
@@ -1149,10 +1369,7 @@ async function writeShipmentSupply(
       action: "shipment.posted",
       entityType: "shipment",
       entityId: shipment.id,
-      details: `${number}; units=${waybillUnitsTotal}`,
-    });
-    void ensureSupplyAgent(created.id, agentMeta).catch((error) => {
-      logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply agent deferred failed");
+      details: `${number}; units=${waybillUnitsTotal}; integrity=ok`,
     });
     void fillZeroSupplyPrices(created.id, shipment.lines).catch((error) => {
       logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
@@ -1178,8 +1395,22 @@ function supplyJobPayload(shipmentId: string) {
   return { pending: false, error: "idle" };
 }
 
-router.get("/partner-factories/shipments/:id/supply", (req, res) => {
-  const payload = supplyJobPayload(String(req.params.id));
+function supplyClientError(code: string) {
+  return code === "store" || code === "agent" || code === "currency" || code === "pairs_suspect" || code === "pachka_mismatch";
+}
+
+router.get("/partner-factories/shipments/:id/supply", async (req, res) => {
+  const shipmentId = String(req.params.id);
+  const shipment = listShipments().find((item) => item.id === shipmentId);
+  if (shipment?.moyskladId) {
+    const healthy = await ensureLinkedSupplyOrClear(shipment);
+    if (healthy) {
+      const fresh = listShipments().find((item) => item.id === shipmentId) ?? shipment;
+      res.json({ pending: false, already: true, id: healthy.id, number: healthy.name, shipment: fresh });
+      return;
+    }
+  }
+  const payload = supplyJobPayload(shipmentId);
   if (payload.pending) {
     res.status(202).json(payload);
     return;
@@ -1189,8 +1420,7 @@ router.get("/partner-factories/shipments/:id/supply", (req, res) => {
     return;
   }
   if ("error" in payload && payload.error) {
-    const bad = payload.error === "store" || payload.error === "agent" || payload.error === "currency" || payload.error === "pairs_suspect";
-    res.status(bad ? 400 : 502).json(payload);
+    res.status(supplyClientError(String(payload.error)) ? 400 : 502).json(payload);
     return;
   }
   res.json(payload);
@@ -1198,7 +1428,7 @@ router.get("/partner-factories/shipments/:id/supply", (req, res) => {
 
 router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
   const shipmentId = String(req.params.id);
-  const shipment = listShipments().find((item) => item.id === shipmentId);
+  let shipment = listShipments().find((item) => item.id === shipmentId);
   if (!shipment) {
     res.status(404).json({ error: "not_found" });
     return;
@@ -1208,11 +1438,20 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
     return;
   }
   if (shipment.moyskladId) {
-    res.json({ pending: false, already: true, id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment });
-    return;
+    const healthy = await ensureLinkedSupplyOrClear(shipment);
+    if (healthy) {
+      const fresh = listShipments().find((item) => item.id === shipmentId) ?? shipment;
+      res.json({ pending: false, already: true, id: healthy.id, number: healthy.name, shipment: fresh });
+      return;
+    }
+    shipment = listShipments().find((item) => item.id === shipmentId);
+    if (!shipment) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
   }
   const job = supplyJobs.get(shipmentId);
-  if (job?.status === "done" && job.result) {
+  if (job?.status === "done" && job.result && listShipments().find((item) => item.id === shipmentId)?.moyskladId) {
     res.json({ pending: false, ...job.result });
     return;
   }
@@ -1234,8 +1473,7 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
     const payload = supplyJobPayload(shipmentId);
     if (!payload.pending) {
       if ("error" in payload && payload.error && payload.error !== "idle") {
-        const bad = payload.error === "store" || payload.error === "agent" || payload.error === "currency" || payload.error === "pairs_suspect";
-        res.status(bad ? 400 : 502).json(payload);
+        res.status(supplyClientError(String(payload.error)) ? 400 : 502).json(payload);
         return;
       }
       const { pending: _pending, ...rest } = payload as { pending?: boolean } & Record<string, unknown>;
