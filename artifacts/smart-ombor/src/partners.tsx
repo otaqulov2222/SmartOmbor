@@ -1040,8 +1040,37 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
 
   const setStatus = async (id: string, status: 'accepted' | 'declined' | 'sent') => {
     const path = status === 'accepted' ? 'accept' : status === 'declined' ? 'decline' : 'reopen';
-    await fetch(`/api/partner-factories/shipments/${id}/${path}`, { method: 'POST' });
+    const response = await fetch(`/api/partner-factories/shipments/${id}/${path}`, { method: 'POST' });
+    let body: { autoSupply?: boolean; supplyPending?: boolean; moyskladId?: string | null } | null = null;
+    try { body = await response.json(); } catch { body = null; }
     await refreshShipments();
+    // Qabul qilinganda server o‘zi MoySkladga kirimni boshlaydi — poll qilamiz
+    if (status === 'accepted' && response.ok && body?.autoSupply && !body.moyskladId) {
+      setSupplyingId(id);
+      setPostError('');
+      try {
+        const started = Date.now();
+        while (Date.now() - started < 180_000) {
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          const statusRes = await fetch(`/api/partner-factories/shipments/${id}/supply`);
+          const statusBody = await statusRes.json().catch(() => ({} as Record<string, unknown>));
+          if (statusRes.status === 404) break;
+          if (statusBody.pending) continue;
+          if (statusBody.already || statusBody.id || statusBody.shipment?.moyskladId) {
+            await refreshShipments();
+            break;
+          }
+          if (statusBody.error && statusBody.error !== 'idle') {
+            setPostError(supplyError(statusBody as { error?: string; detail?: string; msAlert?: MsAlert | null }, t));
+            break;
+          }
+          break;
+        }
+      } finally {
+        setSupplyingId(null);
+        await refreshShipments();
+      }
+    }
   };
 
   const removeShipment = async () => {

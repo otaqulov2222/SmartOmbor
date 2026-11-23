@@ -1610,6 +1610,87 @@ function supplyClientError(code: string) {
   return code === "store" || code === "agent" || code === "currency" || code === "pairs_suspect" || code === "pachka_mismatch";
 }
 
+function foldWarehouseName(name: string) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Default ombor: env → «Yangi katta sklad» → yagona ombor → birinchisi. */
+function preferredSupplyStoreId(warehouses: Array<{ id: string; name: string }>) {
+  const envId = (process.env.DEFAULT_SUPPLY_STORE_ID || "").trim();
+  if (envId && warehouses.some((row) => row.id === envId)) return envId;
+  const preferred = warehouses.find((row) => {
+    const label = foldWarehouseName(row.name);
+    return label.includes("янги катта склад") || label.includes("yangi katta sklad");
+  });
+  if (preferred) return preferred.id;
+  if (warehouses.length === 1) return warehouses[0].id;
+  return warehouses[0]?.id || "";
+}
+
+/**
+ * Qabul qilingandan keyin odam qo‘shimcha bosmasin:
+ * default ombor + zavod kontragent → MoySklad kirim avtomatik.
+ */
+async function startAutoSupplyAfterAccept(shipmentId: string) {
+  const shipment = listShipments().find((item) => item.id === shipmentId);
+  if (!shipment || shipment.status === "declined" || shipment.moyskladId) return;
+  if (isSupplyInflight(shipmentId)) return;
+  const existing = supplyJobs.get(shipmentId);
+  if (existing?.status === "pending") return;
+
+  try {
+    const catalog = await loadCatalogForSupply();
+    const storeId = preferredSupplyStoreId(catalog.warehouses || []);
+    if (!storeId) {
+      setSupplyJob(shipmentId, {
+        status: "error",
+        error: "store",
+        detail: "Avtomatik kirim: ombor topilmadi. DEFAULT_SUPPLY_STORE_ID yoki katalog omborlarini tekshiring.",
+        storeId: "",
+      });
+      return;
+    }
+    const account = getAccount(shipment.factoryId);
+    const agent = account
+      ? await resolveFactoryAgent({
+        id: account.id,
+        name: account.name,
+        catalogName: account.catalogName,
+        code: account.code,
+        login: account.login,
+        counterpartyId: account.counterpartyId,
+        counterpartyName: account.counterpartyName,
+      })
+      : null;
+    logger.info({
+      shipment: shipmentId,
+      number: shipment.number,
+      storeId,
+      agent: agent?.name || null,
+    }, "Auto MoySklad kirim after accept");
+    void runSupplyJob(
+      shipmentId,
+      storeId,
+      agent ? { id: agent.id, name: agent.name } : undefined,
+    );
+  } catch (error) {
+    logger.warn({
+      shipment: shipmentId,
+      err: error instanceof Error ? error.message : error,
+    }, "Auto MoySklad kirim start failed");
+    setSupplyJob(shipmentId, {
+      status: "error",
+      error: "rejected",
+      detail: error instanceof Error ? error.message : "Avtomatik kirim boshlanmadi",
+      storeId: "",
+    });
+  }
+}
+
 router.get("/partner-factories/shipments/:id/supply", async (req, res) => {
   const shipmentId = String(req.params.id);
   const shipment = listShipments().find((item) => item.id === shipmentId);
@@ -1696,10 +1777,18 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
     res.json({ pending: false, ...job.result });
     return;
   }
-  const storeId = String(req.body?.storeId ?? "").trim();
+  let storeId = String(req.body?.storeId ?? "").trim();
   const counterpartyId = String(req.body?.counterpartyId ?? "").trim();
   const counterpartyName = String(req.body?.counterpartyName ?? "").trim();
   const confirmPairs = Boolean(req.body?.confirmPairs);
+  if (!storeId) {
+    try {
+      const catalog = await loadCatalogForSupply();
+      storeId = preferredSupplyStoreId(catalog.warehouses || []);
+    } catch {
+      storeId = "";
+    }
+  }
   if (job?.status !== "pending") {
     void runSupplyJob(
       shipmentId,
@@ -1726,11 +1815,18 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
   res.status(202).json({ pending: true });
 });
 
-router.post("/partner-factories/shipments/:id/accept", (req, res) => {
+router.post("/partner-factories/shipments/:id/accept", async (req, res) => {
   try {
-    const accepted = setShipmentStatus(String(req.params.id), "accepted");
-    void recordAudit({ action: "shipment.accepted", entityType: "shipment", entityId: String(req.params.id) });
-    res.json(accepted);
+    const shipmentId = String(req.params.id);
+    const accepted = setShipmentStatus(shipmentId, "accepted");
+    void recordAudit({ action: "shipment.accepted", entityType: "shipment", entityId: shipmentId });
+    // Professional: qabul = MoySkladga kirim ham (odam qayta bosmasin)
+    if (!accepted.moyskladId && moyskladConfigured()) {
+      void startAutoSupplyAfterAccept(shipmentId);
+      res.json({ ...accepted, autoSupply: true, supplyPending: true });
+      return;
+    }
+    res.json({ ...accepted, autoSupply: false, supplyPending: false });
   } catch (error) {
     fail(res, error);
   }
