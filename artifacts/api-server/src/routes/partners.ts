@@ -2336,6 +2336,7 @@ function formatWatchReport(when: string, findings: WatchFinding[], scanned: numb
   const lines = [
     "<b>Smart Ombor · Kirim nazorati</b>",
     when,
+    "<i>Davriylik: har 1 soat · to‘liq hisobot</i>",
     "",
     `Tekshirildi: <b>${scanned}</b> ta yuk`,
   ];
@@ -2349,15 +2350,12 @@ function formatWatchReport(when: string, findings: WatchFinding[], scanned: numb
   if (critical.length) lines.push(`Jiddiy (qo‘lda/ruxsat): <b>${critical.length}</b>`);
   if (warn.length) lines.push(`Ogohlantirish: <b>${warn.length}</b>`);
   lines.push("");
-  const show = [...critical, ...warn, ...fixed].slice(0, 18);
+  const show = [...critical, ...warn, ...fixed];
   for (const item of show) {
     const mark = item.severity === "fixed" ? "✅" : item.severity === "critical" ? "🔴" : "⚠️";
     lines.push(`${mark} <b>${item.number}</b> — ${item.title}`);
     if (item.detail) lines.push(`<i>${item.detail.replace(/</g, "&lt;")}</i>`);
     lines.push("");
-  }
-  if (findings.length > show.length) {
-    lines.push(`… yana ${findings.length - show.length} ta`);
   }
   lines.push("<i>Avto-tuzatish faqat aniq qoida; taxmin bilan o‘chirmaydi/yaratmaydi.</i>");
   return lines.join("\n").trim();
@@ -2377,11 +2375,10 @@ function formatWatchReportPlain(when: string, findings: WatchFinding[], scanned:
     lines.push("Holat: me’yorda — dublikat/dona xatosi yo‘q.");
     return lines.join("\n");
   }
-  for (const item of [...critical, ...warn, ...fixed].slice(0, 20)) {
+  for (const item of [...critical, ...warn, ...fixed]) {
     lines.push(`• ${item.number} — ${item.title}${item.detail ? `: ${item.detail}` : ""}`);
   }
-  if (findings.length > 20) lines.push(`… yana ${findings.length - 20} ta`);
-  lines.push("Bu — MoySklad kirim dublikat/dona tekshiruvi. Kunlik davomat/savdo brifingi emas.");
+  lines.push("Bu — MoySklad kirim dublikat/dona tekshiruvi (har 1 soat). Kunlik davomat/savdo brifingi emas.");
   return lines.join("\n");
 }
 
@@ -2415,7 +2412,7 @@ export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): 
         const score = (s: typeof a) => (s.msAlert ? 100 : 0) + (s.moyskladId ? 10 : 0) + (s.status === "accepted" ? 5 : 0);
         return score(b) - score(a) || +new Date(b.createdAt) - +new Date(a.createdAt);
       })
-      .slice(0, 40);
+      .slice(0, 80);
 
     for (const shipment of priority) {
       scanned += 1;
@@ -2489,10 +2486,11 @@ export function startSupplyIntegrityWatchdog() {
     void runSupplyIntegrityPass({ forceDigest: true }).catch(() => undefined);
   }, 90_000);
   const timer = setInterval(() => {
-    void runSupplyIntegrityPass().catch(() => undefined);
-  }, 20 * 60_000);
+    // Har soat — to‘liq hisobot majburiy
+    void runSupplyIntegrityPass({ forceDigest: true }).catch(() => undefined);
+  }, 60 * 60_000);
   timer.unref?.();
-  logger.info("Supply integrity watchdog started (20m + Telegram admin)");
+  logger.info("Supply integrity watchdog started (1h full report + Telegram admin)");
 }
 
 export default router;

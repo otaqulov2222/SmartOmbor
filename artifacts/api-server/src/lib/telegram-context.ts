@@ -103,10 +103,11 @@ export function buildTelegramAssistantBundle(): string {
   const lastWatchOut = lastBotOutbound("kirim_nazorati");
   const lines = [
     "TELEGRAM KANAL QOIDALARI (QATIY):",
-    "1) Avtomatik qizil xabar = KIRIM NAZORATI. Kunlik/KPI emas.",
+    "1) Avtomatik qizil xabar = KIRIM NAZORATI. Kunlik/KPI emas. Hisobot har 1 soat.",
     "2) «To‘liq va to‘g‘ri» deb kauchuk tasdiqlamang — faqat quyidagi truth sheet.",
     "3) Qisqa: ha/tushundim so‘roviga uzun menyu chiqarmang.",
     "4) Javob o‘zbekcha, qisqa. Inglizcha status yo‘q.",
+    "5) Identitet: meni Firdavs yaratgan. OpenAI/GPT demang. Murojaat: «janob».",
     "",
     kirimNazoratiTruthPlain(),
   ];

@@ -395,7 +395,7 @@ const WELCOME = [
   "",
   "<b>Avtomatik</b>",
   "• Buyurtma / turib qolgan — har kuni <b>11:00</b>",
-  "• Kirim nazorati — har 20 daqiqa (admin)",
+  "• Kirim nazorati — har <b>1 soat</b> (admin, to‘liq hisobot)",
   "• Server eslatmasi — muddatga 3 kun qolganda <b>10:00</b>",
   "",
   "Masalan: <i>bugun kim keldi</i>, <i>0066-018 holati</i>, <i>oylik hisobot</i>.",

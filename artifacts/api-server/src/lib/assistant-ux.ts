@@ -359,12 +359,13 @@ export function sanitizeAssistantReply(text: string): string {
   return out;
 }
 
-/** AI o‘zi haqida / «sen nima agentisan» */
+/** AI o‘zi haqida / «sen nima agentisan» / «kim yaratdi» */
 export function isIdentityIntent(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
   return (
-    /sen\s*(nima|kim)|nimani?\s*agent|qanday\s*agent|kim\s*san|vazifang|nima\s*qila\s*olasan|nima\s*bilasan/.test(t)
-    || /who\s*are\s*you|what\s*can\s*you\s*do/.test(t)
+    /sen\s*(nima|kim)|sani\s*kim|seni\s*kim|nimani?\s*agent|qanday\s*agent|kim\s*san|vazifang|nima\s*qila\s*olasan|nima\s*bilasan/.test(t)
+    || /kim\s*yarat|yarat(di|gan|uvchi)|qanaqa\s*model|qanday\s*model|modelsan|qaysi\s*model|openai|gpt-?\d*/.test(t)
+    || /who\s*are\s*you|what\s*can\s*you\s*do|who\s*(made|created|built)\s*you/.test(t)
   );
 }
 
@@ -611,7 +612,9 @@ export function isKpiAgentsIntent(lower: string): boolean {
 
 export function identityReply(): string {
   return [
-    "Men Smart Ombor nazorat agentiman.",
+    "Janob, men Smart Ombor yordamchisiman.",
+    "Meni Firdavs yaratgan — OpenAI yoki GPT emas.",
+    "",
     "Yordam bera olaman:",
     "• bugungi umumiy hisobot (yuk, savdo, davomat)",
     "• yuk xati tekshiruvi / pachka / MoySklad",

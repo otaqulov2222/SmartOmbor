@@ -47,11 +47,20 @@ export type TelegramHardRoute =
   | "kirim_truth"
   | "kirim_cause"
   | "brief_ack"
+  | "identity"
   | null;
 
 export function telegramHardRoute(userText: string): TelegramHardRoute {
   const t = normalizeAssistantQuery(userText);
   if (!t) return null;
+
+  // Identitet — OpenAI/GPT uydirmasi yo‘q
+  if (
+    /kim\s*yarat|yarat(di|gan)|qanaqa\s*model|qanday\s*model|modelsan|sani\s*kim|seni\s*kim|sen\s*(nima|kim)|openai|gpt-?\d*/.test(t)
+    || /who\s*(are|made|created|built)\s*you/.test(t)
+  ) {
+    return "identity";
+  }
 
   // Qisqa tasdiq — ro‘yxat dump qilinmasin
   if (isBriefAckAsk(t)) return "brief_ack";
@@ -69,10 +78,17 @@ export function telegramHardRoute(userText: string): TelegramHardRoute {
 }
 
 export function telegramHardReply(route: Exclude<TelegramHardRoute, null>, userText: string): { html: string; plain: string } {
+  if (route === "identity") {
+    const plain = [
+      "Janob, men Smart Ombor yordamchisiman.",
+      "Meni Firdavs yaratgan — OpenAI yoki GPT emas.",
+    ].join("\n");
+    return { html: plain, plain };
+  }
   if (route === "brief_ack") {
     const plain = /tushundingmi|shunday\s*javob|faqat\s*so'?ralgan|ortiqcha/.test(userText.toLowerCase())
-      ? "Ha. Faqat so‘ralganiga qisqa va to‘g‘ri javob beraman."
-      : "Ha.";
+      ? "Ha, janob. Faqat so‘ralganiga qisqa va to‘g‘ri javob beraman."
+      : "Ha, janob.";
     return { html: plain, plain };
   }
   if (route === "kirim_truth" || route === "kirim_cause") {
