@@ -1136,6 +1136,19 @@ article.card.scan-row > .scan-row-actions { grid-area: actions; }
 .waybill footer { display: flex; justify-content: flex-end; padding: .7rem 1rem; border-top: 1px solid var(--line); background: #fafbfc; }
 .waybill footer .btn { width: auto; }
 .waybill-note { margin: 0; padding: .4rem 1rem; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); }
+.badge-ms-alert { background: #fff1f0; color: #b42318; border: 1px solid #f3b0a8; font-weight: 700; letter-spacing: .02em; }
+.waybill-ms-alert {
+  margin: 0;
+  padding: .75rem 1rem;
+  border-top: 1px solid #f3b0a8;
+  background: linear-gradient(180deg, #fff7f6 0%, #fff1f0 100%);
+  color: #7a1f16;
+  display: grid;
+  gap: .45rem;
+}
+.waybill-ms-alert strong { font-size: .92rem; line-height: 1.3; }
+.waybill-ms-alert p { margin: 0; font-size: .82rem; line-height: 1.4; color: #8f2a20; }
+.waybill-ms-alert .btn { justify-self: start; }
 .waybill-lines { display: grid; }
 .waybill-scroll { overflow-x: auto; }
 .waybill-table { width: 100%; min-width: 62rem; border-collapse: collapse; font-size: .84rem; }

@@ -40,6 +40,13 @@ export type PostedUnitSnapshot = {
   units: number;
 };
 
+export type ShipmentMsAlert = {
+  code: string;
+  title: string;
+  detail: string;
+  at: string;
+};
+
 export type Shipment = {
   id: string;
   number: string;
@@ -54,6 +61,8 @@ export type Shipment = {
   /** Kirim paytidagi juft×qop snapshot — keyinroq audit uchun */
   postedUnits?: PostedUnitSnapshot[] | null;
   postedUnitsTotal?: number | null;
+  /** MS uzilgan/buzilgan — UI da kuchli ogohlantirish */
+  msAlert?: ShipmentMsAlert | null;
 };
 
 export type PartnerAccount = {
@@ -671,7 +680,13 @@ export function linkShipmentLine(shipmentId: string, lineId: string, product: { 
 }
 
 /** MS bog‘lanishini uzish. Default: status → sent (qayta kirim mumkin). */
-export function clearShipmentPosted(shipmentId: string, opts?: { reopen?: boolean }) {
+export function clearShipmentPosted(
+  shipmentId: string,
+  opts?: {
+    reopen?: boolean;
+    alert?: { code: string; title: string; detail: string };
+  },
+) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -681,6 +696,21 @@ export function clearShipmentPosted(shipmentId: string, opts?: { reopen?: boolea
   shipment.postedUnitsTotal = null;
   if (opts?.reopen !== false && shipment.status === "accepted") {
     shipment.status = "sent";
+  }
+  if (opts?.alert) {
+    shipment.msAlert = {
+      code: opts.alert.code,
+      title: opts.alert.title,
+      detail: opts.alert.detail,
+      at: new Date().toISOString(),
+    };
+  } else if (!shipment.msAlert) {
+    shipment.msAlert = {
+      code: "ms_cleared",
+      title: "MoySklad kirimi uzildi",
+      detail: "MoySkladda muammo topildi. Qayta «MoySkladga kirim» qiling.",
+      at: new Date().toISOString(),
+    };
   }
   save(store);
   return shipmentView(shipment);
@@ -698,6 +728,7 @@ export function markShipmentPosted(
   shipment.status = "accepted";
   if (posted.units) shipment.postedUnits = posted.units;
   if (posted.unitsTotal != null) shipment.postedUnitsTotal = posted.unitsTotal;
+  shipment.msAlert = null;
   save(store);
   return shipmentView(shipment);
 }

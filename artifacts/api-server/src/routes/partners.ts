@@ -555,7 +555,13 @@ async function ensureLinkedSupplyOrClear(shipment: {
     );
     if (doc.deleted) {
       logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply deleted — clearing local post");
-      clearShipmentPosted(shipment.id);
+      clearShipmentPosted(shipment.id, {
+        alert: {
+          code: "ms_deleted",
+          title: "MoySklad kirimi o‘chirilgan",
+          detail: "MoySkladda bu hujjat korzinaga o‘tgan/o‘chirilgan. Bizda «yozilgan» qolib ketgan edi — bog‘lanish uzildi. Qayta «MoySkladga kirim» qiling.",
+        },
+      });
       supplyLookup.delete(shipment.id);
       return null;
     }
@@ -571,13 +577,16 @@ async function ensureLinkedSupplyOrClear(shipment: {
         quantity: Number(line.quantity) || 0,
         colors: Array.isArray(line.colors) ? line.colors.map((c) => ({ quantity: Number(c.quantity) || 0 })) : [],
       }), 0);
-    const broken =
-      !doc.agent
-      || !doc.store
-      || !doc.organization
-      || page.rows.length === 0
-      || (expectedTotal > 0 && actualTotal !== expectedTotal)
-      || doc.applicable === false;
+    const reasons: string[] = [];
+    if (!doc.agent) reasons.push("kontragent yo‘q");
+    if (!doc.store) reasons.push("ombor yo‘q");
+    if (!doc.organization) reasons.push("tashkilot yo‘q");
+    if (page.rows.length === 0) reasons.push("pozitsiya bo‘sh");
+    if (expectedTotal > 0 && actualTotal !== expectedTotal) {
+      reasons.push(`dona mos emas (yuk ${expectedTotal}, MS ${actualTotal})`);
+    }
+    if (doc.applicable === false) reasons.push("o‘tkazilmagan");
+    const broken = reasons.length > 0;
     if (broken) {
       if (doc.applicable === false && doc.agent && doc.store && doc.organization && actualTotal === expectedTotal && actualTotal > 0) {
         try {
@@ -597,11 +606,15 @@ async function ensureLinkedSupplyOrClear(shipment: {
         expectedTotal,
         positions: page.rows.length,
         applicable: doc.applicable,
-        hasAgent: Boolean(doc.agent),
-        hasStore: Boolean(doc.store),
-        hasOrg: Boolean(doc.organization),
+        reasons,
       }, "Linked MS supply unhealthy — clearing for repost");
-      clearShipmentPosted(shipment.id);
+      clearShipmentPosted(shipment.id, {
+        alert: {
+          code: "ms_unhealthy",
+          title: "MoySklad kirimi buzilgan — qayta kirim qiling",
+          detail: `Sabab: ${reasons.join("; ")}. Lokal bog‘lanish uzildi. «MoySkladga kirim» tugmasidan qayta yozing.`,
+        },
+      });
       supplyLookup.delete(shipment.id);
       return null;
     }
@@ -609,7 +622,13 @@ async function ensureLinkedSupplyOrClear(shipment: {
   } catch (error) {
     if (supplyGone(error) || (error instanceof MoySkladError && error.status === 404)) {
       logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply gone — clearing local post");
-      clearShipmentPosted(shipment.id);
+      clearShipmentPosted(shipment.id, {
+        alert: {
+          code: "ms_gone",
+          title: "MoySklad kirimi topilmadi",
+          detail: "MoySkladda hujjat yo‘q (o‘chirilgan yoki ID buzilgan). Bog‘lanish uzildi. Qayta «MoySkladga kirim» qiling.",
+        },
+      });
       supplyLookup.delete(shipment.id);
       return null;
     }
@@ -618,8 +637,13 @@ async function ensureLinkedSupplyOrClear(shipment: {
       supply: supplyId,
       err: error instanceof Error ? error.message : error,
     }, "Linked MS supply health check failed");
-    // Xavfsiz tomon: sticky broken ID ni ushlab qolmaslik
-    clearShipmentPosted(shipment.id);
+    clearShipmentPosted(shipment.id, {
+      alert: {
+        code: "ms_check_failed",
+        title: "MoySklad tekshiruvi muvaffaqiyatsiz",
+        detail: "Kirim holatini o‘qib bo‘lmadi — xavfsizlik uchun bog‘lanish uzildi. Qayta «MoySkladga kirim» qiling.",
+      },
+    });
     supplyLookup.delete(shipment.id);
     return null;
   }
@@ -1409,6 +1433,19 @@ router.get("/partner-factories/shipments/:id/supply", async (req, res) => {
       res.json({ pending: false, already: true, id: healthy.id, number: healthy.name, shipment: fresh });
       return;
     }
+    const cleared = listShipments().find((item) => item.id === shipmentId);
+    if (cleared?.msAlert) {
+      res.json({
+        pending: false,
+        needsRepost: true,
+        cleared: true,
+        error: cleared.msAlert.code,
+        detail: `${cleared.msAlert.title}. ${cleared.msAlert.detail}`,
+        msAlert: cleared.msAlert,
+        shipment: cleared,
+      });
+      return;
+    }
   }
   const payload = supplyJobPayload(shipmentId);
   if (payload.pending) {
@@ -1448,6 +1485,23 @@ router.post("/partner-factories/shipments/:id/supply", async (req, res) => {
     if (!shipment) {
       res.status(404).json({ error: "not_found" });
       return;
+    }
+    // Sticky uzildi — UI ogohlantirsin, keyin qayta kirim
+    if (shipment.msAlert && !shipment.moyskladId) {
+      // continue to new post below if storeId berilgan; aks holda alert qaytar
+      const storeIdPeek = String(req.body?.storeId ?? "").trim();
+      if (!storeIdPeek) {
+        res.status(409).json({
+          pending: false,
+          needsRepost: true,
+          cleared: true,
+          error: shipment.msAlert.code,
+          detail: `${shipment.msAlert.title}. ${shipment.msAlert.detail}`,
+          msAlert: shipment.msAlert,
+          shipment,
+        });
+        return;
+      }
     }
   }
   const job = supplyJobs.get(shipmentId);

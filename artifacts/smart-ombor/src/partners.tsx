@@ -106,10 +106,12 @@ function matchPartnerRow(items: Row[], selected: string) {
     || null;
 }
 
+type MsAlert = { code: string; title: string; detail: string; at?: string };
 type Shipment = {
   id: string; number: string; date: string; status: 'sent' | 'accepted' | 'declined'; note: string; createdAt: string;
   lines: Line[]; pairs: number; boxes: number; amount: number;
   moyskladId?: string | null; moyskladNumber?: string | null;
+  msAlert?: MsAlert | null;
 };
 type Row = { name: string; productCount: number; stock: number; account: Account | null; shipmentCount: number; pendingCount?: number; lastShipment: string | null };
 
@@ -261,10 +263,21 @@ function pairsLooksInflated(line: Pick<Line, 'pairs' | 'pachka' | 'boxes'>) {
   return false;
 }
 
-function supplyError(body: { error?: string; detail?: string }, t: (key: 'partners.agentMissing' | 'partners.storeMissing' | 'partners.supplyFailed' | 'partners.supplyNameTaken' | 'partners.pairsSuspect') => string) {
+function supplyError(body: { error?: string; detail?: string; msAlert?: MsAlert | null }, t: (key: string) => string) {
+  if (body.msAlert?.title) {
+    return `${body.msAlert.title}. ${body.msAlert.detail || t('partners.msAlertBody')}`;
+  }
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
   if (body.error === 'pairs_suspect') return String(body.detail || '').trim() || t('partners.pairsSuspect');
+  if (body.error === 'pachka_mismatch') return String(body.detail || '').trim() || t('partners.pachkaMismatch');
+  if (body.error === 'ms_deleted') return String(body.detail || '').trim() || t('partners.msDeleted');
+  if (body.error === 'ms_unhealthy') return String(body.detail || '').trim() || t('partners.msUnhealthy');
+  if (body.error === 'ms_gone') return String(body.detail || '').trim() || t('partners.msGone');
+  if (body.error === 'ms_check_failed' || body.error === 'ms_cleared') return String(body.detail || '').trim() || t('partners.msCheckFailed');
+  if (body.error === 'supply_not_applicable' || body.error === 'supply_deleted') {
+    return String(body.detail || '').trim() || t('partners.supplyNotApplicable');
+  }
   if (body.error === 'posted' || body.detail === 'posted') return t('partners.supplyFailed');
   const raw = String(body.detail || '').trim();
   if (raw === 'posted') return t('partners.supplyFailed');
@@ -1093,10 +1106,27 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
               <button type="button" className="waybill-open" onClick={() => setOpenShipment(openShipment === shipment.id ? null : shipment.id)}>
                 <span className="waybill-mark"><Truck size={16}/></span>
                 <div><b>{shipment.number}</b><small>{date(shipment.date)} · {t('docs.items', { count: fmt((shipment.lines ?? []).length) })}</small></div>
+                {shipment.msAlert && !shipment.moyskladId ? <span className="badge badge-ms-alert">{t('partners.msAlertBadge')}</span> : null}
                 <span className={`badge ${shipment.status === 'accepted' ? 'badge-healthy' : shipment.status === 'declined' ? 'badge-rejected' : 'badge-in-transit'}`}>{shipment.status === 'accepted' ? t('partners.accepted') : shipment.status === 'declined' ? t('partners.declined') : t('partners.sent')}</span>
                 <strong className="waybill-sum">{money(shipment.amount)}</strong>
               </button>
             </header>
+            {shipment.msAlert && !shipment.moyskladId && (
+              <div className="waybill-ms-alert" role="alert">
+                <strong>{shipment.msAlert.title || t('partners.msAlertTitle')}</strong>
+                <p>{shipment.msAlert.detail || t('partners.msAlertBody')}</p>
+                {shipment.status !== 'declined' && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={supplyingId === shipment.id}
+                    onClick={() => { setPostError(''); setStoreId(preferredSupplyStore(warehouses.data)?.id || ''); setPosting(shipment); setOpenShipment(shipment.id); }}
+                  >
+                    {t('partners.msAlertAction')}
+                  </button>
+                )}
+              </div>
+            )}
             {openShipment === shipment.id && (
               <div className="waybill-scroll"><table className="waybill-table">
                 <thead><tr><th>{t('zavod.brand')}</th><th>{t('zavod.factoryCode')}</th><th>{t('zavod.groupCode')}</th><th>{t('zavod.product')}</th><th>{t('zavod.size')}</th><th className="num">{t('zavod.pairs')}</th><th className="num">{t('zavod.pachka')}</th><th className="num">{t('zavod.boxes')}</th><th className="num">{t('zavod.price')}</th><th>{t('zavod.priceType')}</th><th className="waybill-colors-cell">{t('zavod.colors')}</th><th className="num">{t('zavod.sum')}</th><th/></tr></thead>
