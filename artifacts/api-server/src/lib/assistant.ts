@@ -36,10 +36,12 @@ import {
   isIdentityIntent,
   isPayrollIntent,
   normalizeAssistantQuery,
+  parseBriefDates,
   sanitizeAssistantReply,
   vagueGiveReply,
   wantsPortalLink,
   wantsVagueGive,
+  weekdayLabelUz,
 } from "./assistant-ux";
 
 // Groq/Telegram uchun IPv4 birinchi (IPv6 timeout → "fetch failed").
@@ -84,6 +86,8 @@ Asosiy kuch: ombor, yuk xati, pachka, davomat, oylik, MoySklad, KPI, GPS, xodiml
 TUSHUNISH (QATIY):
 - Savolni ma’nosiga qarab javob bering. Orfografiya xato bo‘lsa ham (buyicha/bo‘yicha, toliq/to‘liq) tushuning.
 - «bugungi kun hisoboti / nima boldi / holatlar» → kunlik brifing (yuk + savdo + davomat). KPI PDF emas.
+- «shanba / yakshanba / dam olish / dam kunlari / weekend» + hisobot → eng yaqin Shanba–Yakshanba kunlari (bugun emas). «to‘liq/barcha» bo‘lsa oy ichidagi hammasi.
+- Aniq sana (21.11.2026 yoki 2026-11-21) → shu kun hisoboti.
 - «bugun kim keldi / davomat» → davomat board.
 - «oylik / maosh / jarima / avans» → oylik bo‘limi haqida aniq javob.
 - «sen nima agentisan» → o‘zingizni qisqa tanishtiring, KPI havola bermang.
@@ -985,13 +989,15 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
   if (name === "sales_summary") {
     const days = Math.min(365, Math.max(1, Math.round(Number(args.days) || 1)));
     const catalog = peekCatalog();
-    const to = tashkentParts().date;
+    const today = tashkentParts().date;
+    const dayArg = String(args.date || args.day || "").trim();
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(dayArg) ? dayArg : today;
     const toDate = new Date(`${to}T12:00:00+05:00`);
     const fromDate = new Date(toDate);
     fromDate.setDate(fromDate.getDate() - (days - 1));
     const from = tashkentParts(fromDate).date;
     if (days === 1) {
-      // Katalog ba’zan qoralamani ham qo‘shardi — bugun uchun MS dan jonli o‘qiymiz
+      // Katalog ba’zan qoralamani ham qo‘shardi — kun uchun MS dan jonli o‘qiymiz
       if (moyskladConfigured()) {
         try {
           const filter = encodeURIComponent(`moment>=${to} 00:00:00;moment<=${to} 23:59:59`);
@@ -1011,8 +1017,8 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
             draftSalesAmount,
             draftCount: drafts.length,
             draftNumbers: drafts.map((r) => r.name).filter(Boolean).slice(0, 8),
-            incomingToday: catalog?.incomingToday ?? null,
-            pendingTransfers: catalog?.pendingTransfers ?? null,
+            incomingToday: to === today ? (catalog?.incomingToday ?? null) : null,
+            pendingTransfers: to === today ? (catalog?.pendingTransfers ?? null) : null,
             source: "moysklad_demand",
           };
         } catch (error) {
@@ -1024,10 +1030,10 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         days: 1,
         from: to,
         to,
-        salesAmount: catalog?.salesToday ?? null,
-        draftSalesAmount: catalog?.draftSalesToday ?? null,
-        incomingToday: catalog?.incomingToday ?? null,
-        pendingTransfers: catalog?.pendingTransfers ?? null,
+        salesAmount: to === today ? (catalog?.salesToday ?? null) : null,
+        draftSalesAmount: to === today ? (catalog?.draftSalesToday ?? null) : null,
+        incomingToday: to === today ? (catalog?.incomingToday ?? null) : null,
+        pendingTransfers: to === today ? (catalog?.pendingTransfers ?? null) : null,
         source: catalog ? "katalog" : "yoq",
       };
     }
@@ -1640,77 +1646,100 @@ async function tryFastLocalTask(
     return { reply: identityReply(), model: "local-fast", tools, files };
   }
 
-  // 0a) Bugungi tizim hisoboti — «hisobot ber» vague/KPI yo‘liga tushmasin
+  // 0a) Kunlik tizim hisoboti — bugun / sana / dam olish / Shanba–Ya
   if (intent === "daily_brief" || isDailyBriefIntent(lower)) {
     const today = tashkentParts().date;
-    const sales = await run("sales_summary", { days: 1 }) as Record<string, unknown> | null;
-    const board = await run("office_today", {}) as Record<string, unknown> | null;
-    const kirim = await run("latest_kirim", { limit: 20, skipMs: true }) as Record<string, unknown> | null;
-    const local = Array.isArray(kirim?.localShipments) ? kirim!.localShipments as Array<Record<string, unknown>> : [];
-    const todays = local.filter((s) => String(s.date || "") === today);
-    const posted = todays.filter((s) => {
-      const p = s.moySkladgaYozilgan ?? s.posted;
-      return p === true || p === "ha" || p === "yozilgan";
-    });
-    const unposted = todays.filter((s) => !posted.includes(s));
+    const days = parseBriefDates(lower, today).filter((d) => d <= today).slice(0, 16);
+    const targetDays = days.length ? days : [today];
     const people = listLocalPeople();
-    const tabel = tabelDay(today, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
-    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
-    const present = Array.isArray(board?.rows) ? (board!.rows as Array<Record<string, unknown>>).filter((r) => r.inAt) : [];
-    const logs = await run("recent_logs", { minutes: 180 }) as { lines?: string[] } | null;
+    const peopleRows = people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role }));
+    const kirim = await run("latest_kirim", { limit: 40, skipMs: true }) as Record<string, unknown> | null;
+    const local = Array.isArray(kirim?.localShipments) ? kirim!.localShipments as Array<Record<string, unknown>> : [];
+    const logs = targetDays.length === 1 && targetDays[0] === today
+      ? await run("recent_logs", { minutes: 180 }) as { lines?: string[] } | null
+      : null;
     const logLines = (logs?.lines || []).slice(-5);
-    const salesAmt = sales?.salesAmount != null ? formatSum(Number(sales.salesAmount)) : null;
 
-    // Tezkor audit faqat bugungi yuklar uchun (qisqa)
-    const auditLines: string[] = [];
-    for (const s of todays.slice(0, 6)) {
-      const audit = await run("audit_shipment", { number: String(s.number) }) as Record<string, unknown> | null;
-      if (!audit || audit.error) {
-        auditLines.push(`• ${s.number}: tekshirib bo‘lmadi`);
-        continue;
+    const blocks: string[] = [];
+    for (const day of targetDays) {
+      const isToday = day === today;
+      const sales = await run("sales_summary", { days: 1, date: day }) as Record<string, unknown> | null;
+      const dayShipments = local.filter((s) => String(s.date || "") === day);
+      const posted = dayShipments.filter((s) => {
+        const p = s.moySkladgaYozilgan ?? s.posted;
+        return p === true || p === "ha" || p === "yozilgan";
+      });
+      const unposted = dayShipments.filter((s) => !posted.includes(s));
+      const tabel = tabelDay(day, peopleRows);
+      const stats = tabel.stats || { total: people.length, came: 0, absent: people.length, late: 0 };
+      const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
+      const came = (tabel.items || []).filter((r) => r.inAt || r.status === "present" || r.status === "late" || r.status === "out_missing");
+      const salesAmt = sales?.salesAmount != null ? formatSum(Number(sales.salesAmount)) : null;
+
+      const auditLines: string[] = [];
+      if (isToday) {
+        for (const s of dayShipments.slice(0, 6)) {
+          const audit = await run("audit_shipment", { number: String(s.number) }) as Record<string, unknown> | null;
+          if (!audit || audit.error) {
+            auditLines.push(`• ${s.number}: tekshirib bo‘lmadi`);
+            continue;
+          }
+          const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
+          auditLines.push(`• ${audit.number}: ${issues.length ? `kamchilik ${issues.length}` : "OK"}`);
+        }
       }
-      const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
-      auditLines.push(`• ${audit.number}: ${issues.length ? `kamchilik ${issues.length}` : "OK"}`);
+
+      const title = isToday && targetDays.length === 1
+        ? `Bugungi hisobot — ${day}`
+        : `Hisobot — ${day} (${weekdayLabelUz(day)})`;
+
+      blocks.push([
+        title,
+        "",
+        "1) Yuk / kirim",
+        dayShipments.length
+          ? [
+            `• Jami: ${dayShipments.length} ta · MS ga yozilgan: ${posted.length} · yozilmagan: ${unposted.length}`,
+            ...dayShipments.map((s) => {
+              const p = s.moySkladgaYozilgan ?? s.posted;
+              const holat = p === true || p === "ha" || p === "yozilgan" ? "MS ga yozilgan" : "MS yo‘q";
+              return `  – ${s.number} · ${localizeStatus(s.status)} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
+            }),
+            auditLines.length ? `• Tekshiruv:\n${auditLines.join("\n")}` : "",
+          ].filter(Boolean).join("\n")
+          : `• ${isToday ? "Bugun" : "Shu kuni"} yuk xati yo‘q.`,
+        "",
+        "2) Savdo",
+        `• O‘tkazilgan: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
+        sales?.draftSalesAmount != null && Number(sales.draftSalesAmount) > 0
+          ? `• Qoralama: ${formatSum(Number(sales.draftSalesAmount))} so‘m${Array.isArray(sales.draftNumbers) && sales.draftNumbers.length ? ` · № ${(sales.draftNumbers as string[]).join(", ")}` : ""}`
+          : "",
+        isToday && sales?.incomingToday != null ? `• Bugungi kirim: ${formatQty(Number(sales.incomingToday))} dona` : "",
+        "",
+        "3) Davomat",
+        `• Xodimlar: ${stats.total ?? people.length} · kelgan: ${stats.came ?? came.length} · kelmagan: ${stats.absent ?? "—"} · kechikkan: ${stats.late ?? late.length}`,
+        came.length
+          ? came.slice(0, 12).map((r) => `  – ${r.name}: ${r.inHm || "—"} → ${r.outHm || "—"}${r.status === "late" ? " (kech)" : ""}`).join("\n")
+          : "",
+        "",
+        isToday
+          ? [
+            "4) Ogohlantirishlar",
+            logLines.length
+              ? logLines.map((l) => `• ${l.slice(0, 140)}`).join("\n")
+              : "• Oxirgi 3 soatda ogohlantirish/xato yo‘q.",
+            "",
+          ].join("\n")
+          : "",
+        unposted.length
+          ? `Diqqat: ${unposted.length} ta yuk hali MS ga yozilmagan.`
+          : dayShipments.length
+            ? "Xulosa: yuklar MS ga yozilgan / tekshiruv OK."
+            : "Xulosa: kunlik holat yig‘ildi.",
+      ].filter((line, i, arr) => !(line === "" && arr[i - 1] === "")).join("\n"));
     }
 
-    const reply = [
-      `Bugungi hisobot — ${today}`,
-      "",
-      "1) Yuk / kirim",
-      todays.length
-        ? [
-          `• Jami: ${todays.length} ta · MS ga yozilgan: ${posted.length} · yozilmagan: ${unposted.length}`,
-          ...todays.map((s) => {
-            const p = s.moySkladgaYozilgan ?? s.posted;
-            const holat = p === true || p === "ha" || p === "yozilgan" ? "MS ga yozilgan" : "MS yo‘q";
-            return `  – ${s.number} · ${localizeStatus(s.status)} · ${holat} · ${s.lines || s.tovarQatorlari || 0} qator`;
-          }),
-          auditLines.length ? `• Tekshiruv:\n${auditLines.join("\n")}` : "",
-        ].filter(Boolean).join("\n")
-        : "• Bugun yuk xati yo‘q.",
-      "",
-      "2) Savdo",
-      `• O‘tkazilgan: ${salesAmt != null ? `${salesAmt} so‘m` : "ma’lumot yo‘q"}`,
-      sales?.draftSalesAmount != null && Number(sales.draftSalesAmount) > 0
-        ? `• Qoralama: ${formatSum(Number(sales.draftSalesAmount))} so‘m${Array.isArray(sales.draftNumbers) && sales.draftNumbers.length ? ` · № ${(sales.draftNumbers as string[]).join(", ")}` : ""}`
-        : "",
-      sales?.incomingToday != null ? `• Bugungi kirim: ${formatQty(Number(sales.incomingToday))} dona` : "",
-      "",
-      "3) Davomat",
-      `• Xodimlar: ${board?.total ?? people.length} · kelgan: ${board?.present ?? present.length} · kelmagan: ${board?.absent ?? "—"} · kechikkan: ${late.length}`,
-      "",
-      "4) Ogohlantirishlar",
-      logLines.length
-        ? logLines.map((l) => `• ${l.slice(0, 140)}`).join("\n")
-        : "• Oxirgi 3 soatda ogohlantirish/xato yo‘q.",
-      "",
-      unposted.length
-        ? `Diqqat: ${unposted.length} ta yuk hali MS ga yozilmagan.`
-        : todays.length
-          ? "Xulosa: bugungi yuklar MS ga yozilgan, asosiy tekshiruvlar OK."
-          : "Xulosa: kunlik holat yig‘ildi.",
-    ].filter((line, i, arr) => !(line === "" && arr[i - 1] === "")).join("\n");
-
+    const reply = blocks.join("\n\n———\n\n");
     return { reply, model: "local-fast", tools, files };
   }
 

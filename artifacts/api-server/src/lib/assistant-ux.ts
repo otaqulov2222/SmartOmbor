@@ -271,7 +271,9 @@ export function isTrustedLocalReply(text: string): boolean {
   const t = String(text || "").trim();
   return (
     /^Bugungi hisobot\s*—/i.test(t)
+    || /^Hisobot\s*—/i.test(t)
     || /^Bugungi davomat:/i.test(t)
+    || /^Davomat\s*\(/i.test(t)
     || /^Bugungi savdo:/i.test(t)
     || /^Bugungi\s*\(\d{4}-\d{2}-\d{2}\)\s*agentlar/i.test(t)
     || /^Oylik\s*\(/i.test(t)
@@ -363,12 +365,130 @@ export function isIdentityIntent(lower: string): boolean {
   );
 }
 
+/** YYYY-MM-DD ± kun (UTC kalendar). */
+export function shiftIsoDate(day: string, by: number): string {
+  const [y, m, d] = String(day || "").split("-").map(Number);
+  if (!y || !m || !d) return day;
+  const dt = new Date(Date.UTC(y, m - 1, d + by));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** JS getUTCDay: 0=Ya … 6=Sh */
+export function weekdayOfIso(day: string): number {
+  const [y, m, d] = String(day || "").split("-").map(Number);
+  if (!y || !m || !d) return 0;
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+const WEEKDAY_UZ = ["Yakshanba", "Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba"];
+
+export function weekdayLabelUz(day: string): string {
+  return WEEKDAY_UZ[weekdayOfIso(day)] || day;
+}
+
+/** Dam / dam olish / weekend / Shanba–Yakshanba so‘rovi. */
+export function wantsWeekendBrief(lower: string): boolean {
+  const t = normalizeAssistantQuery(lower);
+  return (
+    /\bshanba\b/.test(t)
+    || /\byakshanba\b/.test(t)
+    || /dam\s*olish/.test(t)
+    || /dam\s*kun/.test(t)
+    || /\bdamolish\b/.test(t)
+    || /\bweekend\b/.test(t)
+    || /выходн/.test(t)
+  );
+}
+
+/** Matndan hisobot sanalarini ajratish. */
+export function parseBriefDates(lower: string, today: string): string[] {
+  const t = normalizeAssistantQuery(lower);
+  const found: string[] = [];
+  const push = (iso: string) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso) && !found.includes(iso)) found.push(iso);
+  };
+
+  for (const m of t.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
+    push(`${m[1]}-${m[2]}-${m[3]}`);
+  }
+  for (const m of t.matchAll(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g)) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    const y = m[3];
+    // 21.11.2026 → DD.MM; 11.21.2026 → MM.DD; ikkalasi ≤12 bo‘lsa UZ: DD.MM
+    let dd: number;
+    let mm: number;
+    if (a > 12 && b >= 1 && b <= 12) {
+      dd = a;
+      mm = b;
+    } else if (b > 12 && a >= 1 && a <= 12) {
+      mm = a;
+      dd = b;
+    } else {
+      dd = a;
+      mm = b;
+    }
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      push(`${y}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`);
+    }
+  }
+  if (found.length) return found.sort();
+
+  const wantSat = /\bshanba\b/.test(t);
+  const wantSun = /\byakshanba\b/.test(t);
+  const wantWeekendPhrase = /dam\s*olish|dam\s*kun|\bdamolish\b|\bweekend\b|выходн/.test(t);
+  if (wantSat || wantSun || wantWeekendPhrase) {
+    // «dam olish» → Shanba+Ya; faqat bitta kun nomi → shu kun; ikkalasi → ikkalasi
+    const finalSat = wantWeekendPhrase || wantSat || (!wantSat && !wantSun);
+    const finalSun = wantWeekendPhrase || wantSun || (!wantSat && !wantSun);
+
+    const allMonth = /toliq|barcha|hamma/.test(t);
+    if (allMonth) {
+      const month = today.slice(0, 7);
+      let cursor = `${month}-01`;
+      while (cursor.startsWith(month) && cursor <= today) {
+        const wd = weekdayOfIso(cursor);
+        if ((finalSat && wd === 6) || (finalSun && wd === 0)) push(cursor);
+        cursor = shiftIsoDate(cursor, 1);
+      }
+      return found;
+    }
+    // Eng yaqin o‘tgan/joriy dam juftligi
+    const daysSinceSat = (weekdayOfIso(today) + 1) % 7;
+    const sat = shiftIsoDate(today, -daysSinceSat);
+    const sun = shiftIsoDate(sat, 1);
+    if (finalSat) push(sat);
+    if (finalSun) push(sun);
+    return found;
+  }
+
+  if (/\bkecha\b|вчера/.test(t)) {
+    push(shiftIsoDate(today, -1));
+    return found;
+  }
+
+  push(today);
+  return found;
+}
+
 /** Bugungi / kunlik tizim hisoboti — «hisobot ber» vague emas. */
 export function isDailyBriefIntent(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
   if (isIdentityIntent(t)) return false;
   // Aniq fayl so‘rovi emas
   if (/\b(pdf|xlsx|excel|csv)\b/.test(t) && /davomat|kirim|xodim|staff/.test(t)) return false;
+  // Shanba/Yakshanba / dam olish / aniq sana + hisobot
+  if (
+    /hisobot|holat|xulosa|nima\s*boldi|davomat/.test(t)
+    && (
+      wantsWeekendBrief(t)
+      || /\d{1,2}[./]\d{1,2}[./]\d{4}/.test(t)
+      || /\d{4}-\d{2}-\d{2}/.test(t)
+    )
+    && !/\b(pdf|xlsx|excel|csv)\b/.test(t)
+  ) {
+    return true;
+  }
   if (/kunlik\s*(hisobot|brif|xulosa)|tizim\s*(hisobot|xulosa|holat)|umumiy\s*(hisobot|holat|xulosa)/.test(t)) return true;
   if (/bugun(gi)?\s*(kun|hisobot|holat|xulosa)|kun\s*bo'?yicha|kun\s*buyicha/.test(t)) {
     if (/hisobot|xulosa|holat|nima\s*boldi|ayt|ber|toliq|qanday|nimalar/.test(t)) return true;
