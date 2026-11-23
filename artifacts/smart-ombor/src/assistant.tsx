@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Download, FileText, LoaderCircle, Menu, PanelLeftClose,
   Plus, Search, SendHorizontal, Trash2, X,
@@ -369,6 +370,18 @@ export function AssistantWidget() {
     if (open) window.setTimeout(() => inputRef.current?.focus(), 80);
   }, [open, activeId]);
 
+  const [slot, setSlot] = useState<Element | null>(null);
+  useEffect(() => {
+    if (!allowed) {
+      setSlot(null);
+      return;
+    }
+    const sync = () => setSlot(document.querySelector('[data-assistant-slot]'));
+    sync();
+    const raf = window.requestAnimationFrame(sync);
+    return () => window.cancelAnimationFrame(raf);
+  }, [allowed]);
+
   if (!allowed) return null;
 
   const authHeaders = {
@@ -505,20 +518,24 @@ export function AssistantWidget() {
     older: t('assistant.group.older'),
   });
 
+  const toggle = (
+    <button
+      type="button"
+      className={`assistant-topbtn ${open ? 'is-open' : ''}`}
+      onClick={() => setOpen((value) => !value)}
+      title={t('assistant.title')}
+      aria-label={t('assistant.title')}
+      aria-expanded={open}
+      data-testid="button-assistant-toggle"
+    >
+      <span className="assistant-topbtn-ico"><AgentMark open={open} className="assistant-topbtn-svg" /></span>
+      <span className="assistant-topbtn-label">{open ? t('common.close') : t('assistant.fab')}</span>
+    </button>
+  );
+
   return (
     <>
-      <button
-        type="button"
-        className={`assistant-fab ${open ? 'is-open' : ''}`}
-        onClick={() => setOpen((value) => !value)}
-        title={t('assistant.title')}
-        aria-label={t('assistant.title')}
-        aria-expanded={open}
-        data-testid="button-assistant-toggle"
-      >
-        <span className="assistant-fab-ring" aria-hidden="true" />
-        <span className="assistant-fab-ico"><AgentMark open={open} /></span>
-      </button>
+      {slot ? createPortal(toggle, slot) : null}
 
       {open && (
         <section className={`assistant-panel ${sidebarOpen ? 'is-sidebar' : ''}`} aria-label={t('assistant.title')} data-testid="panel-assistant">

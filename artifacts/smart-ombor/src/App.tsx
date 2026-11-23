@@ -562,7 +562,7 @@ function WorkspaceChrome({ children, title, userName, onSignOut }: { children: R
       </div>
     </aside>
     <div className="main">
-      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><LangSwitch compact/>{has('scanner') && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
+      <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label={t('common.menuOpen')} data-testid="button-navigation-open"><Menu size={20}/></button><div className="crumbs"><span className="crumb-root">{t('brand.name')}</span><ChevronRight size={14}/><b>{current ? t(current.key) : title}</b></div><div className="topbar-right"><span className="assistant-slot" data-assistant-slot /><LangSwitch compact/>{has('scanner') && ['/scanner', '/stock', '/receipts', '/transfers', '/inventory', '/partners'].includes(path) && <Link href="/scanner" className="scan-btn" data-testid="link-topbar-scanner" title={t('shell.scanner')} aria-label={t('shell.scanner')}><ScanMark size={17}/><span>{t('shell.scanner')}</span></Link>}</div></header>
       <ServerBillingBanner />
       <main className="content"><div className="page-enter">{children}</div></main>
     </div>
