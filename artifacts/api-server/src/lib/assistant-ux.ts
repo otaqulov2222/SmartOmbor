@@ -321,11 +321,23 @@ export function stripFakeDownloadLinks(text: string): string {
   return out;
 }
 
+/** Har qanday suhbatda foydalanuvchiga «Janob» deb murojaat. */
+export function ensureJanobAddress(text: string): string {
+  let t = String(text || "").trim();
+  if (!t) return t;
+  if (/\bjanob\b/i.test(t)) return t;
+  if (/^(ha|xa|ok)\b\.?$/i.test(t)) return "Ha, janob.";
+  if (/^(ha|xa|ok)\b\.?\s+/i.test(t)) return t.replace(/^(ha|xa|ok)\b\.?\s*/i, "Ha, janob. ");
+  if (/^tushundim\b\.?$/i.test(t)) return "Tushundim, janob.";
+  if (/^tushundim\b/i.test(t)) return t.replace(/^tushundim\b\.?\s*/i, "Tushundim, janob. ");
+  return `Janob,\n${t}`;
+}
+
 export function sanitizeAssistantReply(text: string): string {
   let out = String(text || "");
   if (isTrustedLocalReply(out)) {
     out = localizeUzbekReply(out);
-    return out.replace(/\n{3,}/g, "\n\n").trim();
+    return ensureJanobAddress(out.replace(/\n{3,}/g, "\n\n").trim());
   }
   if (looksLikeFakeKpiDownload(out)) {
     return kpiFollowupReply();
@@ -340,7 +352,7 @@ export function sanitizeAssistantReply(text: string): string {
   out = out.replace(/data:application\/(?:pdf|vnd\.[a-z0-9.-]+);base64,[A-Za-z0-9+/=]+/gi, "");
   out = stripFakeDownloadLinks(out);
   if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /\*{2,}|yuklab\s*olish\s*uchun/i.test(out))) {
-    return kpiFollowupReply();
+    return ensureJanobAddress(kpiFollowupReply());
   }
   // Tor UI: keng jadvalni olib tashlash — lekin login/portal/http jadvallarini saqlash
   out = out.replace(/(?:^\|.+\|[ \t]*$\n?)+/gm, (table) => {
@@ -356,7 +368,7 @@ export function sanitizeAssistantReply(text: string): string {
   out = out.replace(/(?<![\/\w-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\/\w-])/gi, "xodim");
   out = localizeUzbekReply(out);
   out = out.replace(/\n{3,}/g, "\n\n").trim();
-  return out;
+  return ensureJanobAddress(out);
 }
 
 /** AI o‘zi haqida / «sen nima agentisan» / «kim yaratdi» */
@@ -588,18 +600,18 @@ export function vagueGiveReply(prevAssistant = ""): string {
 export function finalizeAssistantReply(text: string, hasFiles = false): string {
   const raw = String(text || "");
   if (isTrustedLocalReply(raw) || hasFiles) {
-    return sanitizeAssistantReply(raw);
+    return ensureJanobAddress(sanitizeAssistantReply(raw));
   }
   let out = sanitizeAssistantReply(raw);
-  if (hasFiles) return out;
+  if (hasFiles) return ensureJanobAddress(out);
   if (looksLikeFakeKpiDownload(out) || (/kpi/i.test(out) && /pdf|yuklab\s*olish\s*uchun|\*{2,}/i.test(out))) {
-    return kpiFollowupReply();
+    return ensureJanobAddress(kpiFollowupReply());
   }
   // Bo‘sh yoki faqat **** qolgan javob — umumiy yo‘l-yo‘riq (KPI emas, agar KPI yo‘q)
   if (!out.trim() || /^\*{2,}$/.test(out.trim()) || /yuklab\s*olish\s*uchun\s*\*{0,8}\s*$/i.test(out)) {
-    return vagueGiveReply("");
+    return ensureJanobAddress(vagueGiveReply(""));
   }
-  return out;
+  return ensureJanobAddress(out);
 }
 
 export function isKpiAgentsIntent(lower: string): boolean {

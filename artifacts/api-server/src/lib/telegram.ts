@@ -10,6 +10,7 @@ import { recommendationPdf, recommendationRows, recommendationXlsx } from "./rec
 import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
 import { assistantConfigured, runAssistantChat, type AssistantFile } from "./assistant";
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
+import { ensureJanobAddress } from "./assistant-ux";
 import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
 import {
   looksLikeFalseTruthStamp,
@@ -464,17 +465,19 @@ async function replyHardRouted(chatId: number, state: TelegramState, userText: s
   const hard = telegramHardRoute(userText);
   if (!hard) return false;
   const explained = telegramHardReply(hard, userText);
+  const plain = ensureJanobAddress(explained.plain);
+  const html = /\bjanob\b/i.test(explained.html) ? explained.html : `Janob,\n${explained.html}`;
   const saved = appendToSession(
     ASSISTANT_LOGIN,
     state.assistantSessionId,
     [
       { role: "user", content: userText },
-      { role: "assistant", content: explained.plain },
+      { role: "assistant", content: plain },
     ],
   );
   state.assistantSessionId = saved.session.id;
-  await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
-  rememberBotOutbound("kirim_nazorati", explained.plain);
+  await send(chatId, `<b>Yordamchi</b>\n${html}`);
+  rememberBotOutbound("kirim_nazorati", plain);
   logger.info({ reason, route: hard, session: saved.session.id }, "Telegram hard-route");
   return true;
 }
@@ -514,34 +517,37 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
     if (looksLikeWrongKpiTrap(result.reply) || looksLikeFalseTruthStamp(result.reply)) {
       clearInterval(typing);
       const explained = telegramHardReply("kirim_truth", userText);
+      const plainTrap = ensureJanobAddress(explained.plain);
+      const htmlTrap = /\bjanob\b/i.test(explained.html) ? explained.html : `Janob,\n${explained.html}`;
       const savedTrap = appendToSession(
         ASSISTANT_LOGIN,
         state.assistantSessionId,
         [
           { role: "user", content: userText },
-          { role: "assistant", content: explained.plain },
+          { role: "assistant", content: plainTrap },
         ],
       );
       state.assistantSessionId = savedTrap.session.id;
-      await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
+      await send(chatId, `<b>Yordamchi</b>\n${htmlTrap}`);
       return;
     }
 
     const files = Array.isArray(result.files) ? result.files : [];
+    const replyText = ensureJanobAddress(result.reply);
     const saved = appendToSession(
       ASSISTANT_LOGIN,
       state.assistantSessionId,
       [
         { role: "user", content: userText },
-        { role: "assistant", content: result.reply, tools: result.tools, files },
+        { role: "assistant", content: replyText, tools: result.tools, files },
       ],
     );
     state.assistantSessionId = saved.session.id;
 
-    const html = toTelegramHtml(result.reply) || "<i>Javob bo‘sh.</i>";
+    const html = toTelegramHtml(replyText) || "<i>Javob bo‘sh.</i>";
     await send(chatId, `<b>Yordamchi</b>\n${html}`);
     if (files.length) await sendAssistantFiles(chatId, files);
-    rememberBotOutbound("yordamchi", result.reply);
+    rememberBotOutbound("yordamchi", replyText);
     logger.info({
       tools: result.tools?.length || 0,
       files: files.length,

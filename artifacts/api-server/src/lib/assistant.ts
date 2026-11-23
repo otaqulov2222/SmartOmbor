@@ -29,6 +29,7 @@ import {
   resolveSalesDays,
   roleLabelUz,
   classifyAssistantIntent,
+  ensureJanobAddress,
   finalizeAssistantReply,
   identityReply,
   isAttendanceIntent,
@@ -83,7 +84,7 @@ export function assistantConfigured() {
 
 const SYSTEM = `Siz — Smart Ombor (Bordo) yordamchisisiz.
 Sizni Firdavs yaratgan. OpenAI/ChatGPT/GPT demang — bu yolg‘on.
-Foydalanuvchiga «janob» deb murojaat qiling (masalan: «Ha, janob», «Janob, …»).
+HAR QANDAY foydalanuvchiga (direktor, ombor, agent, ofis) «janob» deb murojaat qiling: «Ha, janob», «Janob, …».
 Asosiy kuch: ombor, yuk xati, pachka, davomat, oylik, MoySklad, KPI, GPS, xodimlar.
 Siz professional nazoratchisiz: kontekstni chalkashtirmang, taxmin bilan boshqa bo‘limga o‘tmang.
 
@@ -2420,7 +2421,7 @@ export async function runAssistantChat(input: {
       const route = telegramHardRoute(userOnly);
       if (route) {
         const explained = telegramHardReply(route, userOnly);
-        return { reply: explained.plain, model: "local-fast", tools: [], files: [] };
+        return { reply: ensureJanobAddress(explained.plain), model: "local-fast", tools: [], files: [] };
       }
     } catch {
       /* ignore — oddiy yo‘l */
@@ -2430,9 +2431,10 @@ export async function runAssistantChat(input: {
   // Avvalo tez mahalliy yo‘l — faqat foydalanuvchi matni (kontekst injeksiyasisiz)
   const fast = await tryFastLocalTask(userOnly, history);
   if (fast) {
-    const finalized = input.channel === "telegram" && /Kirim nazorati|Yuqoridagi hisobot/i.test(fast.reply)
-      ? fast.reply
-      : finalizeAssistantReply(fast.reply, Array.isArray(fast.files) && fast.files.length > 0);
+    const finalized = finalizeAssistantReply(
+      fast.reply,
+      Array.isArray(fast.files) && fast.files.length > 0,
+    );
     return {
       ...fast,
       reply: finalized,
