@@ -10,9 +10,9 @@ import { recommendationPdf, recommendationRows, recommendationXlsx } from "./rec
 import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
 import { assistantConfigured, runAssistantChat, type AssistantFile } from "./assistant";
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
-import { isWatchdogReportAsk } from "./assistant-ux";
 import { peekLastWatchdogReport } from "./supply-watchdog-state";
-import { buildTelegramAssistantBundle, lastBotOutbound, rememberBotOutbound } from "./telegram-context";
+import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
+import { looksLikeWrongKpiTrap, telegramHardRoute } from "./telegram-router";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -483,6 +483,21 @@ function explainLastWatchdogReport(): { html: string; plain: string } {
   return { html, plain: last.plain };
 }
 
+async function replyWithWatchdogExplain(chatId: number, state: TelegramState, userText: string, reason: string) {
+  const explained = explainLastWatchdogReport();
+  const saved = appendToSession(
+    ASSISTANT_LOGIN,
+    state.assistantSessionId,
+    [
+      { role: "user", content: userText },
+      { role: "assistant", content: explained.plain },
+    ],
+  );
+  state.assistantSessionId = saved.session.id;
+  await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
+  logger.info({ reason, session: saved.session.id }, "Telegram hard-route: kirim nazorati");
+}
+
 async function replyAssistant(chatId: number, state: TelegramState, userText: string) {
   if (!assistantConfigured()) {
     await send(chatId, "<b>Yordamchi</b>\nHozir sozlanmagan (GROQ_API_KEY).");
@@ -493,24 +508,10 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
     return;
   }
 
-  // «Yuqorida / bu nima hisobot?» → kunlik/KPI emas, kirim nazorati
-  const lowAsk = userText.toLowerCase();
-  const recentWatch = lastBotOutbound("kirim_nazorati") || peekLastWatchdogReport()?.plain;
-  const vagueReportAsk = /\bhisobot\b/.test(lowAsk)
-    && !/\bkpi\b|davomat|oylik|maosh|savdo|agentlar|bugungi\s*kun/.test(lowAsk)
-    && (/nima|buyicha|bo'?yicha|yuqori|tepa|shu|bu\b|qanday|tushuntir|ayt|neg/.test(lowAsk) || userText.trim().length <= 40);
-  if (isWatchdogReportAsk(userText) || (Boolean(recentWatch) && vagueReportAsk)) {
-    const explained = explainLastWatchdogReport();
-    const saved = appendToSession(
-      ASSISTANT_LOGIN,
-      state.assistantSessionId,
-      [
-        { role: "user", content: userText },
-        { role: "assistant", content: explained.plain },
-      ],
-    );
-    state.assistantSessionId = saved.session.id;
-    await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
+  // QATTIY SHLYUZ — Groq/KPI/kunlik brifingdan OLDIN (taxmin yo‘q)
+  const hard = telegramHardRoute(userText);
+  if (hard === "explain_kirim_nazorati") {
+    await replyWithWatchdogExplain(chatId, state, userText, "hard_route");
     return;
   }
 
@@ -525,12 +526,25 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
       .slice(-10)
       .map((m) => ({ role: m.role as "user" | "assistant", content: String(m.content || "") }));
 
-  const result = await runAssistantChat({
-    message: userText,
-    history,
-    channel: "telegram",
-    contextBundle: buildTelegramAssistantBundle(),
-  });
+    const result = await runAssistantChat({
+      message: userText,
+      history,
+      channel: "telegram",
+      contextBundle: buildTelegramAssistantBundle(),
+    });
+
+    // Xavfsizlik to‘ri: KPI trapiga tushib qolsa — darhol kirim nazoratiga qaytaramiz
+    if (looksLikeWrongKpiTrap(result.reply) && telegramHardRoute(`hisobot ${userText}`) === "explain_kirim_nazorati") {
+      clearInterval(typing);
+      await replyWithWatchdogExplain(chatId, state, userText, "kpi_trap_override");
+      return;
+    }
+    if (looksLikeWrongKpiTrap(result.reply) && peekLastWatchdogReport()?.plain) {
+      clearInterval(typing);
+      await replyWithWatchdogExplain(chatId, state, userText, "kpi_trap_has_watch");
+      return;
+    }
+
     const files = Array.isArray(result.files) ? result.files : [];
     const saved = appendToSession(
       ASSISTANT_LOGIN,
@@ -543,9 +557,9 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
     state.assistantSessionId = saved.session.id;
 
     const html = toTelegramHtml(result.reply) || "<i>Javob bo‘sh.</i>";
-    const header = "<b>Yordamchi</b>\n";
-    await send(chatId, `${header}${html}`);
+    await send(chatId, `<b>Yordamchi</b>\n${html}`);
     if (files.length) await sendAssistantFiles(chatId, files);
+    rememberBotOutbound("yordamchi", result.reply);
     logger.info({
       tools: result.tools?.length || 0,
       files: files.length,
