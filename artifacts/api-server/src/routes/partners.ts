@@ -21,6 +21,7 @@ import {
   clearShipmentPosted,
   beginSupplyInflight,
   endSupplyInflight,
+  isSupplyInflight,
   moyskladDateTime,
   partnerRevision,
   flushPartners,
@@ -312,14 +313,33 @@ function acquireSupplyLock(id: string): Promise<() => void> {
 
 type SupplyHit = { id: string; name?: string; deleted?: string; applicable?: boolean; externalCode?: string; incomingNumber?: string };
 
-function sameSupply(row: SupplyHit, shipment: { id: string; number: string }) {
-  if (row.externalCode && row.externalCode === shipment.id) return true;
-  const number = shipment.number.trim();
+function nameMatchesShipment(row: SupplyHit, number: string) {
   if (!number) return false;
   const name = String(row.name || "").trim();
   if (name === number || name.startsWith(`${number} `)) return true;
   if (row.incomingNumber && String(row.incomingNumber).trim() === number) return true;
   return false;
+}
+
+/** Boshqa lokal yukka tegishli MS hujjatga tegilmasin. */
+function claimedByOtherShipment(row: SupplyHit, shipmentId: string) {
+  const others = listShipments().filter((item) => item.id !== shipmentId);
+  if (row.externalCode && others.some((item) => item.id === row.externalCode)) return true;
+  if (row.id && others.some((item) => item.moyskladId === row.id)) return true;
+  return false;
+}
+
+/**
+ * Shu yukning o‘z kirimi yoki yetim dublikat:
+ * - externalCode = shipment.id → aniq o‘zimizniki
+ * - nom/incoming mos + boshqa yuk da’vo qilmasa → yetim dublikat (tozalash mumkin)
+ * - boshqa yukning externalCode/moyskladId → CHETga tegilmasin
+ */
+function isOwnOrOrphanDup(row: SupplyHit, shipment: { id: string; number: string }) {
+  if (!row.id || row.deleted) return false;
+  if (claimedByOtherShipment(row, shipment.id)) return false;
+  if (row.externalCode === shipment.id) return true;
+  return nameMatchesShipment(row, shipment.number.trim());
 }
 
 function supplyMatchScore(row: SupplyHit, shipment: { id: string; number: string }) {
@@ -336,63 +356,105 @@ function supplyMatchScore(row: SupplyHit, shipment: { id: string; number: string
 
 const supplyLookup = new Map<string, { at: number; hit: { id: string; name: string } | null }>();
 
-/** MoySkladda shu yuk xati uchun mavjud kirim — dublikat yaratmaslik uchun. */
-async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
-  const cached = supplyLookup.get(shipment.id);
-  if (cached && Date.now() - cached.at < 15_000) return cached.hit;
+async function listSupplyCandidates(shipment: { id: string; number: string }): Promise<SupplyHit[]> {
   const number = shipment.number.trim();
   const filters = [
     `externalCode=${shipment.id}`,
     ...(number ? [`name=${number}`, `incomingNumber=${number}`] : []),
   ];
-  const pages = await Promise.all([
+  const settled = await Promise.allSettled([
     ...filters.map((filter) =>
-      moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&filter=${encodeURIComponent(filter)}`).catch(() => ({ rows: [] as SupplyHit[] })),
+      moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&filter=${encodeURIComponent(filter)}`),
     ),
-    number
-      ? moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&search=${encodeURIComponent(number)}`).catch(() => ({ rows: [] as SupplyHit[] }))
-      : Promise.resolve({ rows: [] as SupplyHit[] }),
+    ...(number
+      ? [moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&search=${encodeURIComponent(number)}`)]
+      : []),
   ]);
-  const byId = new Map<string, SupplyHit>();
-  for (const row of pages.flatMap((page) => page.rows)) {
-    if (row.id && !row.deleted) byId.set(row.id, row);
+  const ok = settled.filter((item): item is PromiseFulfilledResult<{ rows: SupplyHit[] }> => item.status === "fulfilled");
+  if (!ok.length) {
+    const first = settled.find((item) => item.status === "rejected") as PromiseRejectedResult | undefined;
+    throw first?.reason || Object.assign(new Error("ms_lookup_failed"), { status: 502 });
   }
-  const ranked = [...byId.values()]
-    .filter((row) => sameSupply(row, shipment))
+  const byId = new Map<string, SupplyHit>();
+  for (const page of ok) {
+    for (const row of page.value.rows || []) {
+      if (row.id && !row.deleted) byId.set(row.id, row);
+    }
+  }
+  return [...byId.values()];
+}
+
+/** MoySkladda shu yuk xati uchun mavjud kirim — dublikat yaratmaslik uchun. */
+async function findExistingSupply(shipment: { id: string; number: string; date?: string }): Promise<{ id: string; name: string } | null> {
+  const cached = supplyLookup.get(shipment.id);
+  if (cached && Date.now() - cached.at < 8_000) return cached.hit;
+  const ranked = (await listSupplyCandidates(shipment))
+    .filter((row) => isOwnOrOrphanDup(row, shipment))
     .sort((a, b) => supplyMatchScore(b, shipment) - supplyMatchScore(a, shipment));
   const hit = ranked[0]?.id ? { id: ranked[0].id, name: ranked[0].name || shipment.number } : null;
   supplyLookup.set(shipment.id, { at: Date.now(), hit });
   return hit;
 }
 
-/** Bir xil yuk xati uchun ortiqcha MS kirimlarni (dublikat) o‘chirish — faqat birinchi (eng yaxshi) qoladi. */
+/** Ortiqcha o‘z/yetim dublikatlarni o‘chirish. keepId majburiy — bo‘sh bo‘lsa no-op emas, xato. */
 async function pruneDuplicateSupplies(shipment: { id: string; number: string }, keepId: string) {
-  const number = shipment.number.trim();
-  if (!number || !keepId) return 0;
-  const pages = await Promise.all([
-    moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&filter=${encodeURIComponent(`name=${number}`)}`).catch(() => ({ rows: [] as SupplyHit[] })),
-    moysklad<{ rows: SupplyHit[] }>(`/entity/supply?limit=50&search=${encodeURIComponent(number)}`).catch(() => ({ rows: [] as SupplyHit[] })),
-  ]);
-  const byId = new Map<string, SupplyHit>();
-  for (const row of pages.flatMap((page) => page.rows)) {
-    if (row.id && !row.deleted && sameSupply(row, shipment)) byId.set(row.id, row);
+  if (!keepId) {
+    throw Object.assign(new Error("prune_requires_keep"), {
+      status: 500,
+      detail: "Dublikat tozalash uchun saqlanadigan kirim id kerak.",
+    });
   }
+  const rows = await listSupplyCandidates(shipment);
   let removed = 0;
-  for (const row of byId.values()) {
+  const failed: string[] = [];
+  for (const row of rows) {
     if (row.id === keepId) continue;
-    // Faqat shu yukga tegishli: externalCode mos yoki nom=raqam / raqam+sana
-    const name = String(row.name || "").trim();
-    const ours = row.externalCode === shipment.id || name === number || name.startsWith(`${number} `);
-    if (!ours) continue;
+    if (!isOwnOrOrphanDup(row, shipment)) continue;
     try {
       await deleteSupplyDocument(row.id);
       removed += 1;
       logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Pruned duplicate MoySklad supply");
     } catch (error) {
+      failed.push(row.id);
       logger.warn({ shipment: shipment.id, supply: row.id, err: error instanceof Error ? error.message : error }, "Duplicate supply prune failed");
     }
   }
+  if (failed.length) {
+    throw Object.assign(new Error("dup_prune_failed"), {
+      status: 502,
+      detail: `Dublikat tozalanmadi (${failed.length}). Qayta urinib ko‘ring — aks holda ombor shishishi mumkin.`,
+    });
+  }
   return removed;
+}
+
+/** Barcha o‘z/yetim dublikatlarni o‘chirish (qayta yaratish oldidan). */
+async function deleteOwnOrphanSupplies(shipment: { id: string; number: string }) {
+  const rows = (await listSupplyCandidates(shipment)).filter((row) => isOwnOrOrphanDup(row, shipment));
+  let removed = 0;
+  for (const row of rows) {
+    await deleteSupplyDocument(row.id);
+    removed += 1;
+    logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Removed own/orphan MoySklad supply before recreate");
+  }
+  supplyLookup.delete(shipment.id);
+  return removed;
+}
+
+async function stampSupplyExternalCode(supplyId: string, shipmentId: string) {
+  try {
+    await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { externalCode: shipmentId }, "PUT");
+  } catch (error) {
+    logger.warn({ supply: supplyId, err: error instanceof Error ? error.message : error }, "Stamp supply externalCode skipped");
+  }
+}
+
+function isTransientMsError(error: unknown) {
+  if (writeDropped(error)) return true;
+  if (error instanceof MoySkladError) {
+    return error.status === 429 || error.status === 401 || error.status === 403 || error.status >= 500;
+  }
+  return false;
 }
 
 function chooseSupplyName(shipment: { id: string; number: string; date?: string }) {
@@ -580,20 +642,22 @@ async function assertSupplyMatchesOrRollback(
   try {
     return await verifySupplyIntegrity(supplyId, expectedPositions);
   } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    const deterministic = code === "qty_mismatch"
+      || code === "supply_deleted"
+      || code === "supply_not_applicable"
+      || code === "agent"
+      || code === "store"
+      || code === "currency";
     logger.error({
       shipment: meta.shipmentId,
       supply: supplyId,
       err: error instanceof Error ? error.message : error,
+      deterministic,
     }, "MoySklad kirim integrity verify failed — rolling back");
-    if (meta.allowDelete) {
-      try {
-        await deleteSupplyDocument(supplyId);
-      } catch (rollbackErr) {
-        logger.error({
-          supply: supplyId,
-          err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr,
-        }, "Kirim rollback delete failed");
-      }
+    // Transient (429/5xx/tarmoq) da to‘g‘ri hujjatni o‘chirmaymiz
+    if (meta.allowDelete && deterministic && !isTransientMsError(error)) {
+      await deleteSupplyDocument(supplyId);
     }
     throw error;
   }
@@ -610,6 +674,10 @@ async function ensureLinkedSupplyOrClear(shipment: {
 }): Promise<{ id: string; name: string } | null> {
   const supplyId = String(shipment.moyskladId || "").trim();
   if (!supplyId) return null;
+  // Kirim yozilayotganda sticky tekshiruv bog‘lanishni o‘chirib yubormasin
+  if (isSupplyInflight(shipment.id)) {
+    return { id: supplyId, name: shipment.moyskladNumber || shipment.number };
+  }
   try {
     const doc = await moysklad<SupplyDocMeta>(
       `/entity/supply/${encodeURIComponent(supplyId)}?expand=agent,organization,store`,
@@ -617,6 +685,7 @@ async function ensureLinkedSupplyOrClear(shipment: {
     if (doc.deleted) {
       logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply deleted — clearing local post");
       clearShipmentPosted(shipment.id, {
+        expectMoyskladId: supplyId,
         alert: {
           code: "ms_deleted",
           title: "MoySklad kirimi o‘chirilgan",
@@ -670,6 +739,7 @@ async function ensureLinkedSupplyOrClear(shipment: {
         reasons,
       }, "Linked MS supply unhealthy — clearing for repost");
       clearShipmentPosted(shipment.id, {
+        expectMoyskladId: supplyId,
         alert: {
           code: "ms_unhealthy",
           title: "MoySklad kirimi buzilgan — qayta kirim qiling",
@@ -684,6 +754,7 @@ async function ensureLinkedSupplyOrClear(shipment: {
     if (supplyGone(error) || (error instanceof MoySkladError && error.status === 404)) {
       logger.warn({ shipment: shipment.id, supply: supplyId }, "Linked MS supply gone — clearing local post");
       clearShipmentPosted(shipment.id, {
+        expectMoyskladId: supplyId,
         alert: {
           code: "ms_gone",
           title: "MoySklad kirimi topilmadi",
@@ -693,20 +764,14 @@ async function ensureLinkedSupplyOrClear(shipment: {
       supplyLookup.delete(shipment.id);
       return null;
     }
+    // 429/5xx/tarmoq — false alert bermaymiz, bog‘lanishni saqlaymiz
     logger.warn({
       shipment: shipment.id,
       supply: supplyId,
       err: error instanceof Error ? error.message : error,
-    }, "Linked MS supply health check failed");
-    clearShipmentPosted(shipment.id, {
-      alert: {
-        code: "ms_check_failed",
-        title: "MoySklad tekshiruvi muvaffaqiyatsiz",
-        detail: "Kirim holatini o‘qib bo‘lmadi — xavfsizlik uchun bog‘lanish uzildi. Qayta «MoySkladga kirim» qiling.",
-      },
-    });
-    supplyLookup.delete(shipment.id);
-    return null;
+      transient: isTransientMsError(error),
+    }, "Linked MS supply health check failed — keeping link");
+    return { id: supplyId, name: shipment.moyskladNumber || shipment.number };
   }
 }
 
@@ -747,6 +812,12 @@ async function deleteSupplyDocument(supplyId: string) {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, undefined, "DELETE");
   } catch (error) {
     logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply delete failed");
+    if (permissionDenied(error)) {
+      throw Object.assign(new Error("ms_permission"), {
+        status: 502,
+        detail: "MoySklad API tokenida kirim o‘chirish/yaratish ruxsati yo‘q (kod 1018). Token huquqlarini oching yoki dublikatlarni MoySklad UI dan qo‘lda o‘chiring — aks holda avtomatik tozalash ishlamaydi.",
+      });
+    }
     throw error;
   }
 }
@@ -815,7 +886,8 @@ async function postSupplyDocument(core: Record<string, unknown>, positions: Arra
     const existing = await findExistingSupply(shipment);
     if (existing) return { ...existing, reused: true };
   }
-  const names = [...new Set([chooseSupplyName(shipment), ...supplyNames(shipment).slice(1), `${shipment.number.trim()} ${shipment.id.slice(0, 6)}`])].filter(Boolean);
+  // Faqat asosiy nom — fallback nomlar dublikatni yashiradi
+  const names = [...new Set([chooseSupplyName(shipment), ...supplyNames(shipment).slice(1)])].filter(Boolean);
   const payloads: Array<Record<string, unknown>> = [
     ...names.map((name) => ({ ...core, name, applicable: true, positions })),
     { ...core, name: names[0], applicable: false, positions },
@@ -829,10 +901,22 @@ async function postSupplyDocument(core: Record<string, unknown>, positions: Arra
     } catch (error) {
       last = error;
       supplyLookup.delete(shipment.id);
+      // Timeout/502: POST allaqachon yaratgan bo‘lishi mumkin — qayta yaratmaymiz
+      if (writeDropped(error) || isTransientMsError(error)) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+          const found = await findExistingSupply(shipment);
+          if (found) return { ...found, reused: true };
+        }
+        throw Object.assign(new Error("post_ambiguous"), {
+          status: 502,
+          detail: "MoySklad javobi aniq emas. Dublikat xavfi uchun qayta yaratilmadi — birozdan keyin qayta urinib ko‘ring.",
+        });
+      }
       const foundAgain = await findExistingSupply(shipment);
       if (foundAgain) return { ...foundAgain, reused: true };
       const text = `${error instanceof MoySkladError ? error.parameter || "" : ""} ${error instanceof Error ? error.message : ""}`;
-      const retry = uniqueSupplyConflict(error) || permissionDenied(error) || writeDropped(error) || /applicable|проведен/i.test(text);
+      const retry = uniqueSupplyConflict(error) || permissionDenied(error) || /applicable|проведен/i.test(text);
       if (!retry) throw error;
       logger.warn({ err: error instanceof Error ? error.message : error }, "MoySklad supply create retry");
     }
@@ -976,6 +1060,7 @@ function setSupplyJob(id: string, job: SupplyJob) {
 
 function supplyRetryable(error: unknown) {
   const detail = error instanceof Error ? error.message : "";
+  if (detail === "post_ambiguous" || detail === "dup_prune_failed" || detail === "prune_requires_keep") return false;
   return uniqueSupplyConflict(error)
     || writeDropped(error)
     || /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi|yaratilmadi|javob bermadi|limiti|fetch failed/i.test(detail);
@@ -1026,7 +1111,7 @@ async function runSupplyJob(
       moyCode: error instanceof MoySkladError ? error.moyCode : undefined,
       parameter: error instanceof MoySkladError ? error.parameter : undefined,
     }, "MoySklad supply failed");
-    const code = codeRaw === "store" || codeRaw === "agent" || codeRaw === "currency" || codeRaw === "declined" || codeRaw === "pairs_suspect" || codeRaw === "qty_mismatch" || codeRaw === "pachka_mismatch" || codeRaw === "supply_deleted" || codeRaw === "supply_not_applicable"
+    const code = codeRaw === "store" || codeRaw === "agent" || codeRaw === "currency" || codeRaw === "declined" || codeRaw === "pairs_suspect" || codeRaw === "qty_mismatch" || codeRaw === "pachka_mismatch" || codeRaw === "supply_deleted" || codeRaw === "supply_not_applicable" || codeRaw === "post_ambiguous" || codeRaw === "dup_prune_failed" || codeRaw === "ms_permission"
       ? codeRaw
       : "rejected";
     setSupplyJob(shipmentId, { status: "error", error: code, detail, storeId });
@@ -1401,17 +1486,16 @@ async function writeShipmentSupply(
           { shipmentId, allowDelete: false },
         );
         created = { id: existing.id, name: existing.name, reused: true };
+        await stampSupplyExternalCode(existing.id, shipment.id);
         logger.info({ shipment: shipmentId, supply: existing.id }, "Reusing healthy MoySklad supply — no duplicate create");
       } catch (error) {
+        if (isTransientMsError(error)) throw error;
         logger.warn({
           shipment: shipmentId,
           supply: existing.id,
           err: error instanceof Error ? error.message : error,
-        }, "Existing MoySklad supply unhealthy — removing matching duplicates then recreate once");
-        // Buzilgan + dublikatlar: hammasi olib tashlanadi, keyin bitta to‘g‘ri kirim.
-        await pruneDuplicateSupplies(shipment, "");
-        try { await deleteSupplyDocument(existing.id); } catch { /* maybe already pruned */ }
-        supplyLookup.delete(shipment.id);
+        }, "Existing MoySklad supply unhealthy — deleting own/orphan then recreate once");
+        await deleteOwnOrphanSupplies(shipment);
       }
     }
     if (!created) {
@@ -1426,33 +1510,25 @@ async function writeShipmentSupply(
         { shipmentId, allowDelete: !created.reused },
       );
     } catch (error) {
+      if (isTransientMsError(error)) throw error;
       logger.warn({
         shipment: shipmentId,
         supply: created.id,
         reused: created.reused,
         err: error instanceof Error ? error.message : error,
       }, "MoySklad supply mismatched — recreating once");
-      if (!created.reused) {
-        try { await deleteSupplyDocument(created.id); } catch { /* ignore */ }
-      } else {
-        await pruneDuplicateSupplies(shipment, "");
-        try { await deleteSupplyDocument(created.id); } catch { /* ignore */ }
-      }
-      supplyLookup.delete(shipment.id);
-      created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: true });
+      await deleteOwnOrphanSupplies(shipment);
+      created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: false });
       await assertSupplyMatchesOrRollback(
         created.id,
         supplyPositions,
         { shipmentId, allowDelete: true },
       );
     }
-    // Shu yuk raqamidagi ortiqcha dublikatlarni tozalash (ombor shishmasin)
-    try {
-      const pruned = await pruneDuplicateSupplies(shipment, created.id);
-      if (pruned > 0) logger.info({ shipment: shipmentId, keep: created.id, pruned }, "Duplicate MoySklad supplies pruned");
-    } catch (error) {
-      logger.warn({ shipment: shipmentId, err: error instanceof Error ? error.message : error }, "Duplicate prune skipped");
-    }
+    // Shu yukning ortiqcha dublikatlarini tozalash — muvaffaqiyatsiz bo‘lsa mark qilinmasin
+    const pruned = await pruneDuplicateSupplies(shipment, created.id);
+    if (pruned > 0) logger.info({ shipment: shipmentId, keep: created.id, pruned }, "Duplicate MoySklad supplies pruned");
+    await stampSupplyExternalCode(created.id, shipment.id);
     // Agent majburiy — mark qilishdan OLDIN
     await ensureSupplyAgent(created.id, agentMeta);
     // Pachka kartada bo‘lsin (post verify)
@@ -1516,7 +1592,12 @@ function supplyJobPayload(shipmentId: string) {
     return { pending: false, already: true, id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment };
   }
   const job = supplyJobs.get(shipmentId);
-  if (job?.status === "done" && job.result) return { pending: false, ...job.result };
+  // Sticky uzilgan bo‘lsa eski "done" natija yolg‘on success bermasin
+  if (job?.status === "done") {
+    supplyJobs.delete(shipmentId);
+    persistSupplyJobs();
+    return { pending: false, error: "idle" };
+  }
   if (job?.status === "error") return { pending: false, error: job.error || "rejected", detail: job.detail || "Kirim yozilmadi" };
   if (job?.status === "pending") return { pending: true };
   return { pending: false, error: "idle" };

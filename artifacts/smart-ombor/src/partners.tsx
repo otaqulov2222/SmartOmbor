@@ -267,6 +267,9 @@ function supplyError(body: { error?: string; detail?: string; msAlert?: MsAlert 
   if (body.msAlert?.title) {
     return `${body.msAlert.title}. ${body.msAlert.detail || t('partners.msAlertBody')}`;
   }
+  if (body.error === 'ms_permission' || body.error === 'post_ambiguous' || body.error === 'dup_prune_failed') {
+    return body.detail || t('partners.supplyFailed');
+  }
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
   if (body.error === 'pairs_suspect') return String(body.detail || '').trim() || t('partners.pairsSuspect');

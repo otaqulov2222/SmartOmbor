@@ -546,10 +546,19 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
-  const seq = store.shipments.filter((item) => item.factoryId === factoryId).length + 1;
+  // Raqam hech qachon qayta ishlatilmasin (o‘chirilgan yukdan keyin ham).
+  const used = store.shipments
+    .filter((item) => item.factoryId === factoryId)
+    .map((item) => Number(String(item.number).split("-").pop()) || 0);
+  let seq = (used.length ? Math.max(...used) : 0) + 1;
+  let number = `${account.code}-${String(seq).padStart(3, "0")}`;
+  while (store.shipments.some((item) => item.number === number)) {
+    seq += 1;
+    number = `${account.code}-${String(seq).padStart(3, "0")}`;
+  }
   const shipment: Shipment = {
     id: randomBytes(8).toString("hex"),
-    number: `${account.code}-${String(seq).padStart(3, "0")}`,
+    number,
     factoryId,
     date: tashkentDay(input.date) || tashkentDay(),
     status: "sent",
@@ -611,6 +620,13 @@ export function deleteShipment(id: string) {
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
   if (supplyInflight.has(id)) throw Object.assign(new Error("supply_busy"), { status: 409 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
+  // MS da yetim kirim qolishi mumkin — avval qayta kirim/tozalash kerak
+  if (shipment.msAlert) {
+    throw Object.assign(new Error("ms_alert"), {
+      status: 409,
+      detail: "Avval MoySklad ogohlantirishini yoping (qayta kirim), keyin o‘chiring.",
+    });
+  }
   const before = store.shipments.length;
   store.shipments = store.shipments.filter((item) => item.id !== id);
   if (store.shipments.length === before) throw Object.assign(new Error("not_found"), { status: 404 });
@@ -684,12 +700,17 @@ export function clearShipmentPosted(
   shipmentId: string,
   opts?: {
     reopen?: boolean;
+    /** Faqat shu MS id bog‘langan bo‘lsa uzilsin (poyga himoyasi). */
+    expectMoyskladId?: string;
     alert?: { code: string; title: string; detail: string };
   },
 ) {
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (opts?.expectMoyskladId && shipment.moyskladId && shipment.moyskladId !== opts.expectMoyskladId) {
+    return shipmentView(shipment);
+  }
   shipment.moyskladId = null;
   shipment.moyskladNumber = null;
   shipment.postedUnits = null;
@@ -723,6 +744,15 @@ export function markShipmentPosted(
   const store = load();
   const shipment = store.shipments.find((item) => item.id === shipmentId);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (shipment.status === "declined") {
+    throw Object.assign(new Error("declined"), { status: 409 });
+  }
+  if (shipment.moyskladId && shipment.moyskladId !== posted.id) {
+    throw Object.assign(new Error("posted_other"), {
+      status: 409,
+      detail: "Bu yuk allaqachon boshqa MoySklad kirimiga bog‘langan.",
+    });
+  }
   shipment.moyskladId = posted.id;
   shipment.moyskladNumber = posted.number;
   shipment.status = "accepted";
@@ -755,6 +785,7 @@ export function setShipmentStatus(id: string, status: "sent" | "accepted" | "dec
   const store = load();
   const shipment = store.shipments.find((item) => item.id === id);
   if (!shipment) throw Object.assign(new Error("not_found"), { status: 404 });
+  if (supplyInflight.has(id)) throw Object.assign(new Error("supply_busy"), { status: 409 });
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   if (status === "accepted" && shipment.status === "declined") throw Object.assign(new Error("declined"), { status: 409 });
   if (status === "sent" && shipment.status !== "declined" && shipment.status !== "sent") {
