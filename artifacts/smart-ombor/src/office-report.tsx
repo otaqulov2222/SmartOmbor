@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ChevronLeft, ChevronRight, CircleAlert, Download, FileText, QrCode, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Download, FileText, QrCode, RefreshCw, Search, X } from 'lucide-react';
 import { useI18n, type TKey } from '@/i18n';
 import { officeHeaders } from '@/office';
 import { downloadOfficeQrA4 } from '@/office-qr';
@@ -127,8 +127,19 @@ export function OfficeReportPage() {
   const [outHm, setOutHm] = useState('18:00');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState('');
+  const [expandId, setExpandId] = useState('');
+  const [monthKey, setMonthKey] = useState(today.slice(0, 7));
+  const [monthRows, setMonthRows] = useState<TabelRow[]>([]);
+  const [monthLoad, setMonthLoad] = useState(false);
+  const [monthErr, setMonthErr] = useState('');
+  const [monthTick, setMonthTick] = useState(0);
   const ranged = mode !== 'day';
   const span = spanOf(mode, day, from, to);
+  const monthSpan = useMemo(() => {
+    const start = `${monthKey}-01`;
+    const last = lastOfMonth(start);
+    return { from: start, to: last > today ? today : last };
+  }, [monthKey, today]);
 
   const statusText = (status: string) => {
     if (status === 'absent') return t('office.stAbsent');
@@ -206,6 +217,49 @@ export function OfficeReportPage() {
     setOutHm(open.outHm || data?.end || '18:00');
     setSaved('');
   }, [open, data?.start, data?.end]);
+
+  useEffect(() => {
+    if (!expandId) {
+      setMonthRows([]);
+      setMonthErr('');
+      return;
+    }
+    let live = true;
+    setMonthLoad(true);
+    setMonthErr('');
+    const url = `/api/office/tabel?from=${monthSpan.from}&to=${monthSpan.to}`;
+    void fetch(url, { headers: officeHeaders() }).then(async response => {
+      if (!live) return;
+      if (!response.ok) { setMonthErr(t('common.loadFailed')); setMonthRows([]); return; }
+      const body = await response.json() as Tabel;
+      const mine = (body.items || [])
+        .filter(row => row.accountId === expandId)
+        .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+      setMonthRows(mine);
+    }).catch(() => {
+      if (live) { setMonthErr(t('common.serverLost')); setMonthRows([]); }
+    }).finally(() => {
+      if (live) setMonthLoad(false);
+    });
+    return () => { live = false; };
+  }, [expandId, monthSpan.from, monthSpan.to, monthTick, t]);
+
+  const toggleExpand = (accountId: string, anchorDay?: string) => {
+    if (expandId === accountId) {
+      setExpandId('');
+      return;
+    }
+    const seed = (anchorDay || day || today).slice(0, 7);
+    setMonthKey(seed);
+    setExpandId(accountId);
+  };
+
+  const shiftMonthKey = (by: number) => {
+    const [y, m] = monthKey.split('-').map(Number);
+    const next = new Date(Date.UTC(y, m - 1 + by, 1)).toISOString().slice(0, 7);
+    const max = today.slice(0, 7);
+    setMonthKey(next > max ? max : next);
+  };
 
   const goDay = (value: string) => setDay(clampDay(value));
   const step = (by: number) => {
@@ -344,6 +398,7 @@ export function OfficeReportPage() {
     setSaved(t('office.saved'));
     setOpen(null);
     setReload(value => value + 1);
+    if (expandId) setMonthTick(value => value + 1);
   };
 
   const filters: Array<[Filter, string]> = [
@@ -366,6 +421,69 @@ export function OfficeReportPage() {
   const meta = ranged
     ? `${date(data?.from || span.from)} – ${date(data?.to || span.to)}`
     : `${date(day)}${data?.start ? ` · ${data.start}–${data.end}` : ''}`;
+
+  const monthCame = monthRows.filter(row => row.status === 'present' || row.status === 'late' || row.status === 'out_missing').length;
+  const monthAbsent = monthRows.filter(row => row.status === 'absent').length;
+  const monthLate = monthRows.filter(row => row.status === 'late').length;
+  const monthOff = monthRows.filter(row => row.status === 'off' || row.status === 'sick' || row.status === 'vacation' || row.status === 'trip' || row.status === 'permit').length;
+
+  const renderPersonMonth = (name: string) => (
+    <div className="tabel-month" onClick={event => event.stopPropagation()}>
+      <div className="tabel-month-head">
+        <div>
+          <b>{t('office.personMonth')}</b>
+          <span className="muted"> · {name}</span>
+        </div>
+        <div className="tabel-month-nav">
+          <button type="button" className="icon-btn" onClick={() => shiftMonthKey(-1)} aria-label={t('common.prevPage')}><ChevronLeft size={16}/></button>
+          <b>{date(monthSpan.from)} – {date(monthSpan.to)}</b>
+          <button type="button" className="icon-btn" disabled={monthKey >= today.slice(0, 7)} onClick={() => shiftMonthKey(1)} aria-label={t('common.nextPage')}><ChevronRight size={16}/></button>
+        </div>
+      </div>
+      {!monthLoad && !monthErr && monthRows.length > 0 && <div className="tabel-month-stats">
+        <span>{t('office.statCame')}: <b>{fmt(monthCame)}</b></span>
+        <span>{t('office.statAbsent')}: <b>{fmt(monthAbsent)}</b></span>
+        <span>{t('office.statLate')}: <b>{fmt(monthLate)}</b></span>
+        <span>{t('office.statOff')}: <b>{fmt(monthOff)}</b></span>
+      </div>}
+      {monthLoad && <p className="muted tabel-state">{t('common.loading')}</p>}
+      {monthErr && !monthLoad && <p className="tabel-month-err">{monthErr}</p>}
+      {!monthLoad && !monthErr && !monthRows.length && <p className="muted tabel-state">{t('office.emptyBody')}</p>}
+      {!monthLoad && !monthErr && monthRows.length > 0 && <div className="tabel-month-wrap">
+        <table className="table tabel-month-table">
+          <thead><tr>
+            <th>{t('office.colDay')}</th>
+            <th>{t('common.date')}</th>
+            <th>{t('office.colStatus')}</th>
+            <th>{t('office.colIn')}</th>
+            <th>{t('office.colOut')}</th>
+            <th>{t('office.colWork')}</th>
+            <th>{t('office.colLate')}</th>
+            <th>{t('office.colMethod')}</th>
+            <th>{t('office.editDay')}</th>
+          </tr></thead>
+          <tbody>
+            {monthRows.map((row, index) => (
+              <tr key={row.date || index} className="is-clickable" onClick={() => setOpen(row)}>
+                <td data-label={t('office.colDay')}>{index + 1}</td>
+                <td data-label={t('common.date')}>{date(row.date || '')}</td>
+                <td data-label={t('office.colStatus')}><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
+                <td data-label={t('office.colIn')}>{row.inHm || '—'}</td>
+                <td data-label={t('office.colOut')}>{row.outHm || '—'}</td>
+                <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
+                <td data-label={t('office.colLate')}>{lateLabel(row.lateIn)}</td>
+                <td data-label={t('office.colMethod')}>{methodText(row)}</td>
+                <td data-label={t('office.editDay')}>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={event => { event.stopPropagation(); setOpen(row); }}>{t('office.editDay')}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>}
+      <p className="muted tabel-month-hint">{t('office.personMonthHint')}</p>
+    </div>
+  );
 
   return <div className="tabel">
     <div className="page-head">
@@ -429,49 +547,75 @@ export function OfficeReportPage() {
       {!load && !error && view === 'people' && ranged && peopleRows.length > 0 && <div className="table-wrap">
         <table className="table">
           <thead><tr>
+            <th className="tabel-expand-col" aria-hidden/>
             <th>{t('office.colName')}</th><th>{t('office.colRole')}</th><th>{t('office.colDays')}</th>
             <th>{t('office.statAbsent')}</th><th>{t('office.statLate')}</th><th>{t('office.colDaysOff')}</th>
             <th>{t('office.colWork')}</th><th>{t('office.colLate')}</th><th>{t('office.colEarlyOut')}</th><th>{t('office.colOver')}</th>
           </tr></thead>
           <tbody>
-            {peopleRows.map(row => <tr key={row.accountId} className="is-clickable" onClick={() => { setPerson(row.accountId); setView('days'); }}>
-              <td data-label=""><b>{row.name}</b></td>
-              <td data-label={t('office.colRole')}>{roleLabel(row.role)}</td>
-              <td data-label={t('office.colDays')}>{fmt(row.came)}</td>
-              <td data-label={t('office.statAbsent')}>{fmt(row.absent)}</td>
-              <td data-label={t('office.statLate')}>{fmt(row.late)}</td>
-              <td data-label={t('office.colDaysOff')}>{fmt(row.off)}</td>
-              <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
-              <td data-label={t('office.colLate')}>{lateLabel(row.lateMin)}</td>
-              <td data-label={t('office.colEarlyOut')}>{lateLabel(row.earlyOut)}</td>
-              <td data-label={t('office.colOver')}>{lateLabel(row.overtime)}</td>
-            </tr>)}
+            {peopleRows.map(row => {
+              const openMonth = expandId === row.accountId;
+              return <Fragment key={row.accountId}>
+                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`}>
+                  <td className="tabel-expand-col" data-label="">
+                    <button type="button" className={`tabel-arrow ${openMonth ? 'is-open' : ''}`} aria-label={t('office.personMonth')} aria-expanded={openMonth} onClick={event => { event.stopPropagation(); toggleExpand(row.accountId); }}>
+                      {openMonth ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+                    </button>
+                  </td>
+                  <td data-label="" onClick={() => toggleExpand(row.accountId)}><b>{row.name}</b></td>
+                  <td data-label={t('office.colRole')}>{roleLabel(row.role)}</td>
+                  <td data-label={t('office.colDays')}>{fmt(row.came)}</td>
+                  <td data-label={t('office.statAbsent')}>{fmt(row.absent)}</td>
+                  <td data-label={t('office.statLate')}>{fmt(row.late)}</td>
+                  <td data-label={t('office.colDaysOff')}>{fmt(row.off)}</td>
+                  <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
+                  <td data-label={t('office.colLate')}>{lateLabel(row.lateMin)}</td>
+                  <td data-label={t('office.colEarlyOut')}>{lateLabel(row.earlyOut)}</td>
+                  <td data-label={t('office.colOver')}>{lateLabel(row.overtime)}</td>
+                </tr>
+                {openMonth && <tr className="tabel-month-row"><td colSpan={11}>{renderPersonMonth(row.name)}</td></tr>}
+              </Fragment>;
+            })}
           </tbody>
         </table>
       </div>}
       {!load && !error && (view !== 'people' || !ranged) && rows.length > 0 && <div className="table-wrap">
         <table className="table">
           <thead><tr>
+            <th className="tabel-expand-col" aria-hidden/>
             {ranged && <th>{t('common.date')}</th>}
             <th>{t('office.colName')}</th><th>{t('office.colN')}</th><th>{t('office.colRole')}</th><th>{t('office.colStatus')}</th>
             <th>{t('office.colIn')}</th><th>{t('office.colOut')}</th><th>{t('office.colWork')}</th>
             <th>{t('office.colLate')}</th><th>{t('office.colEarlyOut')}</th><th>{t('office.colOver')}</th><th>{t('office.colMethod')}</th>
           </tr></thead>
           <tbody>
-            {rows.map(row => <tr key={`${row.date || day}-${row.accountId}`} className="is-clickable" onClick={() => setOpen(row)}>
-              {ranged && <td data-label="">{date(row.date || '')}</td>}
-              <td data-label={ranged ? t('office.colName') : ''}><b>{row.name}</b></td>
-              <td data-label={t('office.colN')}>{row.n}</td>
-              <td data-label={t('office.colRole')}>{roleLabel(row.role)}</td>
-              <td data-label={t('office.colStatus')}><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
-              <td data-label={t('office.colIn')}>{row.inHm || '—'}</td>
-              <td data-label={t('office.colOut')}>{row.outHm || '—'}</td>
-              <td data-label={t('office.colWork')}>{hhmm(row.workedMs)}</td>
-              <td data-label={t('office.colLate')}>{lateLabel(row.lateIn)}</td>
-              <td data-label={t('office.colEarlyOut')}>{lateLabel(row.earlyOut)}</td>
-              <td data-label={t('office.colOver')}>{lateLabel(row.overtime)}</td>
-              <td data-label={t('office.colMethod')}>{methodText(row)}</td>
-            </tr>)}
+            {rows.map((row, index) => {
+              const openMonth = expandId === row.accountId;
+              const showPanel = openMonth && rows.findIndex(item => item.accountId === row.accountId) === index;
+              const colSpan = (ranged ? 13 : 12);
+              return <Fragment key={`${row.date || day}-${row.accountId}`}>
+                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`}>
+                  <td className="tabel-expand-col" data-label="">
+                    <button type="button" className={`tabel-arrow ${openMonth ? 'is-open' : ''}`} aria-label={t('office.personMonth')} aria-expanded={openMonth} onClick={event => { event.stopPropagation(); toggleExpand(row.accountId, row.date || day); }}>
+                      {openMonth ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+                    </button>
+                  </td>
+                  {ranged && <td data-label="" onClick={() => setOpen(row)}>{date(row.date || '')}</td>}
+                  <td data-label={ranged ? t('office.colName') : ''} onClick={() => setOpen(row)}><b>{row.name}</b></td>
+                  <td data-label={t('office.colN')} onClick={() => setOpen(row)}>{row.n}</td>
+                  <td data-label={t('office.colRole')} onClick={() => setOpen(row)}>{roleLabel(row.role)}</td>
+                  <td data-label={t('office.colStatus')} onClick={() => setOpen(row)}><span className={`tabel-pill is-${row.status}`}>{statusText(row.status)}</span></td>
+                  <td data-label={t('office.colIn')} onClick={() => setOpen(row)}>{row.inHm || '—'}</td>
+                  <td data-label={t('office.colOut')} onClick={() => setOpen(row)}>{row.outHm || '—'}</td>
+                  <td data-label={t('office.colWork')} onClick={() => setOpen(row)}>{hhmm(row.workedMs)}</td>
+                  <td data-label={t('office.colLate')} onClick={() => setOpen(row)}>{lateLabel(row.lateIn)}</td>
+                  <td data-label={t('office.colEarlyOut')} onClick={() => setOpen(row)}>{lateLabel(row.earlyOut)}</td>
+                  <td data-label={t('office.colOver')} onClick={() => setOpen(row)}>{lateLabel(row.overtime)}</td>
+                  <td data-label={t('office.colMethod')} onClick={() => setOpen(row)}>{methodText(row)}</td>
+                </tr>
+                {showPanel && <tr className="tabel-month-row"><td colSpan={colSpan}>{renderPersonMonth(row.name)}</td></tr>}
+              </Fragment>;
+            })}
           </tbody>
         </table>
       </div>}

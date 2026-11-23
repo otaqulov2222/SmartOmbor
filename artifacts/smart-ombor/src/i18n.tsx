@@ -1489,6 +1489,10 @@ const uz = {
   'office.qrWait': 'QR hali tayyor emas',
   'office.from': 'Dan',
   'office.to': 'Gacha',
+  'office.personMonth': 'Oylik davomat',
+  'office.personMonthHint': 'Kerakli kunga bosing yoki «Tahrirlash» — kelgan/sababni qo‘lda belgilab saqlang.',
+  'office.colDay': 'Kun',
+  'office.editDay': 'Tahrirlash',
 
   // dates
   'date.weekdays': 'Yak,Dush,Sesh,Chor,Pay,Jum,Shan',
@@ -2958,6 +2962,10 @@ const ru: Record<TKey, string> = {
   'office.qrWait': 'QR ещё не готов',
   'office.from': 'С',
   'office.to': 'По',
+  'office.personMonth': 'Месячный табель',
+  'office.personMonthHint': 'Нажмите на день или «Изменить» — вручную отметьте приход/причину и сохраните.',
+  'office.colDay': 'День',
+  'office.editDay': 'Изменить',
 
   'date.weekdays': 'Вс,Пн,Вт,Ср,Чт,Пт,Сб',
   'date.weekdaysLong': 'Воскресенье,Понедельник,Вторник,Среда,Четверг,Пятница,Суббота',

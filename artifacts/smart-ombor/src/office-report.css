@@ -54,6 +54,43 @@
 .tabel-range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-width: 0; flex: 1; }
 .tabel-state { padding: 1rem 1.2rem; }
 .tabel .table tr.is-clickable { cursor: pointer; }
+.tabel .table tr.is-expanded { background: #f8fafc; }
+.tabel-expand-col { width: 2.6rem; padding-right: 0 !important; }
+.tabel-arrow {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border-radius: 999px;
+  background: #1e3a5f; color: #fff; border: 0; cursor: pointer;
+  box-shadow: 0 1px 3px rgb(15 27 45 / .18);
+}
+.tabel-arrow:hover { background: #2f54eb; }
+.tabel-arrow.is-open { background: #2f54eb; }
+.tabel-month-row > td { padding: 0 !important; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; }
+.tabel-month {
+  margin: 0; padding: 12px 14px 14px; display: grid; gap: 10px;
+  border-left: 3px solid #2f54eb;
+}
+.tabel-month-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+}
+.tabel-month-head b { font-size: .98rem; }
+.tabel-month-nav { display: flex; align-items: center; gap: 6px; }
+.tabel-month-nav b { min-width: 11rem; text-align: center; font-size: .9rem; }
+.tabel-month-stats {
+  display: flex; flex-wrap: wrap; gap: 10px 16px;
+  padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid #e2e8f0;
+  font-size: .82rem; color: #64748b;
+}
+.tabel-month-stats b { color: #0f1b2d; }
+.tabel-month-wrap { overflow: auto; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; }
+.tabel-month-table { margin: 0; }
+.tabel-month-table thead th {
+  background: #1e3a5f; color: #fff; font-size: .72rem; letter-spacing: .02em;
+  white-space: nowrap; position: sticky; top: 0; z-index: 1;
+}
+.tabel-month-table tbody tr:nth-child(even) { background: #f8fafc; }
+.tabel-month-table tbody tr:hover { background: #eef2ff; }
+.tabel-month-err { color: #b42318; margin: 0; padding: 8px 4px; }
+.tabel-month-hint { margin: 0; font-size: .8rem; }
 .tabel-people, .tabel-prio { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
 .tabel-people button, .tabel-prio button {
   background: #f1f5f9; border-radius: 999px; padding: 7px 12px; font-size: .85rem;
@@ -84,7 +121,22 @@
     border: 1px solid var(--line); border-radius: 14px; background: #fff;
   }
   .tabel .table td { padding: .35rem 0; }
-  .tabel .table td:first-child {
+  .tabel .table td.tabel-expand-col {
+    font-size: inherit; padding: 0 0 .4rem; margin: 0; border: 0;
+  }
+  .tabel .table tr.tabel-month-row {
+    padding: 0; border: 0; background: transparent; display: block;
+  }
+  .tabel .table tr.tabel-month-row > td {
+    display: block; padding: 0 !important; border: 0;
+  }
+  .tabel-month { border-radius: 14px; border: 1px solid #cbd5e1; border-left-width: 3px; }
+  .tabel-month-nav b { min-width: 0; font-size: .82rem; }
+  .tabel .table td:first-child:not(.tabel-expand-col) {
+    font-size: 1.02rem; padding-top: 0; padding-bottom: .55rem; margin-bottom: .15rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabel .table td:nth-child(2) {
     font-size: 1.02rem; padding-top: 0; padding-bottom: .55rem; margin-bottom: .15rem;
     border-bottom: 1px solid var(--line);
   }
