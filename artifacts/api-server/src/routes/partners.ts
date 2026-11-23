@@ -2373,3 +2373,5 @@ export function startSupplyIntegrityWatchdog() {
   logger.info("Supply integrity watchdog started (20m + Telegram admin)");
 }
 
+export default router;
+
