@@ -12,6 +12,7 @@ import { assistantConfigured, runAssistantChat, type AssistantFile } from "./ass
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
 import { isWatchdogReportAsk } from "./assistant-ux";
 import { peekLastWatchdogReport } from "./supply-watchdog-state";
+import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -99,6 +100,14 @@ export async function notifyAdmin(text: string): Promise<boolean> {
   for (const chunk of chunks) {
     const sent = await send(chatId, chunk);
     ok = sent && ok;
+  }
+  if (ok) {
+    const kind = /Kirim nazorati/i.test(text)
+      ? "kirim_nazorati" as const
+      : /Server to|to‘lovi|tolovi/i.test(text)
+        ? "server_billing" as const
+        : "other" as const;
+    rememberBotOutbound(kind, text);
   }
   return ok;
 }
@@ -511,20 +520,12 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
       .slice(-10)
       .map((m) => ({ role: m.role as "user" | "assistant", content: String(m.content || "") }));
 
-    const watch = peekLastWatchdogReport();
-    const contextNote = watch?.plain
-      ? [
-        "[Telegram kontekst — avtomatik]",
-        "Oxirgi avtomatik xabar: KIRIM NAZORATI (MoySklad dublikat/dona). Kunlik davomat brifingi emas.",
-        watch.plain.slice(0, 1200),
-        "Agar foydalanuvchi «yuqorida hisobot» desa — shu nazoratni tushuntiring.",
-      ].join("\n")
-      : "";
-
-    const result = await runAssistantChat({
-      message: contextNote ? `${userText}\n\n${contextNote}` : userText,
-      history,
-    });
+  const result = await runAssistantChat({
+    message: userText,
+    history,
+    channel: "telegram",
+    contextBundle: buildTelegramAssistantBundle(),
+  });
     const files = Array.isArray(result.files) ? result.files : [];
     const saved = appendToSession(
       ASSISTANT_LOGIN,

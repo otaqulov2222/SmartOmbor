@@ -35,6 +35,7 @@ import {
   isDailyBriefIntent,
   isIdentityIntent,
   isPayrollIntent,
+  isWatchdogReportAsk,
   normalizeAssistantQuery,
   parseBriefDates,
   sanitizeAssistantReply,
@@ -82,16 +83,19 @@ export function assistantConfigured() {
 
 const SYSTEM = `Siz — Smart Ombor (Bordo) nazorat agentisiz.
 Asosiy kuch: ombor, yuk xati, pachka, davomat, oylik, MoySklad, KPI, GPS, xodimlar.
+Siz professional nazoratchisiz: kontekstni chalkashtirmang, taxmin bilan boshqa bo‘limga o‘tmang.
 
 TUSHUNISH (QATIY):
 - Savolni ma’nosiga qarab javob bering. Orfografiya xato bo‘lsa ham (buyicha/bo‘yicha, toliq/to‘liq) tushuning.
-- «bugungi kun hisoboti / nima boldi / holatlar» → kunlik brifing (yuk + savdo + davomat). KPI PDF emas.
+- TELEGRAM: «yuqorida / tepada / oxirgi hisobot / qizil xabar / dublikat» → KIRIM NAZORATI (MoySklad dublikat+dona). Bu kunlik davomat/savdo brifingi EMAS.
+- «bugungi kun hisoboti / nima boldi / holatlar» (yuqoridagi avto-hisobotsiz) → kunlik brifing (yuk + savdo + davomat). KPI PDF emas.
 - «shanba / yakshanba / dam olish / dam kunlari / weekend» + hisobot → eng yaqin Shanba–Yakshanba kunlari (bugun emas). «to‘liq/barcha» bo‘lsa oy ichidagi hammasi.
 - Aniq sana (21.11.2026 yoki 2026-11-21) → shu kun hisoboti.
 - «bugun kim keldi / davomat» → davomat board.
 - «oylik / maosh / jarima / avans» → oylik bo‘limi haqida aniq javob.
 - «sen nima agentisan» → o‘zingizni qisqa tanishtiring, KPI havola bermang.
 - Noaniq «ber/kere ber» → aniq variantlar so‘rang; uydirma fayl havolasi YO‘Q.
+- Agar xabarda TELEGRAM KANAL / OXIRGI KIRIM NAZORATI konteksti bo‘lsa — avval shundan foydalaning.
 
 TIL (QATIY):
 - Foydalanuvchi o‘zbekcha yozsa — FAQAT o‘zbekcha javob.
@@ -1646,6 +1650,46 @@ async function tryFastLocalTask(
     return { reply: identityReply(), model: "local-fast", tools, files };
   }
 
+  // 0--) Telegram «yuqorida hisobot» — kunlik brifingga TUSHMASIN
+  if (intent === "watchdog_report" || isWatchdogReportAsk(lower)) {
+    try {
+      const { peekLastWatchdogReport } = await import("./supply-watchdog-state");
+      const { lastBotOutbound } = await import("./telegram-context");
+      const watch = peekLastWatchdogReport();
+      const out = lastBotOutbound("kirim_nazorati");
+      const body = watch?.plain || out?.plain || "";
+      if (!body) {
+        return {
+          reply: [
+            "Yuqoridagi avtomatik xabar — Kirim nazorati hisoboti.",
+            "MoySklad yuk/kirimlarini dublikat va dona bo‘yicha tekshiradi.",
+            "Bu kunlik davomat/savdo brifingi emas.",
+            "Aniq g‘olib yo‘q yoki MS ruxsati yetmasa avto-o‘chirish qilinmaydi.",
+          ].join("\n"),
+          model: "local-fast",
+          tools,
+          files,
+        };
+      }
+      const head = [
+        "Yuqoridagi hisobot — Kirim nazorati (MoySklad).",
+        watch?.when ? `Vaqt: ${watch.when}` : out?.whenLabel ? `Vaqt: ${out.whenLabel}` : "",
+        watch ? `Tekshirildi: ${watch.scanned} yuk · topilma: ${watch.findings}` : "",
+        "Kunlik davomat/savdo brifingi emas. Avto-o‘chirish faqat aniq qoida bo‘lsa.",
+        "",
+        body.slice(0, 2800),
+      ].filter(Boolean).join("\n");
+      return { reply: head, model: "local-fast", tools, files };
+    } catch {
+      return {
+        reply: "Yuqoridagi xabar — Kirim nazorati (dublikat/dona). Kunlik brifing emas.",
+        model: "local-fast",
+        tools,
+        files,
+      };
+    }
+  }
+
   // 0a) Kunlik tizim hisoboti — bugun / sana / dam olish / Shanba–Ya
   if (intent === "daily_brief" || isDailyBriefIntent(lower)) {
     const today = tashkentParts().date;
@@ -2324,17 +2368,36 @@ async function groqChat(messages: ChatMsg[], tools = true) {
 export async function runAssistantChat(input: {
   message: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
+  /** telegram — kanal konteksti qo‘shiladi, chalkashlik kamayadi */
+  channel?: "web" | "telegram";
+  contextBundle?: string;
 }) {
-  const message = String(input.message || "").trim().slice(0, 4000);
-  if (message.length < 1) throw Object.assign(new Error("empty"), { status: 400 });
+  const rawMessage = String(input.message || "").trim().slice(0, 4000);
+  if (rawMessage.length < 1) throw Object.assign(new Error("empty"), { status: 400 });
+
+  let bundle = String(input.contextBundle || "").trim();
+  if (input.channel === "telegram" && !bundle) {
+    try {
+      const { buildTelegramAssistantBundle } = await import("./telegram-context");
+      bundle = buildTelegramAssistantBundle();
+    } catch {
+      bundle = "";
+    }
+  }
+
+  // Intent chalkashmasin: foydalanuvchi matni alohida, kontekst alohida
+  const userOnly = rawMessage.replace(/\n*\[Telegram kontekst[\s\S]*$/i, "").trim() || rawMessage;
+  const messageForModel = bundle
+    ? `${userOnly}\n\n---\n${bundle}`
+    : userOnly;
 
   const history = (input.history || [])
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
     .slice(-12)
     .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 
-  // Avvalo tez mahalliy yo‘l: buyruq/vazifa/tushuntirish — Groq kutmaydi.
-  const fast = await tryFastLocalTask(message, history);
+  // Avvalo tez mahalliy yo‘l — faqat foydalanuvchi matni (kontekst injeksiyasisiz)
+  const fast = await tryFastLocalTask(userOnly, history);
   if (fast) {
     return {
       ...fast,
@@ -2342,16 +2405,21 @@ export async function runAssistantChat(input: {
     };
   }
 
+  const system = input.channel === "telegram"
+    ? `${SYSTEM}\n\nSiz hozir TELEGRAM admin chatidasiz. «Yuqorida hisobot» = kirim nazorati. Kunlik brifingga o‘girib yubormang.`
+    : SYSTEM;
+
   const messages: ChatMsg[] = [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: system },
     ...history,
-    { role: "user", content: message },
+    { role: "user", content: messageForModel.slice(0, 8000) },
   ];
 
   const toolTrace: Array<{ name: string; ok: boolean }> = [];
   const files: AssistantFile[] = [];
 
   // Prefetch: yuk / kirim / pachka / davomat — model kutmasin.
+  const message = userOnly;
   const shipmentMatch = message.match(/\b(\d{3,5}-\d{2,4})\b/);
   const lower = message.toLowerCase();
   const wantsKirim = /kirim|supply|приход|oxirgi yuk|so['‘`]?nggi yuk|oxirgi.*moy|moy\s*sklad.*yuk|yuk.*moy\s*sklad|последн.*(приход|наклад|поставк)|какой.*(приход|supply)/.test(lower)
@@ -2359,7 +2427,9 @@ export async function runAssistantChat(input: {
   const wantsPachka = /pachka|пачк|packs?\.?quantity/.test(lower)
     && !wantsKirim;
   const exportWanted = detectExport(lower);
-  const wantsOffice = /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
+  // Telegram kontekstli «hisobot» kunlik brifing prefetchiga tushmasin
+  const wantsOffice = !isWatchdogReportAsk(lower)
+    && /davomat|посещаем|kelmagan|не приш|bugun kim|сегодня кто|hisobot|отч[её]т/.test(lower);
   const wantsErrors = /xato|ошибк|error|journal|log/.test(lower)
     && !wantsKirim;
 

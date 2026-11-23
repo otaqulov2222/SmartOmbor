@@ -474,10 +474,17 @@ export function parseBriefDates(lower: string, today: string): string[] {
 /** Telegramdagi «yuqorida hisobot» — kunlik brifing EMAS, kirim nazorati. */
 export function isWatchdogReportAsk(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
-  if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*(qizil|avto)?\s*hisobot|kirim\s*nazorat/.test(t)) {
-    if (/hisobot|nima|buyicha|bo'?yicha|dublikat|dona|nazorat|yubor|berdin|aytding|nima\s*edi/.test(t)) return true;
+  // Kontekst injeksiyasini e'tiborsiz qoldirish
+  const head = t.split("[telegram kontekst")[0]?.split("telegram kanal")[0] || t;
+  if (/kirim\s*nazorat/.test(head)) return true;
+  if (/qizil\s*(xabar|hisobot|ogoh)|dublikat\s*(hisobot|xabar|tozala)|dona\s*mos\s*emas/.test(head)) {
+    if (/nima|hisobot|yuqori|tepada|shu|oxirgi|neg|sabab|tushuntir|ayt/.test(head) || head.length < 80) return true;
   }
-  if (/nima\s*(buyicha|bo'?yicha)\s*hisobot/.test(t) && /yuqori|tepada|berdin|yubor/.test(t)) return true;
+  if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*(qizil|avto|bot)?\s*hisobot|shu\s*hisobot|nima\s*(edi|edi\?)?\s*hisobot/.test(head)) {
+    if (/hisobot|nima|buyicha|bo'?yicha|dublikat|dona|nazorat|yubor|berdin|aytding|nima\s*edi|qizil|xabar/.test(head)) return true;
+  }
+  if (/nima\s*(buyicha|bo'?yicha)\s*hisobot/.test(head) && /yuqori|tepada|berdin|yubor|shu|oxirgi/.test(head)) return true;
+  if (/^nima\s*(bu|edi)|bu\s*(nima|qanday)\s*hisobot/.test(head) && /dublikat|dona|nazorat|qizil|0066|0007/.test(head)) return true;
   return false;
 }
 
@@ -642,6 +649,7 @@ export function isStaffListIntent(lower: string): boolean {
  */
 export type AssistantIntent =
   | "identity"
+  | "watchdog_report"
   | "daily_brief"
   | "attendance"
   | "payroll"
@@ -657,6 +665,8 @@ export type AssistantIntent =
 export function classifyAssistantIntent(raw: string): AssistantIntent {
   const t = normalizeAssistantQuery(raw);
   if (isIdentityIntent(t)) return "identity";
+  // Kunlik brifingdan OLDIN — aks holda «yuqorida hisobot» chalkashadi
+  if (isWatchdogReportAsk(t)) return "watchdog_report";
   if (isDailyBriefIntent(t)) return "daily_brief";
   if (isAttendanceIntent(t)) return "attendance";
   if (isPayrollIntent(t)) return "payroll";
