@@ -14,6 +14,7 @@ import { ensureJanobAddress } from "./assistant-ux";
 import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
 import {
   looksLikeFalseTruthStamp,
+  looksLikeUselessAck,
   looksLikeWrongKpiTrap,
   telegramHardReply,
   telegramHardRoute,
@@ -513,10 +514,18 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
       contextBundle: buildTelegramAssistantBundle(),
     });
 
-    // Xavfsizlik to‘ri: KPI / yolg‘on «hammasi to‘g‘ri» — truth sheet
-    if (looksLikeWrongKpiTrap(result.reply) || looksLikeFalseTruthStamp(result.reply)) {
+    // Xavfsizlik to‘ri: KPI / yolg‘on «to‘g‘ri» / bo‘sh «tushundim»
+    if (
+      looksLikeWrongKpiTrap(result.reply)
+      || looksLikeFalseTruthStamp(result.reply)
+      || looksLikeUselessAck(result.reply)
+    ) {
       clearInterval(typing);
-      const explained = telegramHardReply("kirim_truth", userText);
+      const { isKirimFixAsk } = await import("./kirim-truth");
+      const route = isKirimFixAsk(userText) || looksLikeUselessAck(result.reply)
+        ? "kirim_fix" as const
+        : "kirim_truth" as const;
+      const explained = telegramHardReply(route, userText);
       const plainTrap = ensureJanobAddress(explained.plain);
       const htmlTrap = /\bjanob\b/i.test(explained.html) ? explained.html : `Janob,\n${explained.html}`;
       const savedTrap = appendToSession(

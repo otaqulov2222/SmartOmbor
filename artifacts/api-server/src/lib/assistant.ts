@@ -2414,18 +2414,18 @@ export async function runAssistantChat(input: {
     .slice(-12)
     .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 
-  // Telegram qattiq shlyuz — truth sheet / qisqa ack
-  if (input.channel === "telegram") {
-    try {
-      const { telegramHardRoute, telegramHardReply } = await import("./telegram-router");
-      const route = telegramHardRoute(userOnly);
-      if (route) {
-        const explained = telegramHardReply(route, userOnly);
-        return { reply: ensureJanobAddress(explained.plain), model: "local-fast", tools: [], files: [] };
-      }
-    } catch {
-      /* ignore — oddiy yo‘l */
+  // Qattiq shlyuz — tuzatish / truth / ack (Telegram + sayt)
+  try {
+    const { telegramHardRoute, telegramHardReply } = await import("./telegram-router");
+    const { isKirimFixAsk } = await import("./kirim-truth");
+    const route = telegramHardRoute(userOnly)
+      || (isKirimFixAsk(userOnly) ? "kirim_fix" as const : null);
+    if (route) {
+      const explained = telegramHardReply(route, userOnly);
+      return { reply: ensureJanobAddress(explained.plain), model: "local-fast", tools: [], files: [] };
     }
+  } catch {
+    /* ignore — oddiy yo‘l */
   }
 
   // Avvalo tez mahalliy yo‘l — faqat foydalanuvchi matni (kontekst injeksiyasisiz)
