@@ -8,10 +8,13 @@ import { logger } from "./logger";
 import { orderBasis, orderRecommendations, productTraits } from "./recommendations";
 import { recommendationPdf, recommendationRows, recommendationXlsx } from "./reco-export";
 import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
+import { assistantConfigured, runAssistantChat, type AssistantFile } from "./assistant";
+import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
 const SITE = "https://bordoombor.uz";
+const ASSISTANT_LOGIN = "telegram-admin";
 
 interface TelegramState {
   chatId: number | null;
@@ -22,6 +25,8 @@ interface TelegramState {
   groupId: number | null;
   orderThreadId: number | null;
   idleThreadId: number | null;
+  /** Yordamchi chat session (faqat admin DM) */
+  assistantSessionId: string | null;
 }
 
 function readState(): TelegramState {
@@ -36,9 +41,20 @@ function readState(): TelegramState {
       groupId: parsed.groupId ?? null,
       orderThreadId: parsed.orderThreadId ?? null,
       idleThreadId: parsed.idleThreadId ?? null,
+      assistantSessionId: parsed.assistantSessionId ?? null,
     };
   } catch {
-    return { chatId: null, offset: 0, sentOn: null, sentNoonOn: null, sentPdfOn: null, groupId: null, orderThreadId: null, idleThreadId: null };
+    return {
+      chatId: null,
+      offset: 0,
+      sentOn: null,
+      sentNoonOn: null,
+      sentPdfOn: null,
+      groupId: null,
+      orderThreadId: null,
+      idleThreadId: null,
+      assistantSessionId: null,
+    };
   }
 }
 
@@ -353,16 +369,139 @@ function claimDigest(stamp: string) {
 }
 
 const WELCOME = [
-  "<b>Smart Ombor</b>",
-  "Ulandi.",
+  "<b>Smart Ombor · Yordamchi</b>",
+  "Ulandi. Shu yerda oddiy yozma suhbat qilishingiz mumkin.",
   "",
-  "• Turib qolgan / buyurtma — har kuni <b>11:00</b>",
-  "• Server to‘lovi eslatmasi — muddatga 3 kun qolganda har kuni <b>10:00</b>",
-  "• Kirim nazorati — har 20 daqiqa + ertalab/kech hisobot (admin)",
-  "• To‘lov qilganda yozing: <code>server tolov</code>",
+  "<b>Buyruqlar</b>",
+  "• /yordam — qisqa qo‘llanma",
+  "• /new — yangi suhbat",
+  "• /clear — suhbat tarixini tozalash",
+  "• <code>server tolov</code> — VPS to‘lovi belgilandi",
   "",
-  "Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.",
+  "<b>Avtomatik</b>",
+  "• Buyurtma / turib qolgan — har kuni <b>11:00</b>",
+  "• Kirim nazorati — har 20 daqiqa (admin)",
+  "• Server eslatmasi — muddatga 3 kun qolganda <b>10:00</b>",
+  "",
+  "Masalan: <i>bugun kim keldi</i>, <i>0066-018 holati</i>, <i>oylik hisobot</i>.",
 ].join("\n");
+
+const ASSISTANT_HELP = [
+  "<b>Yordamchi</b>",
+  "Ombor, yuk xati, davomat, oylik, MoySklad, KPI — savolingizni yozing.",
+  "",
+  "• /new — yangi suhbat (eski kontekst uziladi)",
+  "• /clear — barcha Telegram suhbat tarixi o‘chadi",
+  "• Fayl so‘rasangiz — PDF/Excel shu chatga keladi",
+  "",
+  "Faqat admin (siz) suhbat qila oladi.",
+].join("\n");
+
+const assistantHits = new Map<number, { n: number; at: number }>();
+
+function assistantRateOk(chatId: number, limit = 24, windowMs = 60_000) {
+  const now = Date.now();
+  const row = assistantHits.get(chatId);
+  if (!row || now - row.at > windowMs) {
+    assistantHits.set(chatId, { n: 1, at: now });
+    return true;
+  }
+  if (row.n >= limit) return false;
+  row.n += 1;
+  return true;
+}
+
+function isAdminDm(chatId: number) {
+  const admin = adminChatId();
+  return admin != null && chatId === admin;
+}
+
+/** Markdown-ish → Telegram HTML (xavfsiz). */
+function toTelegramHtml(raw: string) {
+  let text = String(raw || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return "";
+  text = escapeHtml(text);
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  text = text.replace(/(^|[^*\w])\*([^*\n]{1,200})\*(?!\*)/gm, "$1<i>$2</i>");
+  text = text.replace(/`([^`\n]{1,200})`/g, "<code>$1</code>");
+  text = text.replace(/^#{1,3}\s+(.+)$/gm, "<b>$1</b>");
+  text = text.replace(/^[-•]\s+/gm, "• ");
+  return text.slice(0, 3900);
+}
+
+async function sendTyping(chatId: number) {
+  await telegram("sendChatAction", { chat_id: chatId, action: "typing" });
+}
+
+async function sendAssistantFiles(chatId: number, files: AssistantFile[]) {
+  for (const file of files.slice(0, 4)) {
+    try {
+      const body = Buffer.from(file.base64, "base64");
+      if (!body.length || body.length > 18 * 1024 * 1024) continue;
+      await sendFile(chatId, body, file.name || "fayl.bin", file.mime || "application/octet-stream", file.name || "Fayl");
+    } catch (error) {
+      logger.warn({ err: error instanceof Error ? error.message : error, name: file.name }, "Telegram assistant file failed");
+    }
+  }
+}
+
+async function replyAssistant(chatId: number, state: TelegramState, userText: string) {
+  if (!assistantConfigured()) {
+    await send(chatId, "<b>Yordamchi</b>\nHozir sozlanmagan (GROQ_API_KEY).");
+    return;
+  }
+  if (!assistantRateOk(chatId)) {
+    await send(chatId, "Juda ko‘p so‘rov. Bir daqiqadan keyin qayta yozing.");
+    return;
+  }
+  await sendTyping(chatId);
+  const typing = setInterval(() => { void sendTyping(chatId); }, 4_000);
+  try {
+    const session = state.assistantSessionId
+      ? getAssistantSession(ASSISTANT_LOGIN, state.assistantSessionId)
+      : null;
+    const history = (session?.messages || [])
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-10)
+      .map((m) => ({ role: m.role as "user" | "assistant", content: String(m.content || "") }));
+
+    const result = await runAssistantChat({ message: userText, history });
+    const files = Array.isArray(result.files) ? result.files : [];
+    const saved = appendToSession(
+      ASSISTANT_LOGIN,
+      state.assistantSessionId,
+      [
+        { role: "user", content: userText },
+        { role: "assistant", content: result.reply, tools: result.tools, files },
+      ],
+    );
+    state.assistantSessionId = saved.session.id;
+
+    const html = toTelegramHtml(result.reply) || "<i>Javob bo‘sh.</i>";
+    const header = "<b>Yordamchi</b>\n";
+    await send(chatId, `${header}${html}`);
+    if (files.length) await sendAssistantFiles(chatId, files);
+    logger.info({
+      tools: result.tools?.length || 0,
+      files: files.length,
+      session: saved.session.id,
+    }, "Telegram assistant reply");
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "assistant";
+    const detail = typeof error === "object" && error && "detail" in error
+      ? String((error as { detail?: string }).detail || "")
+      : "";
+    logger.warn({ err: code, detail: detail || undefined }, "Telegram assistant failed");
+    await send(
+      chatId,
+      code === "groq_unreachable" || /fetch failed/i.test(code)
+        ? "<b>Yordamchi</b>\nTarmoq xatosi. Bir ozdan qayta yozing."
+        : `<b>Yordamchi</b>\nJavob olinmadi${detail ? `: ${escapeHtml(detail.slice(0, 160))}` : "."}`,
+    );
+  } finally {
+    clearInterval(typing);
+  }
+}
 
 async function sendFile(chatId: number, body: Buffer, filename: string, mime: string, caption: string, threadId?: number | null) {
   const key = token();
@@ -459,9 +598,19 @@ async function tick() {
       rememberForum(state, message);
       const chatId = message?.chat?.id;
       if (!chatId || chatId < 0) continue;
+
+      // Faqat admin DM — yordamchi + digest bog‘lanishi (boshqa odam botni ishlata olmasin)
+      if (!isAdminDm(chatId)) {
+        await send(chatId, "Bu bot faqat Smart Ombor admini uchun.");
+        continue;
+      }
+
       const first = state.chatId == null;
       state.chatId = chatId;
-      const text = String(message?.text || "").trim().toLowerCase();
+      const rawText = String(message?.text || "").trim();
+      const text = rawText.toLowerCase();
+      if (!rawText) continue;
+
       // Admin: server to‘lovi qilindi → muddat +30 kun, eslatmalar yangilanadi
       if (
         /^(?:\/)?server[_\s-]*(tolov|to'?lov|paid|pay)/i.test(text)
@@ -484,11 +633,36 @@ async function tick() {
         );
         continue;
       }
-      if (first || message?.text?.startsWith("/start")) {
-        await send(chatId, WELCOME);
-        await sendDigest(state);
-        logger.info("Telegram chat linked");
+
+      if (text === "/start" || text === "/yordam" || text === "/help") {
+        await send(chatId, text === "/start" ? WELCOME : ASSISTANT_HELP);
+        if (first || text === "/start") {
+          try {
+            await loadCatalog();
+            await sendDigest(state);
+          } catch {
+            /* digest ixtiyoriy */
+          }
+          logger.info("Telegram admin linked");
+        }
+        continue;
       }
+
+      if (text === "/new" || text === "/yangi") {
+        state.assistantSessionId = null;
+        await send(chatId, "<b>Yangi suhbat</b>\nKontekst tozalandi. Savolingizni yozing.");
+        continue;
+      }
+
+      if (text === "/clear" || text === "/tozala") {
+        clearAssistantHistory(ASSISTANT_LOGIN);
+        state.assistantSessionId = null;
+        await send(chatId, "<b>Tarix tozalandi</b>\nTelegram yordamchi suhbatlari o‘chirildi.");
+        continue;
+      }
+
+      // Oddiy matn → saytdagi Yordamchi bilan bir xil motor
+      await replyAssistant(chatId, state, rawText);
     }
     const hasTopics = Boolean(state.groupId && state.orderThreadId && state.idleThreadId);
     if (!hadTopics && hasTopics) {
