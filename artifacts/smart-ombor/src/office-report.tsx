@@ -123,6 +123,8 @@ export function OfficeReportPage() {
   const [open, setOpen] = useState<TabelRow | null>(null);
   const [excuse, setExcuse] = useState('');
   const [note, setNote] = useState('');
+  const [inHm, setInHm] = useState('08:00');
+  const [outHm, setOutHm] = useState('18:00');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState('');
   const ranged = mode !== 'day';
@@ -141,7 +143,12 @@ export function OfficeReportPage() {
   };
   const lateLabel = (n: number) => mins(n, value => t('office.minShort', { n: String(value) }));
   const methodText = (row: TabelRow) => {
-    const label = (value: string | null) => value === 'qr' ? t('office.methodQr') : value === 'face' ? t('office.methodFace') : '';
+    const label = (value: string | null) => (
+      value === 'qr' ? t('office.methodQr')
+        : value === 'face' ? t('office.methodFace')
+          : value === 'manual' ? t('office.methodManual')
+            : ''
+    );
     const inn = label(row.inMethod);
     const out = label(row.outMethod);
     if (inn && out && inn !== out) return `${inn} → ${out}`;
@@ -195,8 +202,10 @@ export function OfficeReportPage() {
     if (!open) return;
     setExcuse(open.excuse || '');
     setNote(open.note || '');
+    setInHm(open.inHm || data?.start || '08:00');
+    setOutHm(open.outHm || data?.end || '18:00');
     setSaved('');
-  }, [open]);
+  }, [open, data?.start, data?.end]);
 
   const goDay = (value: string) => setDay(clampDay(value));
   const step = (by: number) => {
@@ -308,12 +317,27 @@ export function OfficeReportPage() {
     doc.save(`davomat-${stamp}.pdf`);
   };
 
-  const saveMark = async () => {
+  const saveMark = async (opts?: { present?: boolean; clearPunch?: boolean }) => {
     if (!open) return;
     setSaving(true); setSaved('');
+    const body: Record<string, unknown> = {
+      accountId: open.accountId,
+      date: open.date || data?.date || day,
+      note,
+    };
+    if (opts?.clearPunch) {
+      body.clearPunch = true;
+      body.excuse = excuse;
+    } else if (opts?.present) {
+      body.present = true;
+      body.inHm = inHm;
+      body.outHm = outHm;
+    } else {
+      body.excuse = excuse;
+    }
     const response = await fetch('/api/office/tabel', {
       method: 'PATCH', headers: officeHeaders(),
-      body: JSON.stringify({ accountId: open.accountId, date: open.date || data?.date || day, excuse, note }),
+      body: JSON.stringify(body),
     });
     setSaving(false);
     if (!response.ok) { setSaved(t('common.actionFailed')); return; }
@@ -475,6 +499,19 @@ export function OfficeReportPage() {
           <div><span>{t('office.gpsOut')}</span><b>{point(open.outLat, open.outLng)}</b></div>
         </div>
         <p className="muted">{t('office.markHint')}</p>
+        <div className="tabel-manual">
+          <p className="muted">{t('office.markPresentHint')}</p>
+          <div className="tabel-manual-times">
+            <label className="field"><span>{t('office.manualIn')}</span><input className="input" type="time" value={inHm} onChange={event => setInHm(event.target.value)}/></label>
+            <label className="field"><span>{t('office.manualOut')}</span><input className="input" type="time" value={outHm} onChange={event => setOutHm(event.target.value)}/></label>
+          </div>
+          <div className="form-actions" style={{ justifyContent: 'flex-start', marginTop: 0 }}>
+            <button type="button" className="btn btn-primary btn-sm" disabled={saving || !inHm || !outHm} onClick={() => void saveMark({ present: true })}>{t('office.markPresent')}</button>
+            {(open.inHm || open.outHm) && (
+              <button type="button" className="btn btn-secondary btn-sm" disabled={saving} onClick={() => void saveMark({ clearPunch: true })}>{t('office.clearPunch')}</button>
+            )}
+          </div>
+        </div>
         <div className="tabel-chips">
           {excuses.map(([id, label]) => (
             <button type="button" key={id || 'none'} className={excuse === id ? 'is-on' : ''} onClick={() => setExcuse(id)}>{label}</button>

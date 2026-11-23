@@ -38,6 +38,11 @@
 .tabel-pill.is-permit { background: #ecfccb; color: #3f6212; }
 .tabel-tools { display: grid; gap: 10px; min-width: 0; }
 .tabel-tools .search { max-width: none; }
+.tabel-manual {
+  display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px;
+  border: 1px solid #c7d2fe; border-radius: 12px; background: #eef2ff;
+}
+.tabel-manual-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tabel-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .tabel-chips button {
   background: #f1f5f9; border-radius: 999px; padding: 7px 12px; font-size: .85rem;

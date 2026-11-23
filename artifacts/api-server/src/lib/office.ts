@@ -48,7 +48,7 @@ export type ResolvedHours = {
   source: "site" | "custom";
 };
 
-/** Default: Seshanba–Yakshanba ish, Dushanba dam. */
+/** Default: faqat Dushanba dam (1). 0=Ya … 6=Sh. */
 export const DEFAULT_OFF_DAYS = [1];
 
 function defaultSite(): OfficeSite {
@@ -86,7 +86,7 @@ export const OFFICE_RADIUS_M = DEFAULT_OFFICE_RADIUS_M;
 /** @deprecated — officeSite() dan foydalaning */
 export const OFFICE_ACCURACY_M = DEFAULT_OFFICE_ACCURACY_M;
 
-export type PunchMethod = "face" | "qr";
+export type PunchMethod = "face" | "qr" | "manual";
 export type PunchKind = "in" | "out";
 export type OfficeTaskStatus = "assigned" | "accepted" | "progress" | "review" | "done";
 const TASK_STATUSES: OfficeTaskStatus[] = ["assigned", "accepted", "progress", "review", "done"];
@@ -1297,7 +1297,7 @@ function monthBounds(month: string) {
   return { from, to: to < from ? from : to, last };
 }
 
-/** Oy ichidagi ish kunlari soni (offDays chiqariladi). Default: Se–Ya. */
+/** Oy ichidagi ish kunlari soni (offDays chiqariladi). Default: Se–Ya (Du dam). */
 export function workdaysInMonth(month: string, offDays: number[] = officeSite().offDays) {
   const { from, last } = monthBounds(month);
   let count = 0;
@@ -1567,7 +1567,37 @@ function emptyPunch(accountId: string, day: string): OfficePunch {
   };
 }
 
-export function setTabelMark(input: { accountId: string; date: string; excuse?: string; note?: string }) {
+function parseHm(raw: string): string | null {
+  const m = String(raw || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/** Toshkent HH:MM → ISO (UTC). */
+function tashkentHmToIso(day: string, hm: string) {
+  const stamp = Date.parse(`${day}T${hm}:00+05:00`);
+  if (!Number.isFinite(stamp)) throw Object.assign(new Error("time"), { status: 400 });
+  return new Date(stamp).toISOString();
+}
+
+/**
+ * Admin tahriri: sabab + (eski sanalar uchun) qo‘lda «kelgan» kirish/chiqish.
+ * - present=true yoki inHm/outHm → manual punch
+ * - clearPunch=true → kirish/chiqishni olib tashlash
+ */
+export function setTabelMark(input: {
+  accountId: string;
+  date: string;
+  excuse?: string;
+  note?: string;
+  present?: boolean;
+  clearPunch?: boolean;
+  inHm?: string | null;
+  outHm?: string | null;
+}) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw Object.assign(new Error("date"), { status: 400 });
   if (input.date > tashkentParts().date) throw Object.assign(new Error("future"), { status: 400 });
   const store = load();
@@ -1576,11 +1606,49 @@ export function setTabelMark(input: { accountId: string; date: string; excuse?: 
     row = emptyPunch(input.accountId, input.date);
     store.punches.push(row);
   }
-  if (input.excuse != null) {
+
+  if (input.clearPunch) {
+    row.inAt = null;
+    row.outAt = null;
+    row.inMethod = null;
+    row.outMethod = null;
+    row.inLat = null;
+    row.inLng = null;
+    row.outLat = null;
+    row.outLng = null;
+  }
+
+  const wantPresent = input.present === true || input.inHm != null || input.outHm != null;
+  if (wantPresent && !input.clearPunch) {
+    const site = officeSite();
+    const inHm = input.inHm != null && String(input.inHm).trim()
+      ? parseHm(String(input.inHm))
+      : (row.inAt ? hmOf(row.inAt) : site.start);
+    const outHm = input.outHm != null && String(input.outHm).trim()
+      ? parseHm(String(input.outHm))
+      : (row.outAt ? hmOf(row.outAt) : site.end);
+    if (!inHm || !outHm) throw Object.assign(new Error("time"), { status: 400 });
+    if (outHm < inHm) throw Object.assign(new Error("time_order"), { status: 400 });
+    row.inAt = tashkentHmToIso(input.date, inHm);
+    row.outAt = tashkentHmToIso(input.date, outHm);
+    row.inMethod = "manual";
+    row.outMethod = "manual";
+    row.inLat = null;
+    row.inLng = null;
+    row.outLat = null;
+    row.outLng = null;
+    // Kelgan deb belgilansa sababli yo‘qlik olib tashlanadi
+    row.excuse = "";
+  }
+
+  if (input.excuse != null && !wantPresent) {
     const value = String(input.excuse) as OfficeExcuse;
     if (!EXCUSES.includes(value)) throw Object.assign(new Error("excuse"), { status: 400 });
     row.excuse = value;
+  } else if (input.excuse != null && wantPresent) {
+    // present ustun — excuse ignore (yuqorida tozalandi)
   }
+
   if (input.note != null) row.note = String(input.note).trim().slice(0, 400);
   save(store);
   return row;

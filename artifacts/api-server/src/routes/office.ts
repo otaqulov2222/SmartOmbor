@@ -289,6 +289,10 @@ router.patch("/office/tabel", (req, res) => {
       date: String(req.body?.date ?? ""),
       excuse: req.body?.excuse != null ? String(req.body.excuse) : undefined,
       note: req.body?.note != null ? String(req.body.note) : undefined,
+      present: req.body?.present === true,
+      clearPunch: req.body?.clearPunch === true,
+      inHm: req.body?.inHm != null ? String(req.body.inHm) : undefined,
+      outHm: req.body?.outHm != null ? String(req.body.outHm) : undefined,
     });
     res.json({ ok: true, row });
   } catch (error) {
