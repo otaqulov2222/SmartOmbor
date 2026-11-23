@@ -720,25 +720,37 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     const actualQty = positions.map((row) => Math.round(Number(row.quantity) || 0));
     const actualTotal = actualQty.reduce((sum, qty) => sum + qty, 0);
     const issues: string[] = [];
-    if (!supplyId) issues.push("MoySklad supply bog‘lanmagan");
-    if (msError) issues.push(`MS o‘qish: ${msError}`);
-    if (ms && ms.deleted) issues.push("MS hujjat o‘chirilgan");
-    if (ms && ms.applicable === false) issues.push("MS hujjat hali o‘tkazilmagan (applicable=yo‘q)");
-    if (supplyId && !msError) {
-      // MS da rang/variant bo‘yicha qatorlar ajraladi — lokal model qatori emas, receiptParts bilan solishtiramiz.
-      if (positions.length !== expectedMsPositions) {
-        issues.push(
-          `MS qator soni mos emas: kutildi ${expectedMsPositions} (rang/variant), MS da ${positions.length}`
-          + ` (yuk xati model qatorlari: ${expectedRows.length})`,
-        );
+    if (!supplyId) {
+      // Bitta aniq sabab — hujjat yo‘q. Agent/ombor/tashkilotni «tanlanmagan» deb yolg‘on yozilmasin.
+      const status = String(hit.status || "");
+      if (status === "sent") {
+        issues.push("MoySkladga hali kirim yozilmagan (yuk «yuborilgan», ombor «MoySkladga kirim» bosmagan yoki kirim xato bilan tugagan)");
+      } else if (status === "accepted") {
+        issues.push("Holat qabul qilingan, lekin moyskladId yo‘q — bog‘lanish uzilgan yoki kirim yozilmagan");
+      } else {
+        issues.push("MoySklad kirim bog‘lanmagan (hujjat yaratilmagan)");
       }
-      if (actualTotal !== expectedTotal) {
-        issues.push(`Dona jami mos emas: yuk xati ${expectedTotal}, MS ${actualTotal}`);
+    } else {
+      if (msError) issues.push(`MS o‘qish: ${msError}`);
+      if (ms && ms.deleted) issues.push("MS hujjat o‘chirilgan");
+      if (ms && ms.applicable === false) issues.push("MS hujjat hali o‘tkazilmagan (applicable=yo‘q)");
+      if (!msError && ms) {
+        // MS da rang/variant bo‘yicha qatorlar ajraladi — lokal model qatori emas, receiptParts bilan solishtiramiz.
+        if (positions.length !== expectedMsPositions) {
+          issues.push(
+            `MS qator soni mos emas: kutildi ${expectedMsPositions} (rang/variant), MS da ${positions.length}`
+            + ` (yuk xati model qatorlari: ${expectedRows.length})`,
+          );
+        }
+        if (actualTotal !== expectedTotal) {
+          issues.push(`Dona jami mos emas: yuk xati ${expectedTotal}, MS ${actualTotal}`);
+        }
+        // Faqat HAQIQIY hujjat o‘qilganda maydon tekshiruvi
+        if (!(ms as { agent?: unknown }).agent) issues.push("MS da kontragent (agent) tanlanmagan");
+        if (!(ms as { store?: unknown }).store) issues.push("MS da ombor (store) tanlanmagan");
+        if (!(ms as { organization?: unknown }).organization) issues.push("MS da tashkilot (organization) tanlanmagan");
       }
     }
-    if (!(ms as { agent?: unknown } | null)?.agent) issues.push("MS da kontragent (agent) tanlanmagan");
-    if (!(ms as { store?: unknown } | null)?.store) issues.push("MS da ombor (store) tanlanmagan");
-    if (!(ms as { organization?: unknown } | null)?.organization) issues.push("MS da tashkilot (organization) tanlanmagan");
 
     const pachkaChecks: Array<Record<string, unknown>> = [];
     for (const row of expectedWithPachka.slice(0, 12)) {
@@ -1419,6 +1431,7 @@ function formatAuditReply(audit: Record<string, unknown>): string {
   const issues = Array.isArray(audit.issues) ? audit.issues as string[] : [];
   const pachka = Array.isArray(audit.pachkaChecks) ? audit.pachkaChecks as Array<Record<string, unknown>> : [];
   const badPachka = pachka.filter((row) => row.ok === false);
+  const unlinked = !ms;
   const lines = [
     `Yuk xati ${audit.number} (${audit.date || "—"}) — ${audit.verdict || ""}`,
     `Zavod: ${audit.factory || "—"} · holat: ${localizeStatus(audit.status)}`,
@@ -1429,7 +1442,8 @@ function formatAuditReply(audit: Record<string, unknown>): string {
       `Pozitsiya ${ms.positions || 0}/${local.expectedMsPositions || 0}, dona ${ms.pieces || 0}/${local.pieces || 0}`,
     );
   } else {
-    lines.push("MoySklad hujjati topilmadi.");
+    lines.push("MoySklad hujjati yo‘q — kirim hali yozilmagan yoki bog‘ uzilgan.");
+    lines.push("Izoh: ombor/kontragent/tashkilot kirim yozilganda tanlanadi. Hujjat bo‘lmasa ular «tanlanmagan» emas — umuman yaratilmagan.");
   }
   if (badPachka.length) {
     lines.push("Pachka mos emas:");
@@ -1438,7 +1452,7 @@ function formatAuditReply(audit: Record<string, unknown>): string {
     }
   }
   if (issues.length) {
-    lines.push("Kamchiliklar:");
+    lines.push(unlinked ? "Asosiy sabab:" : "Kamchiliklar:");
     for (const issue of issues.slice(0, 10)) lines.push(`• ${issue}`);
   } else {
     lines.push("Kamchilik yo‘q.");
