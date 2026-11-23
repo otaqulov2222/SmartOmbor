@@ -53,6 +53,38 @@ function token() {
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
 }
 
+/** Admin DM — kirim nazorati / avto-tuzatish hisobotlari. */
+export function adminChatId(): number | null {
+  const raw = (process.env.TELEGRAM_ADMIN_CHAT_ID || "8580032081").trim();
+  const id = Number(raw);
+  return Number.isFinite(id) && id !== 0 ? id : null;
+}
+
+/**
+ * Admin Telegramiga HTML xabar.
+ * chatId > 0 (shaxsiy) — har doim yuboriladi; guruh uchun topic shart emas.
+ */
+export async function notifyAdmin(text: string): Promise<boolean> {
+  const chatId = adminChatId();
+  if (!chatId || !token()) return false;
+  const chunks: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > 3800) {
+      if (current) chunks.push(current);
+      current = line;
+    } else current = next;
+  }
+  if (current) chunks.push(current);
+  let ok = true;
+  for (const chunk of chunks) {
+    const sent = await send(chatId, chunk);
+    ok = sent && ok;
+  }
+  return ok;
+}
+
 async function telegram(method: string, body: Record<string, unknown>) {
   const key = token();
   if (!key) return null;
@@ -326,6 +358,7 @@ const WELCOME = [
   "",
   "• Turib qolgan / buyurtma — har kuni <b>11:00</b>",
   "• Server to‘lovi eslatmasi — muddatga 3 kun qolganda har kuni <b>10:00</b>",
+  "• Kirim nazorati — har 20 daqiqa + ertalab/kech hisobot (admin)",
   "• To‘lov qilganda yozing: <code>server tolov</code>",
   "",
   "Mahsulot nomini bossangiz, tizimda shu mahsulot ochiladi.",

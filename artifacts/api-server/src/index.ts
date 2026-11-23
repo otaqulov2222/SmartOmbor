@@ -8,7 +8,7 @@ import { logger } from "./lib/logger";
 import { hydrateOffice } from "./lib/office";
 import { hydratePartners } from "./lib/partners";
 import { hydrateLocalAccounts } from "./routes/local-auth";
-import { resumePendingSupplies } from "./routes/partners";
+import { resumePendingSupplies, startSupplyIntegrityWatchdog } from "./routes/partners";
 import { sendIdlePreview, sendPreview, startTelegramDigest } from "./lib/telegram";
 
 const rawPort = process.env["PORT"];
@@ -64,6 +64,7 @@ app.listen(port, (err) => {
     startCatalogKeepalive();
   });
   startTelegramDigest();
+  startSupplyIntegrityWatchdog();
   // Render free sleep (15m) oldidan o‘zini urib turadi — 504 cold-start kamayadi.
   const keepUrl = (process.env.RENDER_EXTERNAL_URL || process.env.KEEPALIVE_URL || "").replace(/\/$/, "");
   if (keepUrl) {

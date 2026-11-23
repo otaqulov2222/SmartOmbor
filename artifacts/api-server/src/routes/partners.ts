@@ -4,9 +4,11 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { dataFile } from "../lib/data-dir";
 import { addCatalogProduct, applyReceiptStock, canonicalFactoryCode, catalogForRead, compactCode, findProductsByLabel, lastNumericToken, listWaybillProducts, loadCatalog, loadCatalogForSupply, matchWaybillProduct, parseBordoName, peekCatalog, peekOrRecallCatalog, productBelongsToFactory, productCodeMatches, sameBordoColor, sameProductCode } from "../lib/catalog";
 import { buildSupplyPositions, ensurePachka, packSizeOf, pieceCount, productPackSize, receiptParts, stampWaybillCardPrices } from "../lib/supply-assortment";
-import { moysklad, moyskladAll, moyskladSend, MoySkladError, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
+import { moysklad, moyskladAll, moyskladSend, MoySkladError, moyskladConfigured, permissionDenied, releaseMoySkladSlots, reserveMoySkladSlots, writeDropped } from "../lib/moysklad";
 import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
+import { notifyAdmin } from "../lib/telegram";
+import { readWatchdogState, writeWatchdogState } from "../lib/supply-watchdog-state";
 import {
   accountFromToken,
   createAccount,
@@ -571,6 +573,7 @@ type SupplyDocMeta = {
   name?: string;
   deleted?: string | boolean;
   applicable?: boolean;
+  externalCode?: string;
   agent?: { name?: string; meta?: unknown } | null;
   store?: { name?: string; meta?: unknown } | null;
   organization?: { name?: string; meta?: unknown } | null;
@@ -1875,4 +1878,498 @@ router.post("/factory/shipments", requireFactory, async (req, res, next) => {
   }
 });
 
-export default router;
+/* ── Doimiy kirim nazorati (JUDA KONSERVATIV) ──
+ * Faqat o‘qitilgan qoidalar:
+ *  ✅ Hisobot: har qanday shubha / farq
+ *  ✅ Dublikat o‘chirish: faqat ANIQ 1 ta “to‘g‘ri dona” g‘olib bo‘lsa
+ *  ✅ applicable=true: faqat dona+agent+store+org to‘liq mos, faqat o‘tkazilmagan
+ *  ✅ Qayta bog‘lash: faqat 1 ta kandidat + dona aniq mos + (externalCode yoki sticky yo‘q)
+ *  ✅ Sticky tozalash: faqat MS da hujjat 404/korzina (o‘chirilgan)
+ *  ❌ Yangi kirim YARATMAYDI
+ *  ❌ Dona noma’lum / 2+ g‘olib / farq — o‘chirmaydi, bog‘lamaydi
+ *  ❌ qty_mismatch uchun sticky uzmaydi (buzib qo‘ymaslik)
+ */
+
+type WatchFinding = {
+  key: string;
+  number: string;
+  severity: "critical" | "warn" | "fixed" | "info";
+  title: string;
+  detail: string;
+};
+
+function expectedShipmentUnits(shipment: {
+  postedUnitsTotal?: number | null;
+  lines: Array<{ pairs: number; boxes: number; quantity: number; colors?: Array<{ quantity: number }> }>;
+}) {
+  if (shipment.postedUnitsTotal != null && shipment.postedUnitsTotal > 0) {
+    return Math.round(Number(shipment.postedUnitsTotal));
+  }
+  return shipment.lines.reduce((sum, line) => sum + lineUnits({
+    pairs: Number(line.pairs) || 0,
+    boxes: Number(line.boxes) || 0,
+    quantity: Number(line.quantity) || 0,
+    colors: Array.isArray(line.colors) ? line.colors.map((c) => ({ quantity: Number(c.quantity) || 0 })) : [],
+  }), 0);
+}
+
+async function supplyQtyTotal(supplyId: string) {
+  const page = await moyskladAll<{ quantity?: number }>(`/entity/supply/${encodeURIComponent(supplyId)}/positions`);
+  return page.rows.reduce((sum, row) => sum + Math.round(Number(row.quantity) || 0), 0);
+}
+
+type ScoredSupply = { row: SupplyHit; qty: number; score: number; qtyOk: boolean };
+
+async function scoreOwnSupplies(
+  shipment: { id: string; number: string; moyskladId?: string | null },
+  candidates: SupplyHit[],
+  expected: number,
+): Promise<ScoredSupply[]> {
+  const out: ScoredSupply[] = [];
+  for (const row of candidates) {
+    let qty = -1;
+    try {
+      qty = await supplyQtyTotal(row.id);
+    } catch {
+      qty = -1;
+    }
+    const qtyOk = expected > 0 && qty === expected;
+    const score = supplyMatchScore(row, shipment)
+      + (qtyOk ? 50 : 0)
+      + (row.externalCode === shipment.id ? 10 : 0)
+      + (row.id === shipment.moyskladId ? 8 : 0);
+    out.push({ row, qty, score, qtyOk });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Bitta yuk: avval ANIQLASH, keyin faqat qoida bo‘yicha xavfsiz tuzatish.
+ * Shubhada — faqat Telegram hisobot, MS/lokalni buzmaydi.
+ */
+async function auditRepairOneShipment(shipment: ReturnType<typeof listShipments>[number]): Promise<WatchFinding[]> {
+  const findings: WatchFinding[] = [];
+  const number = shipment.number.trim();
+  if (!number || shipment.status === "declined") return findings;
+  if (isSupplyInflight(shipment.id)) return findings;
+
+  const expected = expectedShipmentUnits(shipment);
+  if (!(expected > 0) && !shipment.moyskladId && !shipment.msAlert) return findings;
+
+  let candidates: SupplyHit[] = [];
+  try {
+    candidates = (await listSupplyCandidates(shipment)).filter((row) => isOwnOrOrphanDup(row, shipment));
+  } catch (error) {
+    if (isTransientMsError(error)) return findings;
+    findings.push({
+      key: `${number}:lookup`,
+      number,
+      severity: "warn",
+      title: "MS qidiruv xatosi (tuzatilmadi)",
+      detail: error instanceof Error ? error.message.slice(0, 180) : "lookup",
+    });
+    return findings;
+  }
+
+  const scored = await scoreOwnSupplies(shipment, candidates, expected);
+  const exact = scored.filter((item) => item.qtyOk);
+  const linkedId = String(shipment.moyskladId || "").trim();
+
+  // ── 1) Dublikat: faqat ANIQ bitta to‘g‘ri-dona g‘olib bo‘lsa prune ──
+  if (candidates.length > 1) {
+    if (!(expected > 0)) {
+      findings.push({
+        key: `${number}:dups`,
+        number,
+        severity: "critical",
+        title: "Dublikat — kutilyotgan dona yo‘q",
+        detail: `${candidates.length} ta MS kirim. Avto-o‘chirish yoqilmadi (yuk donasi noma’lum).`,
+      });
+    } else if (exact.length !== 1) {
+      findings.push({
+        key: `${number}:dups`,
+        number,
+        severity: "critical",
+        title: exact.length === 0 ? "Dublikat — to‘g‘ri dona yo‘q" : "Dublikat — bir nechta to‘g‘ri dona",
+        detail: `${candidates.length} ta kirim, yuk ${expected} dona. Aniq g‘olib ${exact.length} ta — avto-o‘chirish YOQ (buzib qo‘ymaslik).`,
+      });
+    } else {
+      const keep = exact[0];
+      // Agar lokal bog‘ boshqa ID ga qaragan va u ham mavjud bo‘lsa — faqat keep=linked bo‘lsa o‘chiramiz,
+      // yoki linked noto‘g‘ri donada va keep aniq to‘g‘ri.
+      const linkedRow = linkedId ? scored.find((item) => item.row.id === linkedId) : undefined;
+      const safeKeep = !linkedId
+        || linkedId === keep.row.id
+        || (linkedRow && !linkedRow.qtyOk);
+      if (!safeKeep) {
+        findings.push({
+          key: `${number}:dups`,
+          number,
+          severity: "critical",
+          title: "Dublikat — bog‘lanish chalkash",
+          detail: `Lokal boshqa ID ga bog‘langan va u ham to‘g‘ri donali ko‘rinadi. Avto-o‘chirish yoqilmadi.`,
+        });
+      } else {
+        try {
+          const removed = await pruneDuplicateSupplies(shipment, keep.row.id);
+          if (linkedId && linkedId !== keep.row.id) {
+            clearShipmentPosted(shipment.id, { expectMoyskladId: linkedId, reopen: false });
+            markShipmentPosted(shipment.id, { id: keep.row.id, number: keep.row.name || number });
+          } else if (!linkedId) {
+            markShipmentPosted(shipment.id, { id: keep.row.id, number: keep.row.name || number });
+          }
+          await stampSupplyExternalCode(keep.row.id, shipment.id);
+          findings.push({
+            key: `${number}:dups`,
+            number,
+            severity: "fixed",
+            title: "Dublikat qoida bo‘yicha tozalandi",
+            detail: `${candidates.length}→1. Saqlangan: ${keep.row.name || keep.row.id.slice(0, 8)} (${keep.qty} dona = yuk). O‘chirildi: ${removed}.`,
+          });
+          candidates = [keep.row];
+          supplyLookup.delete(shipment.id);
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "prune";
+          findings.push({
+            key: `${number}:dups`,
+            number,
+            severity: "critical",
+            title: code === "ms_permission" ? "Dublikat: MS ruxsati yo‘q" : "Dublikat tozalanmadi",
+            detail: `${candidates.length} ta. ${typeof error === "object" && error && "detail" in error ? String((error as { detail?: unknown }).detail || "") : code}`.slice(0, 280),
+          });
+        }
+      }
+    }
+  }
+
+  // ── 2) Sticky: faqat o‘chirilgan/404 — qty farqida UZMAYMIZ ──
+  const freshLink = String((listShipments().find((item) => item.id === shipment.id) ?? shipment).moyskladId || "").trim() || linkedId;
+  if (freshLink) {
+    try {
+      const doc = await moysklad<SupplyDocMeta>(
+        `/entity/supply/${encodeURIComponent(freshLink)}?expand=agent,organization,store`,
+      );
+      if (doc.deleted) {
+        clearShipmentPosted(shipment.id, {
+          expectMoyskladId: freshLink,
+          alert: {
+            code: "ms_deleted",
+            title: "MoySklad kirimi o‘chirilgan",
+            detail: "Hujjat korzinada. Bog‘lanish uzildi (faqat o‘chirilgan holat).",
+          },
+        });
+        findings.push({
+          key: `${number}:gone`,
+          number,
+          severity: "fixed",
+          title: "O‘chirilgan sticky uzildi",
+          detail: "MS korzina/o‘chirilgan — lokal bog‘ tozalandi. Yangi kirim yaratilmadi.",
+        });
+      } else {
+        const qty = await supplyQtyTotal(freshLink);
+        const metaOk = Boolean(doc.agent && doc.store && doc.organization);
+        const qtyOk = expected > 0 && qty === expected;
+
+        // Faqat applicable=false + hamma narsa mos → o‘tkazish
+        if (doc.applicable === false && metaOk && qtyOk) {
+          try {
+            await forceSupplyApplicable(freshLink);
+            const again = await moysklad<SupplyDocMeta>(`/entity/supply/${encodeURIComponent(freshLink)}`);
+            if (again.applicable !== false && !again.deleted) {
+              findings.push({
+                key: `${number}:applicable`,
+                number,
+                severity: "fixed",
+                title: "Kirim o‘tkazildi (applicable)",
+                detail: `Dona ${qty} = yuk ${expected}. Faqat o‘tkazish yoqildi.`,
+              });
+            } else {
+              findings.push({
+                key: `${number}:applicable`,
+                number,
+                severity: "warn",
+                title: "O‘tkazish ishlamadi",
+                detail: "applicable qolgan — o‘chirilmadi, qayta yozilmadi.",
+              });
+            }
+          } catch (error) {
+            findings.push({
+              key: `${number}:applicable`,
+              number,
+              severity: "warn",
+              title: "O‘tkazish rad etildi",
+              detail: (error instanceof Error ? error.message : "applicable").slice(0, 180),
+            });
+          }
+        } else if (!qtyOk && expected > 0) {
+          findings.push({
+            key: `${number}:qty`,
+            number,
+            severity: "critical",
+            title: "Dona mos emas (qo‘lda)",
+            detail: `Yuk ${expected} · MS ${qty}. Sticky saqlangan — avto-o‘chirish/qayta yaratish YOQ.`,
+          });
+        } else if (!metaOk) {
+          findings.push({
+            key: `${number}:meta`,
+            number,
+            severity: "warn",
+            title: "MS meta to‘liq emas",
+            detail: [
+              !doc.agent ? "kontragent yo‘q" : "",
+              !doc.store ? "ombor yo‘q" : "",
+              !doc.organization ? "tashkilot yo‘q" : "",
+            ].filter(Boolean).join("; ") + " — sticky saqlangan, buzilmadi.",
+          });
+        } else if (doc.externalCode !== shipment.id) {
+          await stampSupplyExternalCode(freshLink, shipment.id);
+        }
+      }
+    } catch (error) {
+      if (supplyGone(error) || (error instanceof MoySkladError && error.status === 404)) {
+        clearShipmentPosted(shipment.id, {
+          expectMoyskladId: freshLink,
+          alert: {
+            code: "ms_gone",
+            title: "MoySklad kirimi topilmadi",
+            detail: "Bog‘langan ID MS da yo‘q. Sticky uzildi. Yangi kirim yaratilmadi.",
+          },
+        });
+        findings.push({
+          key: `${number}:gone`,
+          number,
+          severity: "fixed",
+          title: "Yo‘qolgan sticky uzildi",
+          detail: "404/korzina — faqat bog‘ tozalandi.",
+        });
+      } else if (!isTransientMsError(error)) {
+        findings.push({
+          key: `${number}:check`,
+          number,
+          severity: "warn",
+          title: "Tekshiruv xatosi",
+          detail: (error instanceof Error ? error.message : "check").slice(0, 180),
+        });
+      }
+      // transient — hech narsa qilmaymiz
+    }
+  } else if (candidates.length === 1 && exact.length === 1 && expected > 0) {
+    // ── 3) Qayta bog‘lash: faqat 1 kandidat + dona aniq + (externalCode o‘zimizniki yoki nom aniq) ──
+    const hit = exact[0];
+    const owned = hit.row.externalCode === shipment.id
+      || String(hit.row.name || "").trim() === number;
+    if (!owned) {
+      findings.push({
+        key: `${number}:orphan`,
+        number,
+        severity: "warn",
+        title: "Yetim kirim — bog‘lanmadi",
+        detail: `Dona mos (${hit.qty}), lekin ownership aniq emas — avto-bog‘lash yoqilmadi.`,
+      });
+    } else {
+      try {
+        markShipmentPosted(shipment.id, { id: hit.row.id, number: hit.row.name || number });
+        await stampSupplyExternalCode(hit.row.id, shipment.id);
+        findings.push({
+          key: `${number}:relink`,
+          number,
+          severity: "fixed",
+          title: "Qayta bog‘landi (qoida)",
+          detail: `${hit.row.name || hit.row.id.slice(0, 8)} · ${hit.qty} dona = yuk. Yangi hujjat yaratilmadi.`,
+        });
+      } catch (error) {
+        findings.push({
+          key: `${number}:relink`,
+          number,
+          severity: "warn",
+          title: "Bog‘lash rad",
+          detail: (error instanceof Error ? error.message : "relink").slice(0, 160),
+        });
+      }
+    }
+  } else if (!freshLink && candidates.length > 0 && exact.length === 0 && expected > 0) {
+    findings.push({
+      key: `${number}:mismatch`,
+      number,
+      severity: "critical",
+      title: "MS bor, dona mos emas",
+      detail: `${candidates.length} ta kandidat, hech biri ${expected} dona emas. Avto-tuzatish yoqilmadi.`,
+    });
+  } else if (!freshLink && shipment.msAlert) {
+    findings.push({
+      key: `${number}:alert`,
+      number,
+      severity: "warn",
+      title: shipment.msAlert.title,
+      detail: `${shipment.msAlert.detail.slice(0, 200)} — avto-qayta-kirim yoqilmadi.`,
+    });
+  }
+
+  return findings;
+}
+
+function tashkentWatchParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    stamp: `${pick("year")}-${pick("month")}-${pick("day")}`,
+    hour: Number(pick("hour")),
+    minute: Number(pick("minute")),
+    label: `${pick("day")}.${pick("month")}.${pick("year")} ${pick("hour")}:${pick("minute")}`,
+  };
+}
+
+function digestSlot(hour: number) {
+  if (hour >= 9 && hour < 12) return "morning";
+  if (hour >= 18 && hour < 22) return "evening";
+  return null;
+}
+
+function formatWatchReport(when: string, findings: WatchFinding[], scanned: number, ok: boolean) {
+  const fixed = findings.filter((f) => f.severity === "fixed");
+  const critical = findings.filter((f) => f.severity === "critical");
+  const warn = findings.filter((f) => f.severity === "warn");
+  const lines = [
+    "<b>Smart Ombor · Kirim nazorati</b>",
+    when,
+    "",
+    `Tekshirildi: <b>${scanned}</b> ta yuk`,
+  ];
+  if (ok && !findings.length) {
+    lines.push("Holat: <b>me’yorda</b> — dublikat/dona xatosi yo‘q.");
+    lines.push("");
+    lines.push("<i>Nazorat qoida: yangi kirim yaratilmaydi; shubhada faqat hisobot.</i>");
+    return lines.join("\n");
+  }
+  if (fixed.length) lines.push(`Qoida bo‘yicha tuzatildi: <b>${fixed.length}</b>`);
+  if (critical.length) lines.push(`Jiddiy (qo‘lda/ruxsat): <b>${critical.length}</b>`);
+  if (warn.length) lines.push(`Ogohlantirish: <b>${warn.length}</b>`);
+  lines.push("");
+  const show = [...critical, ...warn, ...fixed].slice(0, 18);
+  for (const item of show) {
+    const mark = item.severity === "fixed" ? "✅" : item.severity === "critical" ? "🔴" : "⚠️";
+    lines.push(`${mark} <b>${item.number}</b> — ${item.title}`);
+    if (item.detail) lines.push(`<i>${item.detail.replace(/</g, "&lt;")}</i>`);
+    lines.push("");
+  }
+  if (findings.length > show.length) {
+    lines.push(`… yana ${findings.length - show.length} ta`);
+  }
+  lines.push("<i>Avto-tuzatish faqat aniq qoida; taxmin bilan o‘chirmaydi/yaratmaydi.</i>");
+  return lines.join("\n").trim();
+}
+
+let watchRunning = false;
+
+export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): Promise<{
+  scanned: number;
+  findings: WatchFinding[];
+  reported: boolean;
+}> {
+  if (watchRunning) return { scanned: 0, findings: [], reported: false };
+  if (!moyskladConfigured()) return { scanned: 0, findings: [], reported: false };
+  watchRunning = true;
+  const when = tashkentWatchParts();
+  const findings: WatchFinding[] = [];
+  let scanned = 0;
+  try {
+    void refreshPartnersIfNeeded();
+    const all = listShipments().filter((item) => item.status !== "declined");
+    // Avval ogohlantirishli / yozilgan / so‘nggi 120 kun
+    const cutoff = Date.now() - 120 * 24 * 60 * 60_000;
+    const priority = all
+      .filter((item) => {
+        if (item.msAlert) return true;
+        if (item.moyskladId) return true;
+        if (item.status === "accepted") return true;
+        const at = Date.parse(item.createdAt || item.date) || 0;
+        return at >= cutoff;
+      })
+      .sort((a, b) => {
+        const score = (s: typeof a) => (s.msAlert ? 100 : 0) + (s.moyskladId ? 10 : 0) + (s.status === "accepted" ? 5 : 0);
+        return score(b) - score(a) || +new Date(b.createdAt) - +new Date(a.createdAt);
+      })
+      .slice(0, 40);
+
+    for (const shipment of priority) {
+      scanned += 1;
+      try {
+        const row = await auditRepairOneShipment(shipment);
+        findings.push(...row);
+      } catch (error) {
+        logger.warn({ shipment: shipment.id, err: error instanceof Error ? error.message : error }, "Supply watchdog item failed");
+      }
+      // MS rate limit — yumshoq pauza
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+
+    const state = readWatchdogState();
+    state.lastPassAt = Date.now();
+    const fingerprint = findings
+      .map((f) => `${f.key}:${f.severity}`)
+      .sort()
+      .join("|");
+    const hasProblem = findings.some((f) => f.severity === "critical" || f.severity === "warn");
+    const hasFixed = findings.some((f) => f.severity === "fixed");
+    const slot = digestSlot(when.hour);
+    const dueDigest = Boolean(slot) && (state.lastDigestStamp !== when.stamp || state.lastDigestSlot !== slot);
+    const changed = fingerprint !== state.lastFingerprint && (hasProblem || hasFixed);
+    const cooldownOk = Date.now() - (state.lastAlertAt || 0) > 8 * 60_000;
+    const shouldReport = opts?.forceDigest
+      || (changed && cooldownOk)
+      || (dueDigest && (hasProblem || hasFixed || opts?.forceDigest))
+      || (dueDigest && !hasProblem && !hasFixed);
+
+    let reported = false;
+    if (shouldReport) {
+      const ok = !hasProblem && !hasFixed;
+      const text = formatWatchReport(when.label, findings, scanned, ok);
+      reported = await notifyAdmin(text);
+      if (reported) {
+        state.lastAlertAt = Date.now();
+        state.lastFingerprint = fingerprint;
+        if (ok) state.lastOkAt = Date.now();
+        if (dueDigest && slot) {
+          state.lastDigestStamp = when.stamp;
+          state.lastDigestSlot = slot;
+        }
+        // Issue cooldown bookkeeping
+        for (const f of findings) {
+          if (f.severity === "critical" || f.severity === "warn") state.issueSeen[f.key] = Date.now();
+        }
+      }
+      logger.info({ scanned, findings: findings.length, reported, dueDigest }, "Supply integrity watchdog report");
+    } else {
+      logger.info({ scanned, findings: findings.length, fingerprint: fingerprint.slice(0, 80) }, "Supply integrity watchdog pass");
+    }
+    writeWatchdogState(state);
+    return { scanned, findings, reported };
+  } catch (error) {
+    logger.warn({ err: error instanceof Error ? error.message : error }, "Supply integrity watchdog failed");
+    return { scanned, findings, reported: false };
+  } finally {
+    watchRunning = false;
+  }
+}
+
+export function startSupplyIntegrityWatchdog() {
+  if (process.env.SUPPLY_WATCHDOG === "0") return;
+  // Birinchi skan — server isishi uchun kechiktiriladi
+  setTimeout(() => {
+    void runSupplyIntegrityPass({ forceDigest: true }).catch(() => undefined);
+  }, 90_000);
+  const timer = setInterval(() => {
+    void runSupplyIntegrityPass().catch(() => undefined);
+  }, 20 * 60_000);
+  timer.unref?.();
+  logger.info("Supply integrity watchdog started (20m + Telegram admin)");
+}
+
