@@ -12,7 +12,7 @@ import { assistantConfigured, runAssistantChat, type AssistantFile } from "./ass
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
 import { isWatchdogReportAsk } from "./assistant-ux";
 import { peekLastWatchdogReport } from "./supply-watchdog-state";
-import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
+import { buildTelegramAssistantBundle, lastBotOutbound, rememberBotOutbound } from "./telegram-context";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -493,8 +493,13 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
     return;
   }
 
-  // «Yuqorida nima hisobot?» → kunlik brifing emas, kirim nazorati
-  if (isWatchdogReportAsk(userText)) {
+  // «Yuqorida / bu nima hisobot?» → kunlik/KPI emas, kirim nazorati
+  const lowAsk = userText.toLowerCase();
+  const recentWatch = lastBotOutbound("kirim_nazorati") || peekLastWatchdogReport()?.plain;
+  const vagueReportAsk = /\bhisobot\b/.test(lowAsk)
+    && !/\bkpi\b|davomat|oylik|maosh|savdo|agentlar|bugungi\s*kun/.test(lowAsk)
+    && (/nima|buyicha|bo'?yicha|yuqori|tepa|shu|bu\b|qanday|tushuntir|ayt|neg/.test(lowAsk) || userText.trim().length <= 40);
+  if (isWatchdogReportAsk(userText) || (Boolean(recentWatch) && vagueReportAsk)) {
     const explained = explainLastWatchdogReport();
     const saved = appendToSession(
       ASSISTANT_LOGIN,

@@ -281,6 +281,9 @@ export function isTrustedLocalReply(text: string): boolean {
     || /^Xodimlar:\s*\d+/i.test(t)
     || /^Agentlar:\s*\d+/i.test(t)
     || /Pastdagi Yuklab olish tugmasini/i.test(t)
+    || /Kirim nazorati/i.test(t)
+    || /Yuqoridagi (avtomatik )?xabar|Yuqoridagi hisobot/i.test(t)
+    || /MoySklad (yuk\/)?kirim|dublikat va dona/i.test(t)
   );
 }
 
@@ -471,20 +474,25 @@ export function parseBriefDates(lower: string, today: string): string[] {
   return found;
 }
 
-/** Telegramdagi «yuqorida hisobot» — kunlik brifing EMAS, kirim nazorati. */
+/** Telegramdagi «yuqorida / bu hisobot» — kunlik brifing EMAS, kirim nazorati. */
 export function isWatchdogReportAsk(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
   // Kontekst injeksiyasini e'tiborsiz qoldirish
-  const head = t.split("[telegram kontekst")[0]?.split("telegram kanal")[0] || t;
+  const head = (t.split("[telegram kontekst")[0]?.split("telegram kanal")[0] || t)
+    .replace(/---[\s\S]*$/g, "")
+    .trim();
+  // Aniq boshqa domen — tegma
+  if (/\bkpi\b|davomat|oylik|maosh|savdo\s*hisobot|agentlar\s*excel|bugungi\s*kun\s*hisobot/.test(head)) {
+    if (!/kirim\s*nazorat|dublikat|dona\s*mos/.test(head)) return false;
+  }
   if (/kirim\s*nazorat/.test(head)) return true;
-  if (/qizil\s*(xabar|hisobot|ogoh)|dublikat\s*(hisobot|xabar|tozala)|dona\s*mos\s*emas/.test(head)) {
-    if (/nima|hisobot|yuqori|tepada|shu|oxirgi|neg|sabab|tushuntir|ayt/.test(head) || head.length < 80) return true;
+  if (/qizil\s*(xabar|hisobot|ogoh)|dublikat(\s|\b)|dona\s*mos\s*emas/.test(head)) return true;
+  // «bu nima buyicha hisobot» / «nima buyicha hisobot» / «hisobot nima»
+  if (/nima\s*(buyicha|bo'?yicha)\s*hisobot|hisobot\s*nima|qanday\s*hisobot|bu\s+.*\bhisobot\b|shu\s+.*\bhisobot\b/.test(head)) {
+    return true;
   }
-  if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*(qizil|avto|bot)?\s*hisobot|shu\s*hisobot|nima\s*(edi|edi\?)?\s*hisobot/.test(head)) {
-    if (/hisobot|nima|buyicha|bo'?yicha|dublikat|dona|nazorat|yubor|berdin|aytding|nima\s*edi|qizil|xabar/.test(head)) return true;
-  }
-  if (/nima\s*(buyicha|bo'?yicha)\s*hisobot/.test(head) && /yuqori|tepada|berdin|yubor|shu|oxirgi/.test(head)) return true;
-  if (/^nima\s*(bu|edi)|bu\s*(nima|qanday)\s*hisobot/.test(head) && /dublikat|dona|nazorat|qizil|0066|0007/.test(head)) return true;
+  if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*(qizil|avto|bot)?\s*hisobot/.test(head)) return true;
+  if (/^bu\s*nima\b|^nima\s*bu\b|^nima\s*edi\b/.test(head) && /hisobot|xabar|nazorat/.test(head)) return true;
   return false;
 }
 
@@ -595,7 +603,7 @@ export function finalizeAssistantReply(text: string, hasFiles = false): string {
 
 export function isKpiAgentsIntent(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
-  if (isIdentityIntent(t) || isDailyBriefIntent(t) || isAttendanceIntent(t)) return false;
+  if (isIdentityIntent(t) || isDailyBriefIntent(t) || isAttendanceIntent(t) || isWatchdogReportAsk(t)) return false;
   // «KPI» so‘zi bo‘lmasa — agentlar ro‘yxati KPI emas
   if (!/kpi/.test(t)) return false;
   return /agent|ro.?yxat|kim|bugun|yozilgan|bor|qaysi/.test(t);
