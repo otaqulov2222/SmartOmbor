@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -77,6 +77,15 @@ function hhmm(ms: number) {
 }
 function mins(n: number, label: (n: number) => string) {
   return n > 0 ? label(n) : '—';
+}
+/** 24 soat format: 8:00 / 08:00 / 18:00 */
+function normalizeHm(raw: string) {
+  const m = String(raw || '').trim().match(/^(\d{1,2})[:.,]?(\d{2})$/);
+  if (!m) return '';
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(min) || h < 0 || h > 23 || min < 0 || min > 59) return '';
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 function bufToB64(buf: ArrayBuffer) {
   const bytes = new Uint8Array(buf);
@@ -165,26 +174,29 @@ export function OfficeReportPage() {
     if (inn && out && inn !== out) return `${inn} → ${out}`;
     return inn || out || '—';
   };
-  const point = (lat: number | null, lng: number | null) => {
-    if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return '—';
-    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  };
-
   const tabelUrl = mode === 'day' ? `/api/office/tabel?date=${day}` : `/api/office/tabel?from=${span.from}&to=${span.to}`;
+  const hasDataRef = useRef(false);
+  hasDataRef.current = data != null;
 
   useEffect(() => {
     let live = true;
-    setLoad(true);
-    setError('');
+    const quiet = hasDataRef.current;
+    if (!quiet) {
+      setLoad(true);
+      setError('');
+    }
     void fetch(tabelUrl, { headers: officeHeaders() }).then(async response => {
       if (!live) return;
-      if (!response.ok) { setError(t('common.loadFailed')); return; }
+      if (!response.ok) {
+        if (!quiet) setError(t('common.loadFailed'));
+        return;
+      }
       setData(await response.json() as Tabel);
       setError('');
     }).catch(() => {
-      if (live) setError(t('common.serverLost'));
+      if (live && !quiet) setError(t('common.serverLost'));
     }).finally(() => {
-      if (live) setLoad(false);
+      if (live && !quiet) setLoad(false);
     });
     return () => { live = false; };
   }, [tabelUrl, reload, t]);
@@ -371,11 +383,23 @@ export function OfficeReportPage() {
     doc.save(`davomat-${stamp}.pdf`);
   };
 
+  const restoreFocus = (accountId: string) => {
+    const y = window.scrollY;
+    window.requestAnimationFrame(() => {
+      const node = document.querySelector(`[data-person="${accountId}"]`) as HTMLElement | null;
+      if (node) node.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+      else window.scrollTo({ top: y });
+    });
+  };
+
   const saveMark = async (opts?: { present?: boolean; clearPunch?: boolean }) => {
     if (!open) return;
+    const accountId = open.accountId;
+    const inn = normalizeHm(inHm);
+    const out = normalizeHm(outHm);
     setSaving(true); setSaved('');
     const body: Record<string, unknown> = {
-      accountId: open.accountId,
+      accountId,
       date: open.date || data?.date || day,
       note,
     };
@@ -383,11 +407,24 @@ export function OfficeReportPage() {
       body.clearPunch = true;
       body.excuse = excuse;
     } else if (opts?.present) {
+      if (!inn || !out) {
+        setSaving(false);
+        setSaved(t('office.timeRequired'));
+        return;
+      }
       body.present = true;
-      body.inHm = inHm;
-      body.outHm = outHm;
-    } else {
+      body.inHm = inn;
+      body.outHm = out;
+    } else if (excuse) {
+      // Dam/kasal/... — faqat sabab
       body.excuse = excuse;
+    } else if (inn && out) {
+      // Sababsiz + vaqt → kelgan (Saqlash ham ishlaydi)
+      body.present = true;
+      body.inHm = inn;
+      body.outHm = out;
+    } else {
+      body.excuse = '';
     }
     const response = await fetch('/api/office/tabel', {
       method: 'PATCH', headers: officeHeaders(),
@@ -399,6 +436,8 @@ export function OfficeReportPage() {
     setOpen(null);
     setReload(value => value + 1);
     if (expandId) setMonthTick(value => value + 1);
+    const focusId = expandId || accountId;
+    window.setTimeout(() => restoreFocus(focusId), 100);
   };
 
   const filters: Array<[Filter, string]> = [
@@ -556,7 +595,7 @@ export function OfficeReportPage() {
             {peopleRows.map(row => {
               const openMonth = expandId === row.accountId;
               return <Fragment key={row.accountId}>
-                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`}>
+                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`} data-person={row.accountId}>
                   <td className="tabel-expand-col" data-label="">
                     <button type="button" className={`tabel-arrow ${openMonth ? 'is-open' : ''}`} aria-label={t('office.personMonth')} aria-expanded={openMonth} onClick={event => { event.stopPropagation(); toggleExpand(row.accountId); }}>
                       {openMonth ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
@@ -594,7 +633,7 @@ export function OfficeReportPage() {
               const showPanel = openMonth && rows.findIndex(item => item.accountId === row.accountId) === index;
               const colSpan = (ranged ? 13 : 12);
               return <Fragment key={`${row.date || day}-${row.accountId}`}>
-                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`}>
+                <tr className={`is-clickable ${openMonth ? 'is-expanded' : ''}`} data-person={row.accountId}>
                   <td className="tabel-expand-col" data-label="">
                     <button type="button" className={`tabel-arrow ${openMonth ? 'is-open' : ''}`} aria-label={t('office.personMonth')} aria-expanded={openMonth} onClick={event => { event.stopPropagation(); toggleExpand(row.accountId, row.date || day); }}>
                       {openMonth ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
@@ -621,51 +660,61 @@ export function OfficeReportPage() {
       </div>}
     </section>
     {open && createPortal(<div className="backdrop" onClick={() => setOpen(null)}>
-      <div className="modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="tabel-row-title">
+      <div className="modal tabel-edit-modal" onClick={event => event.stopPropagation()} role="dialog" aria-labelledby="tabel-row-title">
         <div className="modal-top">
           <div>
             <p className="eyebrow">{date(open.date || data?.date || day)} · {statusText(open.status)}</p>
             <h2 id="tabel-row-title">{open.name}</h2>
+            <p className="tabel-edit-meta">{open.login} · {roleLabel(open.role)}</p>
           </div>
           <button type="button" className="icon-btn" onClick={() => setOpen(null)} aria-label={t('common.close')}><X size={18}/></button>
         </div>
-        <div className="tabel-facts">
-          <div><span>{t('office.colLogin')}</span><b>{open.login}</b></div>
-          <div><span>{t('office.colRole')}</span><b>{roleLabel(open.role)}</b></div>
-          <div><span>{t('office.colIn')}</span><b>{open.inHm || '—'}</b></div>
-          <div><span>{t('office.colOut')}</span><b>{open.outHm || '—'}</b></div>
-          <div><span>{t('office.colWork')}</span><b>{hhmm(open.workedMs)}</b></div>
-          <div><span>{t('office.colLate')}</span><b>{lateLabel(open.lateIn)}</b></div>
-          <div><span>{t('office.colEarlyOut')}</span><b>{lateLabel(open.earlyOut)}</b></div>
-          <div><span>{t('office.colOver')}</span><b>{lateLabel(open.overtime)}</b></div>
-          <div><span>{t('office.colMethod')}</span><b>{methodText(open)}</b></div>
-          <div><span>{t('office.gpsIn')}</span><b>{point(open.inLat, open.inLng)}</b></div>
-          <div><span>{t('office.gpsOut')}</span><b>{point(open.outLat, open.outLng)}</b></div>
-        </div>
-        <p className="muted">{t('office.markHint')}</p>
         <div className="tabel-manual">
           <p className="muted">{t('office.markPresentHint')}</p>
           <div className="tabel-manual-times">
-            <label className="field"><span>{t('office.manualIn')}</span><input className="input" type="time" value={inHm} onChange={event => setInHm(event.target.value)}/></label>
-            <label className="field"><span>{t('office.manualOut')}</span><input className="input" type="time" value={outHm} onChange={event => setOutHm(event.target.value)}/></label>
+            <label className="field">
+              <span>{t('office.manualIn')} <small>24s</small></span>
+              <input
+                className="input"
+                type="text"
+                inputMode="numeric"
+                placeholder="08:00"
+                maxLength={5}
+                value={inHm}
+                onChange={event => setInHm(event.target.value)}
+                onBlur={() => setInHm(value => normalizeHm(value) || value)}
+              />
+            </label>
+            <label className="field">
+              <span>{t('office.manualOut')} <small>24s</small></span>
+              <input
+                className="input"
+                type="text"
+                inputMode="numeric"
+                placeholder="18:00"
+                maxLength={5}
+                value={outHm}
+                onChange={event => setOutHm(event.target.value)}
+                onBlur={() => setOutHm(value => normalizeHm(value) || value)}
+              />
+            </label>
           </div>
-          <div className="form-actions" style={{ justifyContent: 'flex-start', marginTop: 0 }}>
-            <button type="button" className="btn btn-primary btn-sm" disabled={saving || !inHm || !outHm} onClick={() => void saveMark({ present: true })}>{t('office.markPresent')}</button>
-            {(open.inHm || open.outHm) && (
-              <button type="button" className="btn btn-secondary btn-sm" disabled={saving} onClick={() => void saveMark({ clearPunch: true })}>{t('office.clearPunch')}</button>
-            )}
-          </div>
+          {(open.inHm || open.outHm) && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={saving} onClick={() => void saveMark({ clearPunch: true })}>{t('office.clearPunch')}</button>
+          )}
         </div>
         <div className="tabel-chips">
           {excuses.map(([id, label]) => (
             <button type="button" key={id || 'none'} className={excuse === id ? 'is-on' : ''} onClick={() => setExcuse(id)}>{label}</button>
           ))}
         </div>
-        <label className="field"><span>{t('office.colNote')}</span><textarea className="input" value={note} onChange={event => setNote(event.target.value)} rows={3} maxLength={400}/></label>
+        <label className="field"><span>{t('office.colNote')}</span><textarea className="input" value={note} onChange={event => setNote(event.target.value)} rows={2} maxLength={400}/></label>
         {saved && <p className="muted">{saved}</p>}
-        <div className="form-actions">
+        <div className="form-actions tabel-edit-actions">
           <button type="button" className="btn btn-secondary" onClick={() => setOpen(null)}>{t('common.close')}</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void saveMark()}>{saving ? t('common.saving') : t('office.save')}</button>
+          <button type="button" className="btn btn-primary" disabled={saving || (!excuse && (!normalizeHm(inHm) || !normalizeHm(outHm)))} onClick={() => void saveMark(excuse ? undefined : { present: true })}>
+            {saving ? t('common.saving') : (excuse ? t('office.save') : t('office.markPresent'))}
+          </button>
         </div>
       </div>
     </div>, document.body)}

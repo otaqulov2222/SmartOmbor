@@ -39,10 +39,26 @@
 .tabel-tools { display: grid; gap: 10px; min-width: 0; }
 .tabel-tools .search { max-width: none; }
 .tabel-manual {
-  display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px;
+  display: grid; gap: 8px; padding: 10px 12px; margin: 0;
   border: 1px solid #c7d2fe; border-radius: 12px; background: #eef2ff;
 }
 .tabel-manual-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tabel-manual-times .field small { color: #64748b; font-weight: 600; margin-left: 4px; }
+.tabel-manual-times .input {
+  font-variant-numeric: tabular-nums; font-size: 1.05rem; font-weight: 700;
+  letter-spacing: .04em; text-align: center;
+}
+.tabel-edit-modal {
+  width: min(400px, 100%) !important;
+  max-height: min(78vh, 520px) !important;
+  gap: .75rem !important;
+  padding: 1rem 1.05rem !important;
+  align-content: start;
+}
+.tabel-edit-modal h2 { font-size: 1.15rem; margin: 0; }
+.tabel-edit-meta { margin: 2px 0 0; color: #64748b; font-size: .82rem; }
+.tabel-edit-actions { margin-top: 2px; }
+.tabel-edit-actions .btn { flex: 1; }
 .tabel-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .tabel-chips button {
   background: #f1f5f9; border-radius: 999px; padding: 7px 12px; font-size: .85rem;
