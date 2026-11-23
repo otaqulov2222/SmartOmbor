@@ -104,9 +104,12 @@ router.post("/assistant/chat", async (req: Request, res: Response) => {
     const history = Array.isArray(req.body?.history) ? req.body.history : [];
     const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
     const forceNew = Boolean(req.body?.forceNew);
+    const channelRaw = String(req.body?.channel || "").toLowerCase();
+    const channel = channelRaw === "telegram" ? "telegram" as const : undefined;
     const result = await runAssistantChat({
       message,
       history,
+      channel,
     });
     const files = Array.isArray(result.files) ? result.files : [];
     const saved = appendToSession(

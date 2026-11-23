@@ -1,22 +1,24 @@
 import { normalizeAssistantQuery } from "./assistant-ux";
+import {
+  isBriefAckAsk,
+  isKirimCauseAsk,
+  isKirimTruthCheckAsk,
+  kirimNazoratiTruthHtml,
+  kirimNazoratiTruthPlain,
+} from "./kirim-truth";
 import { peekLastWatchdogReport } from "./supply-watchdog-state";
 import { lastBotOutbound } from "./telegram-context";
 
 /**
- * QATTIY TELEGRAM SHLYUZ
- * Oxirgi avto-hisobot (kirim nazorati) bor bo‘lsa:
- * «bu nima / hisobot / yuqorida / shu xabar» hech qachon KPI/davomat/kunlik brifingga o‘tmaydi.
- * Taxmin yo‘q — faqat aniq boshqa domen so‘ralganda shlyuz ochiladi.
+ * QATTIY TELEGRAM SHLYUZ — uydirma sabab/KPI/kunlik brifing yo‘q.
  */
 
 function hasKirimNazoratiContext(): boolean {
   const watch = peekLastWatchdogReport();
   if (watch?.plain) return true;
-  const out = lastBotOutbound("kirim_nazorati");
-  return Boolean(out?.plain);
+  return Boolean(lastBotOutbound("kirim_nazorati")?.plain);
 }
 
-/** Aniq boshqa bo‘lim — shlyuzdan o‘tkazamiz. */
 function isExplicitOtherDomain(t: string): boolean {
   if (/\bkpi\b/.test(t) && /agent|raqam|dashboard|excel|boshqaruv/.test(t)) return true;
   if (/bugun(gi)?\s*(kun\s*)?(hisobot|holat|nima\s*boldi)|kunlik\s*(hisobot|brif)/.test(t)) return true;
@@ -28,38 +30,78 @@ function isExplicitOtherDomain(t: string): boolean {
   return false;
 }
 
-/** Foydalanuvchi oxirgi avto-xabarni so‘rayaptimi? */
 function asksAboutLastAutoMessage(t: string): boolean {
   if (/kirim\s*nazorat|dublikat|dona\s*mos|qizil\s*(xabar|hisobot)/.test(t)) return true;
-  if (/\bhisobot\b/.test(t)) return true;
+  if (/\bhisobot\b/.test(t) && !/to'?g'?ri|toliq|rostmi|haqiqat/.test(t)) return true;
   if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*xabar|shu\s*xabar|bu\s*xabar/.test(t)) return true;
   if (/nima\s*(buyicha|bo'?yicha)|buyicha\s*hisobot|bo'?yicha\s*hisobot/.test(t)) return true;
   if (/^(bu|shu)\b/.test(t) && /nima|qanday|hisobot|xabar|edi/.test(t)) return true;
   if (/^nima\s*(bu|edi|u)\b/.test(t)) return true;
-  if (/tushuntir|nima\s*degani|nima\s*haqida|neg(a|e)\s*(bunaqa|qizil|yubor)/.test(t)) return true;
-  // Qisqa ishora: «bu nima?», «nima bu», «shu?»
+  if (/tushuntir|nima\s*degani|nima\s*haqida/.test(t)) return true;
   if (t.length <= 48 && /^(bu|shu|nima|va\s*shu|undoq|bunaqa)\b/.test(t)) return true;
   return false;
 }
 
-export type TelegramHardRoute = "explain_kirim_nazorati" | null;
+export type TelegramHardRoute =
+  | "explain_kirim_nazorati"
+  | "kirim_truth"
+  | "kirim_cause"
+  | "brief_ack"
+  | null;
 
-/**
- * Groq/KPI/kunlik brifingdan OLDIN chaqiriladi.
- * null = oddiy yordamchi yo‘li.
- */
 export function telegramHardRoute(userText: string): TelegramHardRoute {
   const t = normalizeAssistantQuery(userText);
   if (!t) return null;
+
+  // Qisqa tasdiq — ro‘yxat dump qilinmasin
+  if (isBriefAckAsk(t)) return "brief_ack";
+
+  // «To‘g‘ri/to‘liq malumotmi?» — doim truth sheet (kontekst yo‘q bo‘lsa ham)
+  if (isKirimTruthCheckAsk(t)) return "kirim_truth";
+
+  // «Sabab nima?» — to‘g‘ri sabablar
+  if (isKirimCauseAsk(t)) return "kirim_cause";
+
   if (isExplicitOtherDomain(t)) return null;
   if (!hasKirimNazoratiContext()) return null;
   if (asksAboutLastAutoMessage(t)) return "explain_kirim_nazorati";
   return null;
 }
 
-/** Xavfsizlik to‘ri: javob KPI trapiga o‘xshasa va kontekst kirim bo‘lsa — rad. */
+export function telegramHardReply(route: Exclude<TelegramHardRoute, null>, userText: string): { html: string; plain: string } {
+  if (route === "brief_ack") {
+    const plain = /tushundingmi|shunday\s*javob|faqat\s*so'?ralgan|ortiqcha/.test(userText.toLowerCase())
+      ? "Ha. Faqat so‘ralganiga qisqa va to‘g‘ri javob beraman."
+      : "Ha.";
+    return { html: plain, plain };
+  }
+  if (route === "kirim_truth" || route === "kirim_cause") {
+    return { html: kirimNazoratiTruthHtml(), plain: kirimNazoratiTruthPlain() };
+  }
+  // explain — truth + oxirgi skan qisqacha
+  const last = peekLastWatchdogReport();
+  const head = kirimNazoratiTruthHtml();
+  const plainHead = kirimNazoratiTruthPlain();
+  if (!last?.plain) return { html: head, plain: plainHead };
+  const extra = [
+    "",
+    `<b>Oxirgi skan</b>: ${last.when || "—"} · ${last.scanned} yuk · ${last.findings} topilma`,
+    `<pre>${String(last.plain).replace(/&/g, "&amp;").replace(/</g, "&lt;").slice(0, 2200)}</pre>`,
+  ].join("\n");
+  return {
+    html: `${head}\n${extra}`,
+    plain: `${plainHead}\n\nOxirgi skan (${last.when || "—"}):\n${last.plain.slice(0, 2200)}`,
+  };
+}
+
 export function looksLikeWrongKpiTrap(reply: string): boolean {
   const t = String(reply || "");
   return /KPI uchun soxta yuklab|Dashboard\s*→\s*KPI|agentlar excel/i.test(t)
     && !/Kirim nazorati|dublikat|dona mos/i.test(t);
+}
+
+/** Groq «hammasi to‘g‘ri» deb yolg‘on tasdiqlasa. */
+export function looksLikeFalseTruthStamp(reply: string): boolean {
+  return /to'?liq va to'?g'?ri|ma'?lumot.*to'?liq va to'?g'?ri|hisobot.*to'?liq va to'?g'?ri/i.test(reply)
+    && !/yolg'?on|noto'?g'?ri gaplar|ataylab xavfsizlik/i.test(reply);
 }

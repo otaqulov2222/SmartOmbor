@@ -2410,30 +2410,14 @@ export async function runAssistantChat(input: {
     .slice(-12)
     .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 
-  // Telegram qattiq shlyuz — KPI/kunlik chalkashligini ildizidan kesadi
+  // Telegram qattiq shlyuz — truth sheet / qisqa ack
   if (input.channel === "telegram") {
     try {
-      const { telegramHardRoute } = await import("./telegram-router");
-      if (telegramHardRoute(userOnly) === "explain_kirim_nazorati") {
-        const { peekLastWatchdogReport } = await import("./supply-watchdog-state");
-        const { lastBotOutbound } = await import("./telegram-context");
-        const watch = peekLastWatchdogReport();
-        const out = lastBotOutbound("kirim_nazorati");
-        const body = watch?.plain || out?.plain || "";
-        const reply = body
-          ? [
-            "Yuqoridagi hisobot — Kirim nazorati (MoySklad).",
-            watch?.when ? `Vaqt: ${watch.when}` : "",
-            watch ? `Tekshirildi: ${watch.scanned} yuk · topilma: ${watch.findings}` : "",
-            "Kunlik davomat/savdo brifingi emas. KPI emas.",
-            "",
-            body.slice(0, 2800),
-          ].filter(Boolean).join("\n")
-          : [
-            "Yuqoridagi avtomatik xabar — Kirim nazorati.",
-            "MoySklad dublikat va dona tekshiruvi. Kunlik brifing/KPI emas.",
-          ].join("\n");
-        return { reply, model: "local-fast", tools: [], files: [] };
+      const { telegramHardRoute, telegramHardReply } = await import("./telegram-router");
+      const route = telegramHardRoute(userOnly);
+      if (route) {
+        const explained = telegramHardReply(route, userOnly);
+        return { reply: explained.plain, model: "local-fast", tools: [], files: [] };
       }
     } catch {
       /* ignore — oddiy yo‘l */

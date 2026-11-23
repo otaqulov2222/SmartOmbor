@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { dataFile } from "./data-dir";
+import { kirimNazoratiTruthPlain } from "./kirim-truth";
 import { peekLastWatchdogReport } from "./supply-watchdog-state";
 
 const FILE = dataFile("telegram-context.json");
@@ -102,11 +103,12 @@ export function buildTelegramAssistantBundle(): string {
   const lastWatchOut = lastBotOutbound("kirim_nazorati");
   const lines = [
     "TELEGRAM KANAL QOIDALARI (QATIY):",
-    "1) Bu chatda 2 xil xabar bor: (A) avtomatik tizim hisobotlari, (B) Yordamchi suhbat.",
-    "2) «Yuqorida / tepada / oxirgi hisobot / qizil xabar / dublikat hisobot» → deyarli har doim KIRIM NAZORATI (MoySklad dublikat + dona).",
-    "3) KIRIM NAZORATI ≠ kunlik brifing (davomat/savdo). Kunlik brifingni faqat aniq «bugun nima bo‘ldi / kunlik hisobot» desa bering.",
-    "4) Taxmin qilib boshqa bo‘limga o‘tmang. Avval yuqoridagi avtomatik xabarni tanib oling.",
-    "5) Javob o‘zbekcha, qisqa, aniq. Inglizcha status yozmang.",
+    "1) Avtomatik qizil xabar = KIRIM NAZORATI. Kunlik/KPI emas.",
+    "2) «To‘liq va to‘g‘ri» deb kauchuk tasdiqlamang — faqat quyidagi truth sheet.",
+    "3) Qisqa: ha/tushundim so‘roviga uzun menyu chiqarmang.",
+    "4) Javob o‘zbekcha, qisqa. Inglizcha status yo‘q.",
+    "",
+    kirimNazoratiTruthPlain(),
   ];
   if (watch?.plain) {
     lines.push(

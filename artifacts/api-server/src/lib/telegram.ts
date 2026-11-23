@@ -10,9 +10,13 @@ import { recommendationPdf, recommendationRows, recommendationXlsx } from "./rec
 import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
 import { assistantConfigured, runAssistantChat, type AssistantFile } from "./assistant";
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
-import { peekLastWatchdogReport } from "./supply-watchdog-state";
 import { buildTelegramAssistantBundle, rememberBotOutbound } from "./telegram-context";
-import { looksLikeWrongKpiTrap, telegramHardRoute } from "./telegram-router";
+import {
+  looksLikeFalseTruthStamp,
+  looksLikeWrongKpiTrap,
+  telegramHardReply,
+  telegramHardRoute,
+} from "./telegram-router";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -456,35 +460,10 @@ async function sendAssistantFiles(chatId: number, files: AssistantFile[]) {
   }
 }
 
-function explainLastWatchdogReport(): { html: string; plain: string } {
-  const last = peekLastWatchdogReport();
-  if (!last?.plain) {
-    const html = [
-      "Yuqoridagi avtomatik xabar — <b>Kirim nazorati</b> hisoboti.",
-      "MoySklad yuk/kirimlarini <b>dublikat</b> va <b>dona</b> bo‘yicha tekshiradi.",
-      "Bu kunlik davomat/savdo brifingi <b>emas</b>.",
-      "Aniq g‘olib yo‘q yoki MS ruxsati yetmasa avto-o‘chirish qilinmaydi — shuning uchun qizil ogohlantirishlar.",
-    ].join("\n");
-    return { html, plain: html.replace(/<[^>]+>/g, "") };
-  }
-  const ageMin = last.at ? Math.max(0, Math.round((Date.now() - last.at) / 60_000)) : null;
-  const html = [
-    "<b>Yuqoridagi hisobot — Kirim nazorati</b>",
-    last.when ? `Vaqt: ${escapeHtml(last.when)}` : "",
-    ageMin != null ? `Taxminan ${ageMin} daqiqa oldin.` : "",
-    `Tekshirilgan yuk: <b>${last.scanned}</b> · topilma: <b>${last.findings}</b>`,
-    "",
-    "MoySklad kirimlarida dublikat va dona farqi qidiriladi.",
-    "Aniq qoida bo‘lmasa avto-o‘chirish/yaratish yo‘q — buzib qo‘ymaslik uchun.",
-    "",
-    "<b>Qisqa ro‘yxat:</b>",
-    `<pre>${escapeHtml(last.plain).slice(0, 3000)}</pre>`,
-  ].filter(Boolean).join("\n");
-  return { html, plain: last.plain };
-}
-
-async function replyWithWatchdogExplain(chatId: number, state: TelegramState, userText: string, reason: string) {
-  const explained = explainLastWatchdogReport();
+async function replyHardRouted(chatId: number, state: TelegramState, userText: string, reason: string) {
+  const hard = telegramHardRoute(userText);
+  if (!hard) return false;
+  const explained = telegramHardReply(hard, userText);
   const saved = appendToSession(
     ASSISTANT_LOGIN,
     state.assistantSessionId,
@@ -495,7 +474,9 @@ async function replyWithWatchdogExplain(chatId: number, state: TelegramState, us
   );
   state.assistantSessionId = saved.session.id;
   await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
-  logger.info({ reason, session: saved.session.id }, "Telegram hard-route: kirim nazorati");
+  rememberBotOutbound("kirim_nazorati", explained.plain);
+  logger.info({ reason, route: hard, session: saved.session.id }, "Telegram hard-route");
+  return true;
 }
 
 async function replyAssistant(chatId: number, state: TelegramState, userText: string) {
@@ -509,11 +490,7 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
   }
 
   // QATTIY SHLYUZ — Groq/KPI/kunlik brifingdan OLDIN (taxmin yo‘q)
-  const hard = telegramHardRoute(userText);
-  if (hard === "explain_kirim_nazorati") {
-    await replyWithWatchdogExplain(chatId, state, userText, "hard_route");
-    return;
-  }
+  if (await replyHardRouted(chatId, state, userText, "hard_route")) return;
 
   await sendTyping(chatId);
   const typing = setInterval(() => { void sendTyping(chatId); }, 4_000);
@@ -533,15 +510,20 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
       contextBundle: buildTelegramAssistantBundle(),
     });
 
-    // Xavfsizlik to‘ri: KPI trapiga tushib qolsa — darhol kirim nazoratiga qaytaramiz
-    if (looksLikeWrongKpiTrap(result.reply) && telegramHardRoute(`hisobot ${userText}`) === "explain_kirim_nazorati") {
+    // Xavfsizlik to‘ri: KPI / yolg‘on «hammasi to‘g‘ri» — truth sheet
+    if (looksLikeWrongKpiTrap(result.reply) || looksLikeFalseTruthStamp(result.reply)) {
       clearInterval(typing);
-      await replyWithWatchdogExplain(chatId, state, userText, "kpi_trap_override");
-      return;
-    }
-    if (looksLikeWrongKpiTrap(result.reply) && peekLastWatchdogReport()?.plain) {
-      clearInterval(typing);
-      await replyWithWatchdogExplain(chatId, state, userText, "kpi_trap_has_watch");
+      const explained = telegramHardReply("kirim_truth", userText);
+      const savedTrap = appendToSession(
+        ASSISTANT_LOGIN,
+        state.assistantSessionId,
+        [
+          { role: "user", content: userText },
+          { role: "assistant", content: explained.plain },
+        ],
+      );
+      state.assistantSessionId = savedTrap.session.id;
+      await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
       return;
     }
 
