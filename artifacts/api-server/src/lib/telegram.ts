@@ -10,6 +10,8 @@ import { recommendationPdf, recommendationRows, recommendationXlsx } from "./rec
 import { ensureBillingInitialized, markBillingReminded, markServerPaid, peekBillingReminder } from "./server-billing";
 import { assistantConfigured, runAssistantChat, type AssistantFile } from "./assistant";
 import { appendToSession, clearAssistantHistory, getAssistantSession } from "./assistant-history";
+import { isWatchdogReportAsk } from "./assistant-ux";
+import { peekLastWatchdogReport } from "./supply-watchdog-state";
 
 const STATE_FILE = dataFile("telegram.json");
 const NOON = 11;
@@ -445,6 +447,33 @@ async function sendAssistantFiles(chatId: number, files: AssistantFile[]) {
   }
 }
 
+function explainLastWatchdogReport(): { html: string; plain: string } {
+  const last = peekLastWatchdogReport();
+  if (!last?.plain) {
+    const html = [
+      "Yuqoridagi avtomatik xabar — <b>Kirim nazorati</b> hisoboti.",
+      "MoySklad yuk/kirimlarini <b>dublikat</b> va <b>dona</b> bo‘yicha tekshiradi.",
+      "Bu kunlik davomat/savdo brifingi <b>emas</b>.",
+      "Aniq g‘olib yo‘q yoki MS ruxsati yetmasa avto-o‘chirish qilinmaydi — shuning uchun qizil ogohlantirishlar.",
+    ].join("\n");
+    return { html, plain: html.replace(/<[^>]+>/g, "") };
+  }
+  const ageMin = last.at ? Math.max(0, Math.round((Date.now() - last.at) / 60_000)) : null;
+  const html = [
+    "<b>Yuqoridagi hisobot — Kirim nazorati</b>",
+    last.when ? `Vaqt: ${escapeHtml(last.when)}` : "",
+    ageMin != null ? `Taxminan ${ageMin} daqiqa oldin.` : "",
+    `Tekshirilgan yuk: <b>${last.scanned}</b> · topilma: <b>${last.findings}</b>`,
+    "",
+    "MoySklad kirimlarida dublikat va dona farqi qidiriladi.",
+    "Aniq qoida bo‘lmasa avto-o‘chirish/yaratish yo‘q — buzib qo‘ymaslik uchun.",
+    "",
+    "<b>Qisqa ro‘yxat:</b>",
+    `<pre>${escapeHtml(last.plain).slice(0, 3000)}</pre>`,
+  ].filter(Boolean).join("\n");
+  return { html, plain: last.plain };
+}
+
 async function replyAssistant(chatId: number, state: TelegramState, userText: string) {
   if (!assistantConfigured()) {
     await send(chatId, "<b>Yordamchi</b>\nHozir sozlanmagan (GROQ_API_KEY).");
@@ -454,6 +483,23 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
     await send(chatId, "Juda ko‘p so‘rov. Bir daqiqadan keyin qayta yozing.");
     return;
   }
+
+  // «Yuqorida nima hisobot?» → kunlik brifing emas, kirim nazorati
+  if (isWatchdogReportAsk(userText)) {
+    const explained = explainLastWatchdogReport();
+    const saved = appendToSession(
+      ASSISTANT_LOGIN,
+      state.assistantSessionId,
+      [
+        { role: "user", content: userText },
+        { role: "assistant", content: explained.plain },
+      ],
+    );
+    state.assistantSessionId = saved.session.id;
+    await send(chatId, `<b>Yordamchi</b>\n${explained.html}`);
+    return;
+  }
+
   await sendTyping(chatId);
   const typing = setInterval(() => { void sendTyping(chatId); }, 4_000);
   try {
@@ -465,7 +511,20 @@ async function replyAssistant(chatId: number, state: TelegramState, userText: st
       .slice(-10)
       .map((m) => ({ role: m.role as "user" | "assistant", content: String(m.content || "") }));
 
-    const result = await runAssistantChat({ message: userText, history });
+    const watch = peekLastWatchdogReport();
+    const contextNote = watch?.plain
+      ? [
+        "[Telegram kontekst — avtomatik]",
+        "Oxirgi avtomatik xabar: KIRIM NAZORATI (MoySklad dublikat/dona). Kunlik davomat brifingi emas.",
+        watch.plain.slice(0, 1200),
+        "Agar foydalanuvchi «yuqorida hisobot» desa — shu nazoratni tushuntiring.",
+      ].join("\n")
+      : "";
+
+    const result = await runAssistantChat({
+      message: contextNote ? `${userText}\n\n${contextNote}` : userText,
+      history,
+    });
     const files = Array.isArray(result.files) ? result.files : [];
     const saved = appendToSession(
       ASSISTANT_LOGIN,

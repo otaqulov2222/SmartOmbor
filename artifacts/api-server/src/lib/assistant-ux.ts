@@ -471,10 +471,21 @@ export function parseBriefDates(lower: string, today: string): string[] {
   return found;
 }
 
+/** Telegramdagi «yuqorida hisobot» — kunlik brifing EMAS, kirim nazorati. */
+export function isWatchdogReportAsk(lower: string): boolean {
+  const t = normalizeAssistantQuery(lower);
+  if (/yuqorida|tepada|avvalgi\s*xabar|oxirgi\s*(qizil|avto)?\s*hisobot|kirim\s*nazorat/.test(t)) {
+    if (/hisobot|nima|buyicha|bo'?yicha|dublikat|dona|nazorat|yubor|berdin|aytding|nima\s*edi/.test(t)) return true;
+  }
+  if (/nima\s*(buyicha|bo'?yicha)\s*hisobot/.test(t) && /yuqori|tepada|berdin|yubor/.test(t)) return true;
+  return false;
+}
+
 /** Bugungi / kunlik tizim hisoboti — «hisobot ber» vague emas. */
 export function isDailyBriefIntent(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
   if (isIdentityIntent(t)) return false;
+  if (isWatchdogReportAsk(t)) return false;
   // Aniq fayl so‘rovi emas
   if (/\b(pdf|xlsx|excel|csv)\b/.test(t) && /davomat|kirim|xodim|staff/.test(t)) return false;
   // Shanba/Yakshanba / dam olish / aniq sana + hisobot

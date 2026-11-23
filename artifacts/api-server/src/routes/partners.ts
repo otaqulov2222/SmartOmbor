@@ -2267,6 +2267,28 @@ function formatWatchReport(when: string, findings: WatchFinding[], scanned: numb
   return lines.join("\n").trim();
 }
 
+/** Yordamchi uchun HTML siz qisqa matn. */
+function formatWatchReportPlain(when: string, findings: WatchFinding[], scanned: number) {
+  const critical = findings.filter((f) => f.severity === "critical");
+  const warn = findings.filter((f) => f.severity === "warn");
+  const fixed = findings.filter((f) => f.severity === "fixed");
+  const lines = [
+    `Kirim nazorati · ${when}`,
+    `Tekshirildi: ${scanned} ta yuk`,
+    `Jiddiy: ${critical.length} · ogohlantirish: ${warn.length} · tuzatildi: ${fixed.length}`,
+  ];
+  if (!findings.length) {
+    lines.push("Holat: me’yorda — dublikat/dona xatosi yo‘q.");
+    return lines.join("\n");
+  }
+  for (const item of [...critical, ...warn, ...fixed].slice(0, 20)) {
+    lines.push(`• ${item.number} — ${item.title}${item.detail ? `: ${item.detail}` : ""}`);
+  }
+  if (findings.length > 20) lines.push(`… yana ${findings.length - 20} ta`);
+  lines.push("Bu — MoySklad kirim dublikat/dona tekshiruvi. Kunlik davomat/savdo brifingi emas.");
+  return lines.join("\n");
+}
+
 let watchRunning = false;
 
 export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): Promise<{
@@ -2313,6 +2335,11 @@ export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): 
 
     const state = readWatchdogState();
     state.lastPassAt = Date.now();
+    state.lastReportWhen = when.label;
+    state.lastScanned = scanned;
+    state.lastFindingCount = findings.length;
+    state.lastReportPlain = formatWatchReportPlain(when.label, findings, scanned);
+    state.lastReportAt = Date.now();
     const fingerprint = findings
       .map((f) => `${f.key}:${f.severity}`)
       .sort()
@@ -2341,7 +2368,6 @@ export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): 
           state.lastDigestStamp = when.stamp;
           state.lastDigestSlot = slot;
         }
-        // Issue cooldown bookkeeping
         for (const f of findings) {
           if (f.severity === "critical" || f.severity === "warn") state.issueSeen[f.key] = Date.now();
         }
