@@ -400,8 +400,12 @@ async function findExistingSupply(shipment: { id: string; number: string; date?:
   return hit;
 }
 
-/** Ortiqcha o‘z/yetim dublikatlarni o‘chirish. keepId majburiy — bo‘sh bo‘lsa no-op emas, xato. */
-async function pruneDuplicateSupplies(shipment: { id: string; number: string }, keepId: string) {
+/** Ortiqcha o‘z/yetim dublikatlarni o‘chirish. Ruxsat yo‘q bo‘lsa — ogohlantirish, kirimni BUZMAYDI. */
+async function pruneDuplicateSupplies(shipment: { id: string; number: string }, keepId: string): Promise<{
+  removed: number;
+  failed: number;
+  permissionBlocked: boolean;
+}> {
   if (!keepId) {
     throw Object.assign(new Error("prune_requires_keep"), {
       status: 500,
@@ -410,39 +414,49 @@ async function pruneDuplicateSupplies(shipment: { id: string; number: string }, 
   }
   const rows = await listSupplyCandidates(shipment);
   let removed = 0;
-  const failed: string[] = [];
+  let failed = 0;
+  let permissionBlocked = false;
   for (const row of rows) {
     if (row.id === keepId) continue;
     if (!isOwnOrOrphanDup(row, shipment)) continue;
     try {
-      await deleteSupplyDocument(row.id);
-      removed += 1;
-      logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Pruned duplicate MoySklad supply");
+      const ok = await deleteSupplyDocument(row.id, { softPermission: true });
+      if (ok) {
+        removed += 1;
+        logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Pruned duplicate MoySklad supply");
+      } else {
+        failed += 1;
+        permissionBlocked = true;
+      }
     } catch (error) {
-      failed.push(row.id);
+      failed += 1;
       logger.warn({ shipment: shipment.id, supply: row.id, err: error instanceof Error ? error.message : error }, "Duplicate supply prune failed");
     }
   }
-  if (failed.length) {
-    throw Object.assign(new Error("dup_prune_failed"), {
-      status: 502,
-      detail: `Dublikat tozalanmadi (${failed.length}). Qayta urinib ko‘ring — aks holda ombor shishishi mumkin.`,
-    });
-  }
-  return removed;
+  return { removed, failed, permissionBlocked };
 }
 
-/** Barcha o‘z/yetim dublikatlarni o‘chirish (qayta yaratish oldidan). */
+/** Barcha o‘z/yetim dublikatlarni o‘chirish (qayta yaratish oldidan). 1018 — soft skip. */
 async function deleteOwnOrphanSupplies(shipment: { id: string; number: string }) {
   const rows = (await listSupplyCandidates(shipment)).filter((row) => isOwnOrOrphanDup(row, shipment));
   let removed = 0;
+  let skipped = 0;
   for (const row of rows) {
-    await deleteSupplyDocument(row.id);
-    removed += 1;
-    logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Removed own/orphan MoySklad supply before recreate");
+    try {
+      const ok = await deleteSupplyDocument(row.id, { softPermission: true });
+      if (ok) {
+        removed += 1;
+        logger.warn({ shipment: shipment.id, supply: row.id, name: row.name }, "Removed own/orphan MoySklad supply before recreate");
+      } else {
+        skipped += 1;
+      }
+    } catch (error) {
+      skipped += 1;
+      logger.warn({ shipment: shipment.id, supply: row.id, err: error instanceof Error ? error.message : error }, "Own/orphan delete skipped");
+    }
   }
   supplyLookup.delete(shipment.id);
-  return removed;
+  return { removed, skipped };
 }
 
 async function stampSupplyExternalCode(supplyId: string, shipmentId: string) {
@@ -807,7 +821,9 @@ async function ensureLinePachkas(
   }
 }
 
-async function deleteSupplyDocument(supplyId: string) {
+/** @returns true o‘chirildi; false ruxsat yo‘q (kirim yozishni TO‘XTATMAYDI). */
+async function deleteSupplyDocument(supplyId: string, opts?: { softPermission?: boolean }): Promise<boolean> {
+  const soft = opts?.softPermission !== false;
   try {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
   } catch (error) {
@@ -815,12 +831,17 @@ async function deleteSupplyDocument(supplyId: string) {
   }
   try {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, undefined, "DELETE");
+    return true;
   } catch (error) {
     logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply delete failed");
     if (permissionDenied(error)) {
+      if (soft) {
+        logger.warn({ supplyId }, "MS delete permission missing (1018) — kirim yozish davom etadi, dublikat qo‘lda tozalanadi");
+        return false;
+      }
       throw Object.assign(new Error("ms_permission"), {
         status: 502,
-        detail: "MoySklad API tokenida kirim o‘chirish/yaratish ruxsati yo‘q (kod 1018). Token huquqlarini oching yoki dublikatlarni MoySklad UI dan qo‘lda o‘chiring — aks holda avtomatik tozalash ishlamaydi.",
+        detail: "MoySklad API tokenida kirim o‘chirish ruxsati yo‘q (kod 1018). Token → «Приёмки» o‘chirish huquqini oching yoki dublikatni MoySklad UI dan qo‘lda o‘chiring. Yangi kirim yozish shu sababdan to‘xtamaydi.",
       });
     }
     throw error;
@@ -1018,7 +1039,7 @@ async function loadOrgCurrency() {
   return orgCache;
 }
 
-type SupplyResult = { id: string; number: string; shipment: unknown; already?: boolean };
+type SupplyResult = { id: string; number: string; shipment: unknown; already?: boolean; warning?: string };
 type SupplyAgent = { id: string; name: string; meta: { href: string; type: string; mediaType: string } };
 type SupplyJob = { status: "pending" | "done" | "error"; error?: string; detail?: string; result?: SupplyResult; storeId?: string; counterpartyId?: string; counterpartyName?: string };
 const supplyJobs = new Map<string, SupplyJob>();
@@ -1065,7 +1086,8 @@ function setSupplyJob(id: string, job: SupplyJob) {
 
 function supplyRetryable(error: unknown) {
   const detail = error instanceof Error ? error.message : "";
-  if (detail === "post_ambiguous" || detail === "dup_prune_failed" || detail === "prune_requires_keep") return false;
+  // ms_permission endi soft (o‘chirish) — yaratish 1018 alohida MoySkladError
+  if (detail === "post_ambiguous" || detail === "prune_requires_keep" || detail === "ms_permission") return false;
   return uniqueSupplyConflict(error)
     || writeDropped(error)
     || /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi|yaratilmadi|javob bermadi|limiti|fetch failed/i.test(detail);
@@ -1482,6 +1504,7 @@ async function writeShipmentSupply(
     // Dublikat himoya: avval MoySkladda shu yuk bor-yo‘qligini qidiramiz.
     const priorAlert = Boolean(shipment.msAlert);
     let created: { id: string; name?: string; reused: boolean } | null = null;
+    let deletePermissionGap = false;
     const existing = await findExistingSupply(shipment);
     if (existing) {
       try {
@@ -1499,8 +1522,13 @@ async function writeShipmentSupply(
           shipment: shipmentId,
           supply: existing.id,
           err: error instanceof Error ? error.message : error,
-        }, "Existing MoySklad supply unhealthy — deleting own/orphan then recreate once");
-        await deleteOwnOrphanSupplies(shipment);
+        }, "Existing MoySklad supply unhealthy — soft-clean then recreate");
+        const cleaned = await deleteOwnOrphanSupplies(shipment);
+        if (cleaned.skipped > 0) deletePermissionGap = true;
+        // O‘chirib bo‘lmagan eski hujjat qolsa — yangisini majburiy yaratamiz (1018 kirimni to‘xtatmasin)
+        created = await postSupplyDocument(supplyCore, supplyPositions, shipment, {
+          skipExistingCheck: cleaned.skipped > 0,
+        });
       }
     }
     if (!created) {
@@ -1521,18 +1549,27 @@ async function writeShipmentSupply(
         supply: created.id,
         reused: created.reused,
         err: error instanceof Error ? error.message : error,
-      }, "MoySklad supply mismatched — recreating once");
-      await deleteOwnOrphanSupplies(shipment);
-      created = await postSupplyDocument(supplyCore, supplyPositions, shipment, { skipExistingCheck: false });
+      }, "MoySklad supply mismatched — soft-clean then recreate once");
+      const cleaned = await deleteOwnOrphanSupplies(shipment);
+      if (cleaned.skipped > 0) deletePermissionGap = true;
+      created = await postSupplyDocument(supplyCore, supplyPositions, shipment, {
+        skipExistingCheck: cleaned.skipped > 0,
+      });
       await assertSupplyMatchesOrRollback(
         created.id,
         supplyPositions,
         { shipmentId, allowDelete: true },
       );
     }
-    // Shu yukning ortiqcha dublikatlarini tozalash — muvaffaqiyatsiz bo‘lsa mark qilinmasin
+    // Dublikat tozalash — 1018 bo‘lsa ham kirim SAQLANADI (faqat ogohlantirish)
     const pruned = await pruneDuplicateSupplies(shipment, created.id);
-    if (pruned > 0) logger.info({ shipment: shipmentId, keep: created.id, pruned }, "Duplicate MoySklad supplies pruned");
+    if (pruned.removed > 0) {
+      logger.info({ shipment: shipmentId, keep: created.id, pruned: pruned.removed }, "Duplicate MoySklad supplies pruned");
+    }
+    if (pruned.permissionBlocked || deletePermissionGap) {
+      deletePermissionGap = true;
+      logger.warn({ shipment: shipmentId, keep: created.id, failed: pruned.failed }, "MS delete permission gap — post kept, orphans may remain");
+    }
     await stampSupplyExternalCode(created.id, shipment.id);
     // Agent majburiy — mark qilishdan OLDIN
     await ensureSupplyAgent(created.id, agentMeta);
@@ -1583,7 +1620,18 @@ async function writeShipmentSupply(
       logger.warn({ supply: created.id, err: error instanceof Error ? error.message : error }, "MoySklad supply price fill after create failed");
     });
     mark("done", t0);
-    return { id: created.id, number, shipment: saved, already: created.reused };
+    return {
+      id: created.id,
+      number,
+      shipment: saved,
+      already: created.reused,
+      ...(deletePermissionGap
+        ? {
+          warning:
+            "Kirim yozildi. MoySkladda eski dublikatni o‘chirishga token ruxsati yetmadi (1018) — ortiqchasini MS UI dan qo‘lda o‘chiring. Token → Приёмки o‘chirish huquqini oching.",
+        }
+        : {}),
+    };
   } finally {
     endSupplyInflight(shipmentId);
     releaseMoySkladSlots();
@@ -1597,6 +1645,19 @@ function supplyJobPayload(shipmentId: string) {
     return { pending: false, already: true, id: shipment.moyskladId, number: shipment.moyskladNumber || shipment.number, shipment };
   }
   const job = supplyJobs.get(shipmentId);
+  if (job?.status === "done" && job.result?.id) {
+    const result = job.result;
+    supplyJobs.delete(shipmentId);
+    persistSupplyJobs();
+    return {
+      pending: false,
+      already: Boolean(result.already),
+      id: result.id,
+      number: result.number,
+      shipment: result.shipment,
+      ...(result.warning ? { warning: result.warning } : {}),
+    };
+  }
   // Sticky uzilgan bo‘lsa eski "done" natija yolg‘on success bermasin
   if (job?.status === "done") {
     supplyJobs.delete(shipmentId);
@@ -2109,7 +2170,7 @@ async function auditRepairOneShipment(shipment: ReturnType<typeof listShipments>
         });
       } else {
         try {
-          const removed = await pruneDuplicateSupplies(shipment, keep.row.id);
+          const pruned = await pruneDuplicateSupplies(shipment, keep.row.id);
           if (linkedId && linkedId !== keep.row.id) {
             clearShipmentPosted(shipment.id, { expectMoyskladId: linkedId, reopen: false });
             markShipmentPosted(shipment.id, { id: keep.row.id, number: keep.row.name || number });
@@ -2117,13 +2178,23 @@ async function auditRepairOneShipment(shipment: ReturnType<typeof listShipments>
             markShipmentPosted(shipment.id, { id: keep.row.id, number: keep.row.name || number });
           }
           await stampSupplyExternalCode(keep.row.id, shipment.id);
-          findings.push({
-            key: `${number}:dups`,
-            number,
-            severity: "fixed",
-            title: "Dublikat qoida bo‘yicha tozalandi",
-            detail: `${candidates.length}→1. Saqlangan: ${keep.row.name || keep.row.id.slice(0, 8)} (${keep.qty} dona = yuk). O‘chirildi: ${removed}.`,
-          });
+          if (pruned.permissionBlocked || pruned.failed > 0) {
+            findings.push({
+              key: `${number}:dups`,
+              number,
+              severity: "warn",
+              title: "Dublikat qisman: MS o‘chirish ruxsati yetmadi",
+              detail: `To‘g‘ri kirim saqlandi (${keep.qty} dona). O‘chirildi: ${pruned.removed}, qoldi: ${pruned.failed}. Token «Приёмки» o‘chirish huquqini oching yoki MS UI dan qo‘lda tozalang — yangi kirim yozish to‘xtamaydi.`,
+            });
+          } else {
+            findings.push({
+              key: `${number}:dups`,
+              number,
+              severity: "fixed",
+              title: "Dublikat qoida bo‘yicha tozalandi",
+              detail: `${candidates.length}→1. Saqlangan: ${keep.row.name || keep.row.id.slice(0, 8)} (${keep.qty} dona = yuk). O‘chirildi: ${pruned.removed}.`,
+            });
+          }
           candidates = [keep.row];
           supplyLookup.delete(shipment.id);
         } catch (error) {
@@ -2132,7 +2203,7 @@ async function auditRepairOneShipment(shipment: ReturnType<typeof listShipments>
             key: `${number}:dups`,
             number,
             severity: "critical",
-            title: code === "ms_permission" ? "Dublikat: MS ruxsati yo‘q" : "Dublikat tozalanmadi",
+            title: "Dublikat tozalanmadi",
             detail: `${candidates.length} ta. ${typeof error === "object" && error && "detail" in error ? String((error as { detail?: unknown }).detail || "") : code}`.slice(0, 280),
           });
         }

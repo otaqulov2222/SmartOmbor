@@ -890,10 +890,11 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
       }
       const supplyBody = JSON.stringify({ storeId: chosen, counterpartyId: agent?.id || row.account?.counterpartyId || '', counterpartyName: agent?.name || row.account?.counterpartyName || '', confirmPairs });
       const started = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: supplyBody });
-      const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
+      const startedBody = await started.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean; warning?: string };
       if (started.ok && !startedBody.pending && (startedBody.id || startedBody.already)) {
         setPosting(null);
         setSupplyingId(null);
+        if (startedBody.warning) setPostError(startedBody.warning);
         await refreshShipments();
         return;
       }
@@ -926,7 +927,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
           }
         }
         const status = await fetch(`/api/partner-factories/shipments/${shipmentId}/supply`);
-        const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean };
+        const body = await status.json().catch(() => ({})) as { pending?: boolean; error?: string; detail?: string; id?: string; already?: boolean; warning?: string };
         const unique = /уникал|unique|already exists|уже существ|MoySkladda bor|kartasi/i.test(String(body.detail || body.error || ''));
         if (body.pending || status.status === 202) {
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -939,6 +940,7 @@ function PartnerDetail({ row, onBack }: { row: Row; onBack: () => void }) {
         }
         if ((status.ok || body.already) && (body.id || body.already)) {
           setSupplyingId(null);
+          if (body.warning) setPostError(body.warning);
           await refreshShipments();
           return;
         }
