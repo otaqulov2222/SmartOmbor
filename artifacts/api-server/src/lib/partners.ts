@@ -539,6 +539,17 @@ export function moyskladDateTime(value?: Date) {
   return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}:${pick("second")}`;
 }
 
+/** Juft >12 + qop — odatda katalog packSize juftga yozilgan (MS 10×/12× dona). */
+function linePairsInflated(line: Pick<ShipmentLine, "pairs" | "boxes" | "pachka">) {
+  const pairs = Math.round(Number(line.pairs) || 0);
+  const boxes = Math.round(Number(line.boxes) || 0);
+  const pachka = Math.round(Number(line.pachka) || 0);
+  if (!(pairs > 0) || !(boxes > 0)) return false;
+  if (pairs > 12) return true;
+  if (pachka > 1 && pairs >= pachka * 5) return true;
+  return false;
+}
+
 export function createShipment(factoryId: string, input: { date?: string; note?: string; lines: Partial<ShipmentLine>[] }) {
   const store = load();
   const account = store.accounts.find((item) => item.id === factoryId);
@@ -546,6 +557,13 @@ export function createShipment(factoryId: string, input: { date?: string; note?:
   const lines = (input.lines ?? []).map((line) => cleanLine(line, account.code)).filter((line) => line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
+  const inflated = lines.filter((line) => linePairsInflated(line));
+  if (inflated.length) {
+    throw Object.assign(new Error("pairs_inflated"), {
+      status: 400,
+      detail: `Juft (qadoqda) shubhali (${inflated.length} qator). Katalog «pachka» ni juftga yozmang — odatda juft 1–12. Misol: ${inflated[0].productCode || "?"} juft=${inflated[0].pairs}.`,
+    });
+  }
   // Raqam hech qachon qayta ishlatilmasin (o‘chirilgan yukdan keyin ham).
   const used = store.shipments
     .filter((item) => item.factoryId === factoryId)
@@ -606,6 +624,13 @@ export function updateShipment(id: string, input: { date?: string; note?: string
   }).filter((line) => line.productCode || line.pairs > 0 || line.boxes > 0 || line.quantity > 0);
   if (!lines.length) throw Object.assign(new Error("empty"), { status: 400 });
   if (lines.some((line) => !line.size.trim())) throw Object.assign(new Error("need_size"), { status: 400 });
+  const inflated = lines.filter((line) => linePairsInflated(line));
+  if (inflated.length) {
+    throw Object.assign(new Error("pairs_inflated"), {
+      status: 400,
+      detail: `Juft (qadoqda) shubhali (${inflated.length} qator). Katalog «pachka» ni juftga yozmang — odatda juft 1–12. Misol: ${inflated[0].productCode || "?"} juft=${inflated[0].pairs}.`,
+    });
+  }
   if (shipment.moyskladId) throw Object.assign(new Error("posted"), { status: 409 });
   if (input.date) shipment.date = tashkentDay(input.date) || shipment.date;
   shipment.note = String(input.note ?? shipment.note).trim();

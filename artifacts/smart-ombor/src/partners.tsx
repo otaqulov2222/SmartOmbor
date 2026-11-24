@@ -257,9 +257,12 @@ function preferredSupplyStore<T extends { id: string; name: string }>(stores: T[
 function pairsLooksInflated(line: Pick<Line, 'pairs' | 'pachka' | 'boxes'>) {
   const pairs = Math.round(Number(line.pairs) || 0);
   const pachka = Math.round(Number(line.pachka) || 0);
+  const boxes = Math.round(Number(line.boxes) || 0);
   if (!(pairs > 0)) return false;
+  // packSize→juft chalkashuvi: 10/12/60 (0035-017, 0044-012)
+  if (boxes > 0 && pairs > 12) return true;
   if (pachka > 1 && pairs >= pachka * 5) return true;
-  if (!(pachka > 1) && pairs >= 30 && Number(line.boxes) > 0) return true;
+  if (!(pachka > 1) && pairs >= 30 && boxes > 0) return true;
   return false;
 }
 
@@ -272,7 +275,9 @@ function supplyError(body: { error?: string; detail?: string; msAlert?: MsAlert 
   }
   if (body.error === 'agent') return t('partners.agentMissing');
   if (body.error === 'store') return t('partners.storeMissing');
-  if (body.error === 'pairs_suspect') return String(body.detail || '').trim() || t('partners.pairsSuspect');
+  if (body.error === 'pairs_suspect' || body.error === 'pairs_inflated') {
+    return String(body.detail || '').trim() || t('partners.pairsSuspect');
+  }
   if (body.error === 'pachka_mismatch') return String(body.detail || '').trim() || t('partners.pachkaMismatch');
   if (body.error === 'ms_deleted') return String(body.detail || '').trim() || t('partners.msDeleted');
   if (body.error === 'ms_unhealthy') return String(body.detail || '').trim() || t('partners.msUnhealthy');

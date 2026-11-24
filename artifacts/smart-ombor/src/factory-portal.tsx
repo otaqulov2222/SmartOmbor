@@ -247,16 +247,18 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
     const refreshValues = Boolean(next && ('size' in next || 'productCode' in next));
     void fetch(`/api/products/passport?${qs}`).then(response => response.ok ? response.json() : null).then((data: { found?: boolean; fromWaybill?: boolean; size?: string; packSize?: number | null; cost?: number | null; salePrice?: number | null; priceType?: string } | null) => {
       if (passportSeq.current.get(key) !== seq || !data) return;
-      const pack = data.packSize && data.packSize > 1 ? String(Math.round(data.packSize)) : '';
+      // packSize = MoySklad «pachka» (kartochka). Juft (pairs) EMAS.
+      // Avval pack→pairs yozilardi: kod/razmer yangilanganda juft 6→10/12/60 bo‘lib,
+      // MS ga 10×/12× dona ketardi (0044-012: 60→600, 0035-017: 192→2304).
       const cost = Number(data.cost || data.salePrice || 0);
       const price = cost > 0 ? String(Math.round(cost)) : '';
-      if (!data.found && !data.fromWaybill && !price && !pack) return;
+      if (!data.found && !data.fromWaybill && !price && !data.size) return;
       setLines(rows => withBlank(rows.map(row => {
         if (row.key !== key) return row;
         return {
           ...row,
           ...(!row.size.trim() && data.size ? { size: data.size } : {}),
-          ...((!row.pairs.trim() || refreshValues) && pack ? { pairs: pack } : {}),
+          // pairs hech qachon packSize dan to‘ldirilmaydi / ustiga yozilmaydi
           ...((!row.price.trim() || refreshValues) && price ? { price } : {}),
           ...(!row.priceType && data.priceType ? { priceType: data.priceType } : {}),
         };
@@ -334,6 +336,10 @@ function Workspace({ account, shipments, token, onSent, dateLabel, money, fmt, l
         if (response.status === 401 || body.error === 'unauthorized') { setError(t('zavod.invalid')); return; }
         if (body.error === 'need_size') { setError(t('zavod.needSize')); return; }
         if (body.error === 'empty') { setError(t('zavod.emptyLine')); return; }
+        if (body.error === 'pairs_inflated') {
+          setError(String(body.detail || '').trim() || 'Juft (qadoqda) noto‘g‘ri — odatda 1–12. Katalog pachkasini juftga yozmang.');
+          return;
+        }
         setError(t('zavod.sendFailed'));
         return;
       }

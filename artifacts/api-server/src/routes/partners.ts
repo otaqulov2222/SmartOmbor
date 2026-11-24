@@ -51,13 +51,19 @@ function fail(res: Response, error: unknown) {
   res.status(status || 500).json(detail ? { error: message, detail } : { error: message });
 }
 
-/** Juft (qadoqda) odatda pachka bilan bir xil; 5×+ farq — chalkashlik (0044-007: 6 o‘rniga 60). */
+/**
+ * Juft (qadoqda) odatda 1–12. Katalog packSize juftga yozilganda 10/12/60 chiqadi
+ * (0044-012: 6→60 ⇒ MS 600; 0035-017: ×12 ⇒ MS 2304).
+ */
 function pairsLooksInflated(line: { pairs: number; pachka: number; boxes: number }) {
   const pairs = Math.round(Number(line.pairs) || 0);
   const pachka = Math.round(Number(line.pachka) || 0);
+  const boxes = Math.round(Number(line.boxes) || 0);
   if (!(pairs > 0)) return false;
+  // Odatiy poyabzal jufti >12 bo‘lmasa — packSize chalkashuvi
+  if (boxes > 0 && pairs > 12) return true;
   if (pachka > 1 && pairs >= pachka * 5) return true;
-  if (!(pachka > 1) && pairs >= 30 && Number(line.boxes) > 0) return true;
+  if (!(pachka > 1) && pairs >= 30 && boxes > 0) return true;
   return false;
 }
 
