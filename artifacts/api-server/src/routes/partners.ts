@@ -9,6 +9,8 @@ import { logger } from "../lib/logger";
 import { recordAudit } from "../lib/audit";
 import { notifyAdmin } from "../lib/telegram";
 import { readWatchdogState, writeWatchdogState } from "../lib/supply-watchdog-state";
+import { tabelDay, tashkentParts } from "../lib/office";
+import { listLocalPeople } from "./local-auth";
 import {
   accountFromToken,
   createAccount,
@@ -2329,35 +2331,64 @@ function digestSlot(hour: number) {
   return null;
 }
 
+function formatDavomatDigestHtml(): string {
+  try {
+    const day = tashkentParts().date;
+    const people = listLocalPeople();
+    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const s = tabel.stats || { total: 0, came: 0, absent: 0, late: 0 };
+    return [
+      "",
+      "<b>Davomat (bugun)</b>",
+      `${day}: jami <b>${s.total}</b> · kelgan <b>${s.came}</b> · kelmagan <b>${s.absent}</b> · kechikkan <b>${s.late}</b>`,
+    ].join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function formatDavomatDigestPlain(): string {
+  try {
+    const day = tashkentParts().date;
+    const people = listLocalPeople();
+    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const s = tabel.stats || { total: 0, came: 0, absent: 0, late: 0 };
+    return `Davomat (${day}): jami ${s.total}, kelgan ${s.came}, kelmagan ${s.absent}, kechikkan ${s.late}`;
+  } catch {
+    return "";
+  }
+}
+
 function formatWatchReport(when: string, findings: WatchFinding[], scanned: number, ok: boolean) {
   const fixed = findings.filter((f) => f.severity === "fixed");
   const critical = findings.filter((f) => f.severity === "critical");
   const warn = findings.filter((f) => f.severity === "warn");
   const lines = [
-    "<b>Smart Ombor · Kirim nazorati</b>",
+    "<b>Smart Ombor · Soatlik hisobot</b>",
     when,
-    "<i>Davriylik: har 1 soat · to‘liq hisobot</i>",
+    "<i>Davriylik: har 1 soat · kirim nazorati + davomat</i>",
     "",
+    "<b>Kirim nazorati</b>",
     `Tekshirildi: <b>${scanned}</b> ta yuk`,
   ];
   if (ok && !findings.length) {
     lines.push("Holat: <b>me’yorda</b> — dublikat/dona xatosi yo‘q.");
+  } else {
+    if (fixed.length) lines.push(`Qoida bo‘yicha tuzatildi: <b>${fixed.length}</b>`);
+    if (critical.length) lines.push(`Jiddiy (qo‘lda/ruxsat): <b>${critical.length}</b>`);
+    if (warn.length) lines.push(`Ogohlantirish: <b>${warn.length}</b>`);
     lines.push("");
-    lines.push("<i>Nazorat qoida: yangi kirim yaratilmaydi; shubhada faqat hisobot.</i>");
-    return lines.join("\n");
-  }
-  if (fixed.length) lines.push(`Qoida bo‘yicha tuzatildi: <b>${fixed.length}</b>`);
-  if (critical.length) lines.push(`Jiddiy (qo‘lda/ruxsat): <b>${critical.length}</b>`);
-  if (warn.length) lines.push(`Ogohlantirish: <b>${warn.length}</b>`);
-  lines.push("");
-  const show = [...critical, ...warn, ...fixed];
-  for (const item of show) {
-    const mark = item.severity === "fixed" ? "✅" : item.severity === "critical" ? "🔴" : "⚠️";
-    lines.push(`${mark} <b>${item.number}</b> — ${item.title}`);
-    if (item.detail) lines.push(`<i>${item.detail.replace(/</g, "&lt;")}</i>`);
-    lines.push("");
+    const show = [...critical, ...warn, ...fixed];
+    for (const item of show) {
+      const mark = item.severity === "fixed" ? "✅" : item.severity === "critical" ? "🔴" : "⚠️";
+      lines.push(`${mark} <b>${item.number}</b> — ${item.title}`);
+      if (item.detail) lines.push(`<i>${item.detail.replace(/</g, "&lt;")}</i>`);
+      lines.push("");
+    }
   }
   lines.push("<i>Avto-tuzatish faqat aniq qoida; taxmin bilan o‘chirmaydi/yaratmaydi.</i>");
+  const davomat = formatDavomatDigestHtml();
+  if (davomat) lines.push(davomat);
   return lines.join("\n").trim();
 }
 
@@ -2373,12 +2404,14 @@ function formatWatchReportPlain(when: string, findings: WatchFinding[], scanned:
   ];
   if (!findings.length) {
     lines.push("Holat: me’yorda — dublikat/dona xatosi yo‘q.");
-    return lines.join("\n");
+  } else {
+    for (const item of [...critical, ...warn, ...fixed]) {
+      lines.push(`• ${item.number} — ${item.title}${item.detail ? `: ${item.detail}` : ""}`);
+    }
   }
-  for (const item of [...critical, ...warn, ...fixed]) {
-    lines.push(`• ${item.number} — ${item.title}${item.detail ? `: ${item.detail}` : ""}`);
-  }
-  lines.push("Bu — MoySklad kirim dublikat/dona tekshiruvi (har 1 soat). Kunlik davomat/savdo brifingi emas.");
+  lines.push("Kirim: MoySklad dublikat/dona (har 1 soat).");
+  const davomat = formatDavomatDigestPlain();
+  if (davomat) lines.push(davomat);
   return lines.join("\n");
 }
 

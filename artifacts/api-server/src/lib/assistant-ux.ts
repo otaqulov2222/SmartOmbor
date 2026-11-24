@@ -427,6 +427,15 @@ export function parseBriefDates(lower: string, today: string): string[] {
   for (const m of t.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
     push(`${m[1]}-${m[2]}-${m[3]}`);
   }
+  // 2026.11.22 / 2026/11/22
+  for (const m of t.matchAll(/\b(\d{4})[./](\d{1,2})[./](\d{1,2})\b/g)) {
+    const y = m[1];
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      push(`${y}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`);
+    }
+  }
   for (const m of t.matchAll(/\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/g)) {
     const a = Number(m[1]);
     const b = Number(m[2]);
@@ -478,7 +487,7 @@ export function parseBriefDates(lower: string, today: string): string[] {
     return found;
   }
 
-  if (/\bkecha\b|вчера/.test(t)) {
+  if (/\bkecha(gi)?\b|вчера/.test(t)) {
     push(shiftIsoDate(today, -1));
     return found;
   }
@@ -553,11 +562,21 @@ export function isAttendanceIntent(lower: string): boolean {
   const t = normalizeAssistantQuery(lower);
   if (isDailyBriefIntent(t) && !/davomat|kelgan|kelmagan|kechik/.test(t)) return false;
   if (/bugun\s*kim|kim\s*keldi|kim\s*kelmagan|kelganlar|kelmaganlar|kechikkan/.test(t)) return true;
-  if (/bugungi?\s*davomat|davomat\s*(holat|ro'?yxat|bugun)|сегодня\s*кто|кто\s*приш/.test(t)) return true;
-  if (/davomat/.test(t) && /(bugun|holat|ro'?yxat|kim|stat|hozir|ber|ayt)/.test(t) && !/tushun|qanday\s*bolim|pdf|excel/.test(t)) {
-    return true;
-  }
+  if (/bugungi?\s*davomat|davomat\s*(holat|ro'?yxat|bugun|hisobot)|сегодня\s*кто|кто\s*приш/.test(t)) return true;
+  // «davomatini ber», «davomat buyicha», «kechagi davomat»
+  if (/davomat/.test(t) && !/tushun|qanday\s*bolim|qanday\s*ishlay/.test(t)) return true;
+  if (/kecha(gi)?\b/.test(t) && /(boyicha|bo'?yicha|kun|hisobot|davomat)/.test(t)) return true;
+  if (/\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(t) && /(davomat|kelgan|kelmagan|kechik)/.test(t)) return true;
   return false;
+}
+
+/** Davomat so‘rovidan sana (ISO). */
+export function resolveAttendanceDate(lower: string, today: string): string {
+  const t = normalizeAssistantQuery(lower);
+  if (/\bkecha(gi)?\b|вчера/.test(t) || /\d{4}[./-]\d{1,2}/.test(t) || /\d{1,2}[./]\d{1,2}[./]\d{4}/.test(t)) {
+    return parseBriefDates(lower, today)[0] || today;
+  }
+  return today;
 }
 
 /** Oylik / maosh / jarima */
@@ -689,9 +708,10 @@ export function classifyAssistantIntent(raw: string): AssistantIntent {
   const t = normalizeAssistantQuery(raw);
   if (isIdentityIntent(t)) return "identity";
   // Kunlik brifingdan OLDIN — aks holda «yuqorida hisobot» chalkashadi
+  // Davomat avval — «hisobot» so‘zi kirim/kunlikka o‘girmasin
+  if (isAttendanceIntent(t)) return "attendance";
   if (isWatchdogReportAsk(t)) return "watchdog_report";
   if (isDailyBriefIntent(t)) return "daily_brief";
-  if (isAttendanceIntent(t)) return "attendance";
   if (isPayrollIntent(t)) return "payroll";
   if (wantsPortalLink(t)) return "portal";
   if (isKpiAgentsIntent(t)) return "kpi_agents";

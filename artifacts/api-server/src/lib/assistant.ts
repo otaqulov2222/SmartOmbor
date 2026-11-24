@@ -39,6 +39,7 @@ import {
   isWatchdogReportAsk,
   normalizeAssistantQuery,
   parseBriefDates,
+  resolveAttendanceDate,
   sanitizeAssistantReply,
   vagueGiveReply,
   wantsPortalLink,
@@ -185,8 +186,14 @@ const TOOLS = [
     type: "function",
     function: {
       name: "office_today",
-      description: "Bugungi davomat board: kelgan/kelmagan/kechikkan qisqacha.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      description: "Davomat board (bugun yoki sana): kelgan/kelmagan/kechikkan qisqacha.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD (bo‘sh = bugun)" },
+        },
+        additionalProperties: false,
+      },
     },
   },
   {
@@ -500,20 +507,28 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
     const people = listLocalPeople();
     const byId = new Map(people.map((p) => [p.id, p]));
     const site = officeSite();
-    const rows = todayBoard().map((row) => ({
-      name: byId.get(row.accountId)?.name || row.accountId,
-      role: byId.get(row.accountId)?.role || "",
+    const today = tashkentParts().date;
+    const day = String(args.date || "").trim() || today;
+    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
+    const rows = (tabel.items || []).map((row) => ({
+      name: byId.get(row.accountId)?.name || row.name || row.accountId,
+      role: byId.get(row.accountId)?.role || row.role || "",
       inAt: row.inAt,
       outAt: row.outAt,
       excuse: row.excuse,
-      workedMs: workedMs(row),
+      workedMs: row.workedMs,
+      status: row.status,
+      lateIn: row.lateIn,
     }));
-    const present = rows.filter((r) => r.inAt).length;
+    const present = rows.filter((r) => r.inAt || r.status === "present" || r.status === "late" || r.status === "out_missing");
     return {
+      date: day,
+      isToday: day === today,
       office: { lat: site.lat, lng: site.lng, radiusM: site.radiusM },
-      total: people.length,
-      present,
-      absent: people.length - present,
+      total: tabel.stats?.total ?? people.length,
+      present: tabel.stats?.came ?? present.length,
+      absent: tabel.stats?.absent ?? Math.max(0, people.length - present.length),
+      late: tabel.stats?.late ?? 0,
       rows: rows.slice(0, 40),
     };
   }
@@ -1840,24 +1855,32 @@ async function tryFastLocalTask(
     }
   }
 
-  // 0a2) Davomat board (kunlik brifingdan keyin, vague dan oldin)
-  if (intent === "attendance" || isAttendanceIntent(lower)) {
-    const board = await run("office_today", {}) as Record<string, unknown> | null;
+  // 0a2) Davomat board — sana/kecha tushuniladi
+  const prevWasDavomat = /davomat|kelgan|kelmagan|kechikkan/i.test(prevAssistant);
+  const attendanceFollowup = prevWasDavomat && /^(kecha(gi)?|shu\s*kun|o'?sha\s*kun)\b/.test(lower);
+  if (intent === "attendance" || isAttendanceIntent(lower) || attendanceFollowup) {
+    const today = tashkentParts().date;
+    const day = resolveAttendanceDate(lower, today);
+    const board = await run("office_today", { date: day }) as Record<string, unknown> | null;
     if (!board) return { reply: "Davomat board olinmadi.", model: "local-fast", tools, files };
     const rows = Array.isArray(board.rows) ? board.rows as Array<Record<string, unknown>> : [];
-    const present = rows.filter((r) => r.inAt);
+    const present = rows.filter((r) => r.inAt || r.status === "present" || r.status === "late" || r.status === "out_missing");
     const absent = Number(board.absent) || Math.max(0, Number(board.total || 0) - present.length);
+    const lateCount = Number(board.late) || rows.filter((r) => Number(r.lateIn || 0) > 0 || r.status === "late").length;
     const people = listLocalPeople();
     const byId = new Map(people.map((p) => [p.id, p.name]));
-    const day = tashkentParts().date;
-    const tabel = tabelDay(day, people.map((p) => ({ id: p.id, name: p.name, login: p.login, role: p.role })));
-    const late = (tabel.items || []).filter((r) => r.status === "late" || Number(r.lateIn || 0) > 0);
-    const onlyLate = /kechik/.test(lower);
+    const label = day === today ? "Bugungi" : `${day} kungi`;
+    const onlyLate = /kechik/.test(lower) && !/davomat|kelgan|kelmagan/.test(lower);
     if (onlyLate) {
+      const lateRows = rows.filter((r) => Number(r.lateIn || 0) > 0 || r.status === "late");
       return {
-        reply: late.length
-          ? [`Bugun kechikkanlar (${late.length}):`, ...late.slice(0, 20).map((r) => `• ${r.name}: ${r.inHm || "—"} (+${r.lateIn || 0} daq)`)].join("\n")
-          : "Bugun kechikkan yo‘q.",
+        reply: lateRows.length
+          ? [`${label} kechikkanlar (${lateRows.length}):`, ...lateRows.slice(0, 20).map((r) => {
+            const rawName = String(r.name || "");
+            const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";
+            return `• ${name}: ${clockLabel(String(r.inAt || ""))} (+${Number(r.lateIn || 0)} daq)`;
+          })].join("\n")
+          : `${label} kechikkan yo‘q.`,
         model: "local-fast",
         tools,
         files,
@@ -1865,7 +1888,7 @@ async function tryFastLocalTask(
     }
     return {
       reply: [
-        `Bugungi davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}, kechikkan ${late.length}.`,
+        `${label} davomat: jami ${board.total}, kelgan ${board.present ?? present.length}, kelmagan ${absent}, kechikkan ${lateCount}.`,
         ...present.slice(0, 15).map((r) => {
           const rawName = String(r.name || "");
           const name = (/^[0-9a-f-]{36}$/i.test(rawName) ? byId.get(rawName) : rawName) || "xodim";

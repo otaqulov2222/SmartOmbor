@@ -60,6 +60,9 @@ export function telegramHardRoute(userText: string): TelegramHardRoute {
   const t = normalizeAssistantQuery(userText);
   if (!t) return null;
 
+  // Davomat/oylik/KPI — kirim truth sheetga UMUMAN tushmasin
+  if (isExplicitOtherDomain(t)) return null;
+
   // «Qanday tuzatamiz?» — AVVAL (tushundim/ack yutib yubormasin)
   if (isKirimFixAsk(t)) return "kirim_fix";
 
@@ -80,7 +83,6 @@ export function telegramHardRoute(userText: string): TelegramHardRoute {
   // «Sabab nima?»
   if (isKirimCauseAsk(t)) return "kirim_cause";
 
-  if (isExplicitOtherDomain(t)) return null;
   if (!hasKirimNazoratiContext()) return null;
   if (asksAboutLastAutoMessage(t)) return "explain_kirim_nazorati";
   return null;
