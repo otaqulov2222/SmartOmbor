@@ -676,10 +676,93 @@ async function assertSupplyMatchesOrRollback(
     }, "MoySklad kirim integrity verify failed — rolling back");
     // Transient (429/5xx/tarmoq) da to‘g‘ri hujjatni o‘chirmaymiz
     if (meta.allowDelete && deterministic && !isTransientMsError(error)) {
-      await deleteSupplyDocument(supplyId);
+      await deleteSupplyDocument(supplyId, { softPermission: true });
     }
     throw error;
   }
+}
+
+/**
+ * Live token: create/edit/delete probe. Fail → Telegram critical (soatlik).
+ * Hujjat qoldirmaydi; o‘chirish muvaffaqiyatsiz bo‘lsa ham topiladi.
+ */
+async function probeMsSupplyRights(): Promise<WatchFinding | null> {
+  if (!moyskladConfigured()) return null;
+  const fakeId = "00000000-0000-0000-0000-00000000f101";
+  try {
+    await moyskladSend(`/entity/supply/${fakeId}`, undefined, "DELETE");
+  } catch (error) {
+    if (permissionDenied(error)) {
+      return {
+        key: "ms-rights-delete",
+        number: "MS-HUQUQ",
+        severity: "critical",
+        title: "Приёмки o‘chirish ruxsati yo‘q (1018)",
+        detail: "Token (Kassa Z.) da Удалить yo‘q. Сотрудники → Kassa → Настроить права → Закупки → Приёмки → Удалить. Soft-fail tufayli yangi kirim yoziladi, dublikat qo‘lda.",
+      };
+    }
+    // 404/1021 — ruxsat bor, obyekt yo‘q
+  }
+
+  try {
+    const [orgPage, agentPage, storePage] = await Promise.all([
+      moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/organization?limit=1"),
+      moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/counterparty?limit=1"),
+      moysklad<{ rows: Array<{ meta: { href: string; type: string; mediaType: string } }> }>("/entity/store?limit=1"),
+    ]);
+    const org = orgPage.rows[0]?.meta;
+    const agent = agentPage.rows[0]?.meta;
+    const store = storePage.rows[0]?.meta;
+    if (!org || !agent || !store) return null;
+
+    const stamp = Date.now().toString(36);
+    const created = await moyskladSend<{ id: string }>("/entity/supply", {
+      name: `SO-RIGHTS-${stamp}`,
+      organization: { meta: org },
+      agent: { meta: agent },
+      store: { meta: store },
+      applicable: false,
+      description: "SmartOmbor rights probe — auto-delete",
+    });
+    const id = created.id;
+    try {
+      await moyskladSend(`/entity/supply/${encodeURIComponent(id)}`, { description: `probe-ok ${stamp}` }, "PUT");
+    } catch (error) {
+      try { await deleteSupplyDocument(id, { softPermission: true }); } catch { /* ignore */ }
+      if (permissionDenied(error)) {
+        return {
+          key: "ms-rights-edit",
+          number: "MS-HUQUQ",
+          severity: "critical",
+          title: "Приёмки tahrirlash ruxsati yo‘q",
+          detail: "Сотрудники → Kassa → Настроить права → Закупки → Приёмки → Редактировать ni yoqing.",
+        };
+      }
+      throw error;
+    }
+    const deleted = await deleteSupplyDocument(id, { softPermission: true });
+    if (!deleted) {
+      return {
+        key: "ms-rights-delete-live",
+        number: "MS-HUQUQ",
+        severity: "critical",
+        title: "Приёмки o‘chirish live-probe muvaffaqiyatsiz",
+        detail: `Draft ${id} o‘chirilmadi (1018). Huquqni qayta oching; Soft Ombor soft-fail bilan ishlayveradi.`,
+      };
+    }
+  } catch (error) {
+    if (permissionDenied(error)) {
+      return {
+        key: "ms-rights-create",
+        number: "MS-HUQUQ",
+        severity: "critical",
+        title: "Приёмки yaratish ruxsati yo‘q",
+        detail: "Token da Создавать yo‘q — «MoySkladga kirim» ishlamaydi. Kassa huquqlarini tekshiring.",
+      };
+    }
+    logger.warn({ err: error instanceof Error ? error.message : error }, "MS rights probe skipped (non-permission)");
+  }
+  return null;
 }
 
 /** Sticky moyskladId: MS o‘chirilgan/buzilgan bo‘lsa uziladi → qayta kirim mumkin. */
@@ -821,9 +904,8 @@ async function ensureLinePachkas(
   }
 }
 
-/** @returns true o‘chirildi; false ruxsat yo‘q (kirim yozishni TO‘XTATMAYDI). */
-async function deleteSupplyDocument(supplyId: string, opts?: { softPermission?: boolean }): Promise<boolean> {
-  const soft = opts?.softPermission !== false;
+/** @returns true o‘chirildi; false ruxsat yo‘q (kirim yozishni HECH QACHON to‘xtatmaydi). */
+async function deleteSupplyDocument(supplyId: string, _opts?: { softPermission?: boolean }): Promise<boolean> {
   try {
     await moyskladSend(`/entity/supply/${encodeURIComponent(supplyId)}`, { applicable: false }, "PUT");
   } catch (error) {
@@ -835,14 +917,9 @@ async function deleteSupplyDocument(supplyId: string, opts?: { softPermission?: 
   } catch (error) {
     logger.warn({ supplyId, err: error instanceof Error ? error.message : error }, "MoySklad supply delete failed");
     if (permissionDenied(error)) {
-      if (soft) {
-        logger.warn({ supplyId }, "MS delete permission missing (1018) — kirim yozish davom etadi, dublikat qo‘lda tozalanadi");
-        return false;
-      }
-      throw Object.assign(new Error("ms_permission"), {
-        status: 502,
-        detail: "MoySklad API tokenida kirim o‘chirish ruxsati yo‘q (kod 1018). Token → «Приёмки» o‘chirish huquqini oching yoki dublikatni MoySklad UI dan qo‘lda o‘chiring. Yangi kirim yozish shu sababdan to‘xtamaydi.",
-      });
+      // Soft always: 1018 / edit-delete gap must never block «MoySkladga kirim»
+      logger.warn({ supplyId }, "MS delete permission missing (1018) — kirim yozish davom etadi, dublikat qo‘lda tozalanadi");
+      return false;
     }
     throw error;
   }
@@ -2501,6 +2578,13 @@ export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): 
   let scanned = 0;
   try {
     void refreshPartnersIfNeeded();
+    // Har soat: token huquqlari (create/edit/delete) — 1018 qaytmasligi uchun
+    try {
+      const rights = await probeMsSupplyRights();
+      if (rights) findings.push(rights);
+    } catch (error) {
+      logger.warn({ err: error instanceof Error ? error.message : error }, "MS rights probe failed");
+    }
     const all = listShipments().filter((item) => item.status !== "declined");
     // Avval ogohlantirishli / yozilgan / so‘nggi 120 kun
     const cutoff = Date.now() - 120 * 24 * 60 * 60_000;
@@ -2543,12 +2627,16 @@ export async function runSupplyIntegrityPass(opts?: { forceDigest?: boolean }): 
       .join("|");
     const hasProblem = findings.some((f) => f.severity === "critical" || f.severity === "warn");
     const hasFixed = findings.some((f) => f.severity === "fixed");
+    const rightsGap = findings.some((f) => f.key.startsWith("ms-rights-"));
     const slot = digestSlot(when.hour);
     const dueDigest = Boolean(slot) && (state.lastDigestStamp !== when.stamp || state.lastDigestSlot !== slot);
     const changed = fingerprint !== state.lastFingerprint && (hasProblem || hasFixed);
     const cooldownOk = Date.now() - (state.lastAlertAt || 0) > 8 * 60_000;
+    // Huquq yo‘qolsa — 15 daqiqadan bir Telegram (kirim to‘xtamasin, lekin bilinsin)
+    const rightsCooldownOk = Date.now() - (state.lastAlertAt || 0) > 15 * 60_000;
     const shouldReport = opts?.forceDigest
       || (changed && cooldownOk)
+      || (rightsGap && rightsCooldownOk)
       || (dueDigest && (hasProblem || hasFixed || opts?.forceDigest))
       || (dueDigest && !hasProblem && !hasFixed);
 
